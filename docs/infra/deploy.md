@@ -73,16 +73,23 @@ O workflow `.github/workflows/ci.yml` roda os testes em todo push/PR e, no push 
 (`agent/build.sh`), faz rsync para `/opt/impinj`, build da imagem na VPS, `stack deploy`, `service update` e confere `/health`.
 Ele so executa se existirem os secrets `VPS_HOST` e `VPS_SSH_KEY`; sem eles termina com aviso (sem quebrar o CI).
 
-**Ativar (uma vez; precisa ser feito por quem tem acesso root a VPS — o assistente foi impedido de gravar chave no `authorized_keys`):**
+**Ativar e trocar a chave (um unico comando, para a primeira vez e para toda rotacao):**
 
 ```
-ssh-keygen -t ed25519 -N "" -C github-actions-deploy-cabine -f /tmp/cabine_ci
-cat /tmp/cabine_ci.pub | ssh root@95.111.250.4 'cat >> /root/.ssh/authorized_keys'
-gh secret set VPS_SSH_KEY < /tmp/cabine_ci
-gh secret set VPS_HOST --body 95.111.250.4
-shred -u /tmp/cabine_ci /tmp/cabine_ci.pub
-gh workflow run ci   # valida o deploy automatico
+./scripts/rotacionar-chave-ci.sh
+gh workflow run ci && gh run watch     # valida o deploy automatico (compila o agente, rsync, build, stack deploy, /health)
 ```
+
+O script (`scripts/rotacionar-chave-ci.sh`) faz, nesta ordem: gera uma chave ed25519 nova numa pasta temporaria; instala na VPS
+(`authorized_keys`, com backup em `~/.ssh/authorized_keys.bak-ci`) **sem remover a antiga**; testa o acesso com a chave nova;
+grava `VPS_SSH_KEY` e `VPS_HOST` como secrets do repositorio (`gh secret set`); so entao remove da VPS as chaves antigas
+com o comentario `github-actions-deploy-cabine` (as de outros projetos nao sao tocadas; aborta se o arquivo ficaria vazio); apaga
+a chave privada local. Variaveis opcionais: `VPS=usuario@host`, `REPO=dono/repo`. Requisitos: seu acesso SSH a VPS e `gh auth login`
+com permissao de secrets. **Rotacionar** = rodar o mesmo script de novo quando quiser (ex.: a cada 90 dias, ou se suspeitar de vazamento).
+**Revogar sem trocar:** apague a linha `github-actions-deploy-cabine` do `authorized_keys` da VPS e o secret `VPS_SSH_KEY` (`gh secret delete VPS_SSH_KEY`).
+
+Observacao: o assistente (Claude Code) foi impedido pelo ambiente de gravar chave no `authorized_keys` da VPS, mesmo com autorizacao
+sua no chat; por isso este passo precisa ser rodado por voce (no terminal, ou no prompt do Claude Code com `! ./scripts/rotacionar-chave-ci.sh`).
 
 Padrao da VPS: uma chave por projeto, comentario `github-actions-deploy-<projeto>` (hotspot, coleta, pdv ja usam). Para revogar,
 apague a linha dessa chave do `authorized_keys` e o secret. Pre-requisitos ja atendidos: `.env` da VPS com `SESSION_SECRET`;
