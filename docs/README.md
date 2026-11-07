@@ -23,6 +23,8 @@ dos demais sistemas Solid (erpsolid, hotspot).
   `cabine.solidsd.com.br` (Traefik + Let's Encrypt).
 - **Banco**: PostgreSQL 16 (servico `postgres` da propria stack). Era SQLite ate 07/11/2026.
 - **Painel**: shell de sidebar (navy/teal) no padrao do `erpsolid`/`hotspot`, menu agrupado por tarefa.
+- **Inventario**: 4.570 itens importados do CSV do eTrace em 07/11/2026; EPC normalizado para hex
+  (ver [memoria-projeto.md](memoria-projeto.md)).
 - **Pendente de validacao fisica**: janela de leitura da cabine e protocolo do leitor de saida
   (ver [backlog.md](backlog.md)).
 

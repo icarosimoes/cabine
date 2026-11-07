@@ -22,6 +22,8 @@ app/static/index.html     Painel (sidebar + views por hash, JS puro)
 bridge-saida/             Ponte Go (captura de bytes do leitor de saida; ainda sem parser)
 scripts/seed_exemplo.py   Dados de exemplo via HTTP
 scripts/migrar_sqlite.py  Copia events do SQLite antigo para o Postgres
+scripts/normalizar_epc.py Converte EPCs base64 ja gravados em events para hex
+scripts/importar_inventario_csv.py  Importa CSV do eTrace (Item;Localizacao;RfidTag;...) para itens
 impinj-stack.yml          Stack Swarm (postgres + impinj)
 docs/                     Esta documentacao
 .claude/skills/           Skills Jarvis (copia de docs/agentes)

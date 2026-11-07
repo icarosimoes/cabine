@@ -9,6 +9,13 @@
 - **Sem heartbeat do leitor**: o Kuma avisa "sem eventos ha X min", que pode ser so ausencia de movimento.
 - **Sem backup automatico do Postgres** (so o volume `impinj_pgdata`). Definir `pg_dump` agendado.
 
+- **Inventario importado precisa de revisao** (2026-11-07): 8 EPCs fora do padrao hex (`3`, `300F`,
+  `???`, um com dois EPCs colados, truncados) e 85 tags lidas pelo leitor que nao estao no CSV
+  (aparecem como "novas" na leitura). Localizacao (`Lavanderia`, `Apartamentos`...) e `Data_Compra` do CSV
+  nao foram importadas; decidir se vale um campo de data de compra.
+- **Falta validacao do formato de EPC na API**: `/api/itens` e `/api/saida` aceitam qualquer texto; um EPC
+  digitado em minusculo ou base64 nao casa com as leituras. Considerar normalizar com `epc_hex()`.
+
 ## Ideias
 
 - Resumo de leituras por hora (retido para sempre) + export CSV, com `RETENTION_DAYS` menor para eventos

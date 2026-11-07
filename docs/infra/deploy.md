@@ -33,6 +33,16 @@ O volume antigo `impinj_impinj_data` (`impinj.db`) **nao e apagado** pelo deploy
    volume antigo somente leitura (`SQLITE_PATH`, `DATABASE_URL`). E idempotente.
 5. Conferir a contagem no log do script e em `GET /api/summary`.
 
+## Scripts one-off dentro do container
+
+`scripts/*.py` que usam o banco rodam no container do app (ja tem `psycopg` e `DATABASE_URL`):
+copie para uma pasta temporaria propria na VPS, `docker cp` para o container, `docker exec`, e apague so os
+arquivos que voce criou (nunca `rm` com curinga em `/tmp`, que e compartilhado com outros projetos).
+
+- Normalizar EPCs: `docker exec $C python3 /tmp/normalizar_epc.py` (idempotente).
+- Importar inventario: `docker exec -e CSV_PATH=/tmp/inv.csv $C python3 /tmp/importar_inventario_csv.py`.
+  Idempotente (EPC existente nao e alterada), CSV em latin-1 separado por `;`. Ver cabecalho do script.
+
 ## Rollback
 
 `git checkout <commit anterior>`, rsync, build e deploy. O SQLite antigo segue intacto no volume; eventos

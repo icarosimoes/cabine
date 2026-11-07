@@ -22,6 +22,13 @@ Data de referencia: 2026-11-07.
   de erpsolid/hotspot (GHCR + GitHub Actions). Ver `infra/deploy.md` e o backlog.
 - Sem dado ficticio no painel: onde nao ha dado a tela mostra vazio/"–".
 
+- **EPC canonico = hex maiusculo** (desde 2026-11-07). O R700 manda `epc` em base64 (bytes do EPC) e
+  nao envia `epcHex`; `epc_hex()` em `app/main.py` converte no `/ingest` (24 hex = 16 chars base64).
+  Catalogo (`itens`), lotes e eventos de saida usam sempre hex. Qualquer entrada nova de EPC (ponte de
+  saida, CSV, API) deve passar pelo mesmo formato, senao nao casa com o catalogo.
+- **Localizacao nao e campo editavel**: vem da ultima transferencia. Importacoes de inventario nao
+  fabricam lotes/transferencias para "carregar" localizacao (poluiria a auditoria).
+
 ## Convencoes
 
 - Textos de UI em pt-BR; tabelas/rotas de dominio em pt-BR; termos do leitor/evento em ingles (Impinj).
