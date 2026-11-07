@@ -137,3 +137,15 @@ def test_sessao_automatica_vira_lote(client):
         s = con.execute("SELECT * FROM sessoes").fetchone()
     assert s["status"] == "encerrada" and s["tags"] == 2 and s["lote_id"]
     assert client.get("/api/lotes?status=aguardando").json()[0]["quantidade"] == 2
+
+
+def test_alertas_whatsapp_transicoes(client):
+    main.state["alertas"].clear()
+    t = 1_000_000.0
+    assert main.avaliar_alertas(t, t - 3600, 0) and "sem enviar sinal" in main.avaliar_alertas(t + 7200 * 2, t - 3600, 0)[0]
+    main.state["alertas"].clear()
+    assert len(main.avaliar_alertas(t, t - 3600, 0)) == 1      # alerta
+    assert main.avaliar_alertas(t + 60, t - 3540, 0) == []     # sem repetir
+    assert "voltou" in main.avaliar_alertas(t + 120, t + 100, 0)[0]  # retomada
+    assert "falharam" in main.avaliar_alertas(t + 200, t + 190, 5)[0]
+    main.state["alertas"].clear()

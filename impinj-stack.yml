@@ -51,6 +51,11 @@ services:
       KUMA_PUSH_URL: "${KUMA_PUSH_URL:-}"
       STALE_MINUTES: "${STALE_MINUTES:-30}"
       RETENTION_DAYS: "${RETENTION_DAYS:-30}"
+      WHATSAPP_API_URL: "${WHATSAPP_API_URL:-http://evolution-api:8080}"
+      WHATSAPP_INSTANCE: "${WHATSAPP_INSTANCE:-}"
+      WHATSAPP_APIKEY: "${WHATSAPP_APIKEY:-}"
+      WHATSAPP_TO: "${WHATSAPP_TO:-}"
+      ALERTA_SEM_SINAL_MINUTOS: "${ALERTA_SEM_SINAL_MINUTOS:-${STALE_MINUTES:-30}}"
     networks:
       - traefik-public
       - impinj-internal

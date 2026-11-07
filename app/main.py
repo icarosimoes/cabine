@@ -20,6 +20,14 @@ RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))  # só dos eventos 
 TZ_OFFSET = int(os.environ.get("TZ_OFFSET_HOURS", "-3")) * 3600  # America/Sao_Paulo (só para os CSV)
 SESSAO_AUTO = os.environ.get("SESSAO_AUTO", "0") == "1"  # sessões de leitura automáticas (opt-in)
 SESSAO_OCIOSO = int(os.environ.get("SESSAO_OCIOSO_SEGUNDOS", "30"))
+# Alerta por WhatsApp (Evolution API). Sem WHATSAPP_APIKEY/INSTANCE/TO o alerta fica desligado.
+WA_URL = os.environ.get("WHATSAPP_API_URL", "http://evolution-api:8080").rstrip("/")
+WA_KEY = os.environ.get("WHATSAPP_APIKEY", "")
+WA_INSTANCE = os.environ.get("WHATSAPP_INSTANCE", "")
+WA_TO = [n for n in (x.strip() for x in os.environ.get("WHATSAPP_TO", "").split(",")) if n]
+ALERTA_SEM_SINAL_MIN = int(os.environ.get("ALERTA_SEM_SINAL_MINUTOS", str(STALE_MINUTES)))
+ALERTA_FALHAS = int(os.environ.get("ALERTA_FALHAS_INGEST", "5"))  # falhas (4xx/5xx) do /ingest em 10 min
+ALERTA_REPETIR_MIN = int(os.environ.get("ALERTA_REPETIR_MINUTOS", "120"))
 SAIDA_JANELA_MINUTOS = int(os.environ.get("SAIDA_JANELA_MINUTOS", "60"))
 STATIC = Path(__file__).parent / "static"
 security = HTTPBasic()
@@ -334,7 +342,8 @@ def parse_event(ev):
         rssi=rssi, seen_at=first(body, "lastSeenTime", "lastSeenTimestamp", "timestamp") or first(ev, "timestamp"))
 
 
-state = {"last_push": None, "ultimo_sinal": None, "armado_ate": 0.0, "conf_ate": 0.0, "conf_ativa": False}
+INICIO = time.time()
+state = {"alertas": {}, "falhas_ingest": [], "last_push": None, "ultimo_sinal": None, "armado_ate": 0.0, "conf_ate": 0.0, "conf_ativa": False}
 
 
 def gravando() -> bool:
@@ -347,6 +356,55 @@ def gravando() -> bool:
             state["conf_ativa"] = bool(con.execute("SELECT 1 FROM conferencias WHERE status='andamento'").fetchone())
         state["conf_ate"] = now + 5
     return state["conf_ativa"]
+
+
+def enviar_whatsapp(texto: str) -> bool:
+    if not (WA_KEY and WA_INSTANCE and WA_TO):
+        return False
+    ok = True
+    for numero in WA_TO:
+        req = urllib.request.Request(
+            f"{WA_URL}/message/sendText/{WA_INSTANCE}", method="POST",
+            data=json.dumps({"number": "".join(c for c in numero if c.isdigit()), "text": texto}).encode(),
+            headers={"apikey": WA_KEY, "Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=15).read()
+        except Exception as e:  # noqa: BLE001
+            print("whatsapp falhou:", e)
+            ok = False
+    return ok
+
+
+def avaliar_alertas(agora: float, ultimo_sinal, falhas: int) -> list[str]:
+    """Máquina de estados: devolve as mensagens a enviar (alerta na transição, lembrete a cada ALERTA_REPETIR_MIN, retomada)."""
+    msgs = []
+    base = ultimo_sinal or INICIO
+    sem_sinal = (agora - base) / 60
+    condicoes = {
+        "sem_sinal": (sem_sinal >= ALERTA_SEM_SINAL_MIN,
+                      f"⚠️ Cabine RFID: o rádio está sem enviar sinal ao webhook há {sem_sinal:.0f} min."),
+        "falhas": (falhas >= ALERTA_FALHAS,
+                   f"⚠️ Cabine RFID: {falhas} requisições do rádio ao /ingest falharam nos últimos 10 min (credencial ou JSON inválido?)."),
+    }
+    for nome, (ativo, texto) in condicoes.items():
+        est = state["alertas"].get(nome)
+        if ativo and (est is None or agora - est >= ALERTA_REPETIR_MIN * 60):
+            state["alertas"][nome] = agora
+            msgs.append(texto)
+        elif not ativo and est is not None:
+            del state["alertas"][nome]
+            msgs.append("✅ Cabine RFID: " + ("o rádio voltou a enviar sinal." if nome == "sem_sinal" else "as falhas no /ingest cessaram."))
+    return msgs
+
+
+def checar_alertas():
+    agora = time.time()
+    state["falhas_ingest"] = [t for t in state["falhas_ingest"] if agora - t < 600]
+    with closing(db()) as con:
+        last = con.execute("SELECT MAX(received_at) m FROM events").fetchone()["m"]
+    ultimo = max(x for x in (last, state["ultimo_sinal"], 0) if x is not None) or None
+    for m in avaliar_alertas(agora, ultimo, len(state["falhas_ingest"])):
+        enviar_whatsapp(m)
 
 
 def push_kuma():
@@ -423,6 +481,10 @@ async def background():
     while True:
         await asyncio.sleep(60)
         await asyncio.to_thread(push_kuma)
+        try:
+            await asyncio.to_thread(checar_alertas)
+        except Exception as e:  # noqa: BLE001
+            print("checagem de alertas falhou:", e)
         def resumo():
             with closing(db()) as con:
                 agregar_horas(con)
@@ -496,6 +558,22 @@ def armar_leitura(segundos: int = 15):
     segundos = max(1, min(segundos, 600))
     state["armado_ate"] = time.time() + segundos
     return {"ok": True, "segundos": segundos, "armado_ate": state["armado_ate"]}
+
+
+@app.middleware("http")
+async def conta_falhas_ingest(request: Request, call_next):
+    resp = await call_next(request)
+    if request.url.path == "/ingest" and resp.status_code >= 400:
+        state["falhas_ingest"].append(time.time())
+    return resp
+
+
+@app.post("/api/alertas/teste", dependencies=[Depends(admin_auth)])
+def testar_alerta():
+    ok = enviar_whatsapp("✅ Cabine RFID: mensagem de teste do alerta por WhatsApp.")
+    if not ok:
+        raise HTTPException(400, "WhatsApp não configurado (WHATSAPP_APIKEY/INSTANCE/TO) ou envio falhou")
+    return {"ok": True, "destinos": len(WA_TO)}
 
 
 @app.get("/health")

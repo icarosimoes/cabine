@@ -24,6 +24,15 @@ docker service update --force impinj_impinj   # se so a imagem mudou
 
 Verificar: `docker service ps impinj_impinj` e `curl -s https://cabine.solidsd.com.br/health`.
 
+## Alerta por WhatsApp (Evolution API)
+
+Avisa falhas de comunicacao do radio com o webhook: **sem sinal ha X min**, **falhas no /ingest** (>=5 respostas
+4xx/5xx em 10 min) e a **retomada**. Um aviso por transicao, lembrete a cada `ALERTA_REPETIR_MINUTOS` (120).
+`.env` na VPS: `WHATSAPP_INSTANCE`, `WHATSAPP_APIKEY`, `WHATSAPP_TO` (numeros com DDI, separados por virgula);
+opcionais `WHATSAPP_API_URL` (padrao `http://evolution-api:8080`, via rede `traefik-public`),
+`ALERTA_SEM_SINAL_MINUTOS` (padrao = `STALE_MINUTES`), `ALERTA_FALHAS_INGEST`. Sem as 3 primeiras o alerta fica
+desligado. Teste: `POST /api/alertas/teste` (admin). Redeploy com `docker stack deploy` (nao so `service update`).
+
 ## Migracao SQLite -> PostgreSQL (2026-11-07)
 
 O volume antigo `impinj_impinj_data` (`impinj.db`) **nao e apagado** pelo deploy: fica como backup.

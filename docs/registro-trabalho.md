@@ -71,3 +71,8 @@
   "Registrar leitura") ou conferencia em andamento; fora disso descarta e guarda so o ultimo sinal em memoria.
   Indicador do painel agora diz "radio: enviando sinal / sem sinal ha X min (· gravando)".
 
+### Alerta por WhatsApp (2026-11-07)
+
+- Codigo pronto (`avaliar_alertas`/`checar_alertas`, `POST /api/alertas/teste`, testes). **Aberto:** configurar
+  instancia/chave/numero da Evolution (`evo.solidsd.com.br`, stack `evolution-api` ja existe na VPS) e deploy.
+
