@@ -1,5 +1,5 @@
 """Receptor de webhook do leitor Impinj (R700 Event Reporting) + painel ao vivo."""
-import asyncio, re, base64, csv, io, binascii, hashlib, hmac, json, os, secrets, time, urllib.parse, urllib.request
+import asyncio, re, threading, base64, csv, io, binascii, hashlib, hmac, json, os, secrets, time, urllib.parse, urllib.request
 from pathlib import Path
 
 import psycopg
@@ -747,22 +747,39 @@ def testar_destinatario(dest_id: int):
     return {"ok": True}
 
 
-@app.get("/api/alertas/grupos", dependencies=[Depends(admin_auth)])
-def listar_grupos_whatsapp():
-    """Grupos da instância Evolution, para escolher o destino sem digitar o ID."""
+GRUPOS = {"status": "vazio", "grupos": [], "atualizado_em": None, "erro": None}
+
+
+def _buscar_grupos():
     c = cfg()
-    if not (c["wa_apikey"] and c["wa_instance"]):
-        raise HTTPException(400, "configure instância e API key e salve antes de buscar grupos")
     req = urllib.request.Request(f"{c['wa_url'].rstrip('/')}/group/fetchAllGroups/{c['wa_instance']}?getParticipants=false",
                                  headers={"apikey": c["wa_apikey"]})
     try:
-        dados = json.loads(urllib.request.urlopen(req, timeout=30).read())
+        dados = json.loads(urllib.request.urlopen(req, timeout=300).read())  # instâncias com centenas de grupos levam minutos
+        GRUPOS["grupos"] = sorted(({"id": g.get("id"), "nome": g.get("subject") or g.get("id")} for g in dados if g.get("id")),
+                                  key=lambda g: g["nome"].lower())
+        GRUPOS.update(status="pronto", atualizado_em=time.time(), erro=None)
     except urllib.error.HTTPError as e:
-        raise HTTPException(400, f"Evolution respondeu HTTP {e.code} (confira instância e chave)") from e
+        GRUPOS.update(status="erro", erro=f"Evolution respondeu HTTP {e.code} (confira instância e chave)")
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(400, f"falha ao falar com a Evolution: {e}") from e
-    return sorted(({"id": g.get("id"), "nome": g.get("subject") or g.get("id")} for g in dados if g.get("id")),
-                  key=lambda g: g["nome"].lower())
+        GRUPOS.update(status="erro", erro=f"falha ao falar com a Evolution: {e}")
+
+
+@app.post("/api/alertas/grupos/atualizar", dependencies=[Depends(admin_auth)])
+def atualizar_grupos():
+    """Busca os grupos da instância Evolution em segundo plano (pode levar minutos); consulte GET /api/alertas/grupos."""
+    c = cfg()
+    if not (c["wa_apikey"] and c["wa_instance"]):
+        raise HTTPException(400, "configure instância e API key e salve antes de buscar grupos")
+    if GRUPOS["status"] != "buscando":
+        GRUPOS.update(status="buscando", erro=None, iniciado_em=time.time())
+        threading.Thread(target=_buscar_grupos, daemon=True).start()
+    return {"status": GRUPOS["status"]}
+
+
+@app.get("/api/alertas/grupos", dependencies=[Depends(admin_auth)])
+def listar_grupos_whatsapp():
+    return {k: GRUPOS.get(k) for k in ("status", "grupos", "atualizado_em", "erro", "iniciado_em")}
 
 
 @app.get("/api/alertas/envios", dependencies=[Depends(admin_auth)])

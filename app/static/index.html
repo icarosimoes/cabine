@@ -294,7 +294,7 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
   <h2 style="margin-top:12px"><span>Quem recebe os alertas</span></h2>
   <div class="row">
     <input id="wdNome" type="text" placeholder="Nome (pessoa ou grupo)" style="width:200px">
-    <input id="wdNumero" type="text" placeholder="WhatsApp com DDD ou ID do grupo (...@g.us)" style="width:280px"><button id="wdGrupos" type="button">Buscar grupos</button><select id="wdGrupoSel" hidden></select>
+    <input id="wdNumero" type="text" placeholder="WhatsApp com DDD ou ID do grupo (...@g.us)" style="width:280px"><button id="wdGrupos" type="button">Buscar grupos</button><input id="wdGrupoBusca" type="text" placeholder="filtrar grupo pelo nome" style="width:200px" hidden><select id="wdGrupoSel" hidden></select>
     <label class="mut"><input id="wdSem" type="checkbox" checked> Rádio sem sinal</label>
     <label class="mut"><input id="wdFalhas" type="checkbox" checked> Falhas no /ingest</label>
     <label class="mut"><input id="wdAtivo" type="checkbox" checked> Ativo</label>
@@ -730,12 +730,28 @@ async function carregarDestinatariosWa(){
 }
 function limparDest(){wdEdit=null;$('wdNome').value='';$('wdNumero').value='';$('wdSem').checked=$('wdFalhas').checked=$('wdAtivo').checked=true;$('wdSalvar').textContent='Cadastrar';$('wdCancelar').hidden=true}
 $('wdCancelar').onclick=limparDest;
+let wdGrupos=[],wdPoll=null;
+function filtraGrupos(){
+  const q=($('wdGrupoBusca').value||'').toLowerCase(),sel=$('wdGrupoSel');
+  const l=wdGrupos.filter(x=>x.nome.toLowerCase().includes(q)).slice(0,100);
+  sel.innerHTML='<option value="">'+(l.length?'escolha o grupo… ('+l.length+(wdGrupos.length>l.length?' de '+wdGrupos.length:'')+')':'nenhum grupo com esse nome')+'</option>'+l.map(x=>`<option value="${esc(x.id)}">${esc(x.nome)}</option>`).join('');
+}
+async function consultaGrupos(){
+  const m=$('wdMsg');
+  try{const r=await j('/api/alertas/grupos');
+    if(r.status==='buscando'){m.className='msg';m.textContent=`buscando grupos na Evolution… ${Math.round(Date.now()/1000-r.iniciado_em)}s (instâncias com muitos grupos levam alguns minutos)`;return}
+    clearInterval(wdPoll);wdPoll=null;$('wdGrupos').disabled=false;
+    if(r.status==='erro'){m.className='msg bad';m.textContent=r.erro;return}
+    wdGrupos=r.grupos;$('wdGrupoBusca').hidden=$('wdGrupoSel').hidden=false;filtraGrupos();
+    m.className='msg ok';m.textContent=wdGrupos.length+' grupo(s) — digite parte do nome para filtrar';
+  }catch(e){clearInterval(wdPoll);wdPoll=null;$('wdGrupos').disabled=false;m.className='msg bad';m.textContent=e.message}
+}
+$('wdGrupoBusca').oninput=filtraGrupos;
 $('wdGrupos').onclick=async()=>{
-  const m=$('wdMsg'),sel=$('wdGrupoSel');m.className='msg';m.textContent='buscando grupos…';
-  try{const g=await j('/api/alertas/grupos');
-    sel.innerHTML='<option value="">escolha o grupo…</option>'+g.map(x=>`<option value="${esc(x.id)}">${esc(x.nome)}</option>`).join('');sel.hidden=false;
-    m.className='msg ok';m.textContent=g.length+' grupo(s) encontrado(s)'}
-  catch(e){m.className='msg bad';m.textContent=e.message}
+  const m=$('wdMsg');
+  try{$('wdGrupos').disabled=true;await j('/api/alertas/grupos/atualizar',{method:'POST'});
+    await consultaGrupos();if(!wdPoll&&$('wdGrupos').disabled)wdPoll=setInterval(consultaGrupos,3000)}
+  catch(e){$('wdGrupos').disabled=false;m.className='msg bad';m.textContent=e.message}
 };
 $('wdGrupoSel').onchange=e=>{if(e.target.value){$('wdNumero').value=e.target.value;if(!$('wdNome').value)$('wdNome').value=e.target.selectedOptions[0].textContent}};
 $('wdLista').addEventListener('click',async e=>{

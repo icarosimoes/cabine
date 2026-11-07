@@ -210,4 +210,5 @@ def test_destinatario_grupo(client, monkeypatch):
     assert client.post("/api/alertas/destinatarios", json={"nome": "Ruim", "whatsapp": "abc@g.us"}).status_code == 400
     main.notificar("sem_sinal", "x")
     assert enviados == ["120363123456789012@g.us"]
-    assert client.get("/api/alertas/grupos").status_code == 400  # sem Evolution configurada
+    assert client.post("/api/alertas/grupos/atualizar").status_code == 400  # sem Evolution configurada
+    assert client.get("/api/alertas/grupos").json()["status"] in ("vazio", "pronto", "erro")
