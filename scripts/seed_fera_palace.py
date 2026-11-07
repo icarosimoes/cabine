@@ -16,7 +16,7 @@ AMBIENTES = [  # nome, tipo, alerta (sino ligado no eTrace)
     ("Saída Serviço", "setor", 1), ("Secagem", "setor", 0),
 ]
 ANTENAS = [  # nome, descricao, modelo, ambiente, modo, alerta, ip, porta (conforme eTrace)
-    ("impinj15f21c", "RFID Rouparia", "ImpinjR700", "Rouparia Geral", "manual", True, None, None),
+    ("impinj15f21c", "RFID Rouparia", "ImpinjR700", "Rouparia Geral", "manual", True, "192.168.30.90", 443),
     ("edgeR3015f21c-recepcao", "RFID Recepção", "AcuraEdgeR30", "Recepção", "automatico", True, "192.168.30.32", 8080),
     ("edgeR3015f21c-servico", "RFID Serviço", "AcuraEdgeR30", "Saída Serviço", "automatico", True, "192.168.30.104", 8080),
 ]

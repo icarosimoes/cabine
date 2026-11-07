@@ -52,10 +52,22 @@ func TestR700OnlineCredencialEErro(t *testing.T) {
 	}
 }
 
-func TestAcuraSoTCP(t *testing.T) {
+const paginaAcura = `<html><title>EDGE30R Autoid</title><body><div>Edge-30R AutoID Normal</div>
+<div>Vers&atilde;o: &nbsp; 4.1.0 </div><div>Nome:&nbsp; EDGE30R-57D65E </div><div>Tempo de atividade:&nbsp; 26d 23:46:15 </div>
+<div>Status:&nbsp; OK - Modo de leitura autom&aacute;tica </div><div>SN:&nbsp; 6480592 </div></body></html>`
+
+func TestParseAcuraPage(t *testing.T) {
+	e := ParseAcuraPage(paginaAcura)
+	if e["firmware"] != "4.1.0" || e["nome"] != "EDGE30R-57D65E" || e["uptime"] != "26d 23:46:15" || e["serial"] != "6480592" ||
+		e["status"] != "OK - Modo de leitura automática" {
+		t.Fatalf("parse: %v", e)
+	}
+}
+
+func TestOutroModeloSoPorta(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
-	if p := Check(&config.Config{}, antenaDe(t, srv.URL, "AcuraEdgeR30")); !p.Online {
+	if p := Check(&config.Config{}, antenaDe(t, srv.URL, "OutroLeitor")); !p.Online || !strings.Contains(p.Detalhe, "respondendo") {
 		t.Fatalf("tcp deveria responder: %+v", p)
 	}
 }

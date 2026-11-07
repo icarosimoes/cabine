@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	htmlpkg "html"
 	"io"
 	"net"
 	"net/http"
@@ -101,20 +102,77 @@ func Check(cfg *config.Config, a cloud.Antena) Probe {
 	return p
 }
 
-func tcpCheck(a cloud.Antena) Probe {
-	port := a.Porta
-	if port == 0 {
-		port = 80
+var (
+	reTags   = regexp.MustCompile(`(?s)<[^>]*>`)
+	reSpaces = regexp.MustCompile(`\s+`)
+	reFirm   = regexp.MustCompile(`Vers[ãa]o:\s*([0-9][0-9.]*)`)
+	reNome   = regexp.MustCompile(`Nome:\s*(\S+)`)
+	reUptime = regexp.MustCompile(`Tempo de atividade:\s*(\S+(?: \S+)?)`)
+	reStatus = regexp.MustCompile(`Status:\s*(.+?)\s+SN:`)
+	reSerial = regexp.MustCompile(`SN:\s*(\d+)`)
+)
+
+// ParseAcuraPage extrai firmware, nome, uptime, status e série da página inicial do EDGE30R (porta 80).
+func ParseAcuraPage(page string) map[string]any {
+	t := reTags.ReplaceAllString(htmlpkg.UnescapeString(page), " ")
+	t = reSpaces.ReplaceAllString(strings.ReplaceAll(t, "\u00a0", " "), " ")
+	out := map[string]any{}
+	for k, re := range map[string]*regexp.Regexp{"firmware": reFirm, "nome": reNome, "uptime": reUptime, "status": reStatus, "serial": reSerial} {
+		if m := re.FindStringSubmatch(t); m != nil {
+			out[k] = strings.TrimSpace(m[1])
+		}
 	}
+	return out
+}
+
+func portOpen(ip string, port int) (bool, int, string) {
 	t0 := time.Now()
-	d := net.Dialer{Timeout: 4 * time.Second}
-	conn, err := d.DialContext(context.Background(), "tcp", net.JoinHostPort(a.IP, strconv.Itoa(port)))
+	conn, err := (&net.Dialer{Timeout: 4 * time.Second}).DialContext(context.Background(), "tcp", net.JoinHostPort(ip, strconv.Itoa(port)))
 	lat := int(time.Since(t0).Milliseconds())
 	if err != nil {
-		return Probe{Detalhe: shortErr(err)}
+		return false, lat, shortErr(err)
 	}
 	_ = conn.Close()
-	return Probe{Online: true, LatenciaMs: lat, Detalhe: fmt.Sprintf("porta %d respondendo", port)}
+	return true, lat, ""
+}
+
+// tcpCheck (leitores que não são R700): Acura EDGE30R tem página de status na porta 80 (firmware, uptime, status);
+// a "porta de comunicação" cadastrada (ex.: 8080) é verificada à parte. Outros modelos: só a porta cadastrada.
+func tcpCheck(a cloud.Antena) Probe {
+	if !strings.Contains(strings.ToLower(a.Modelo), "acura") && !strings.Contains(strings.ToLower(a.Modelo), "edge") {
+		port := a.Porta
+		if port == 0 {
+			port = 80
+		}
+		ok, lat, e := portOpen(a.IP, port)
+		if !ok {
+			return Probe{Detalhe: e}
+		}
+		return Probe{Online: true, LatenciaMs: lat, Detalhe: fmt.Sprintf("porta %d respondendo", port)}
+	}
+	t0 := time.Now()
+	resp, err := (&http.Client{Timeout: 6 * time.Second}).Get(fmt.Sprintf("http://%s:80/", a.IP))
+	lat := int(time.Since(t0).Milliseconds())
+	if err != nil {
+		return Probe{Detalhe: "página de status (porta 80) sem resposta: " + shortErr(err)}
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 128<<10))
+	extra := ParseAcuraPage(string(body))
+	detalhe := "ok"
+	if st, ok := extra["status"].(string); ok {
+		detalhe = st
+	}
+	if fw, ok := extra["firmware"].(string); ok {
+		detalhe += " · fw " + fw
+	}
+	if a.Porta > 0 && a.Porta != 80 {
+		if ok, _, _ := portOpen(a.IP, a.Porta); !ok {
+			detalhe += fmt.Sprintf(" · ATENÇÃO: porta de comunicação %d FECHADA", a.Porta)
+			extra["porta_comunicacao"] = "fechada"
+		}
+	}
+	return Probe{Online: resp.StatusCode < 500, LatenciaMs: lat, Detalhe: detalhe, Extra: extra}
 }
 
 var caminhoOK = regexp.MustCompile(`^/api/v1/[A-Za-z0-9_\-/.?=&]*$`)
