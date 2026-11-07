@@ -25,7 +25,7 @@ WA_URL = os.environ.get("WHATSAPP_API_URL", "http://evolution-api:8080").rstrip(
 WA_KEY = os.environ.get("WHATSAPP_APIKEY", "")
 WA_INSTANCE = os.environ.get("WHATSAPP_INSTANCE", "")
 WA_TO = [n for n in (x.strip() for x in os.environ.get("WHATSAPP_TO", "").split(",")) if n]
-ALERTA_SEM_SINAL_MIN = int(os.environ.get("ALERTA_SEM_SINAL_MINUTOS", str(STALE_MINUTES)))
+ALERTA_SEM_SINAL_SEG = int(os.environ.get("ALERTA_SEM_SINAL_SEGUNDOS", "60"))  # rádio lendo estoque envia ~5 eventos/s
 ALERTA_FALHAS = int(os.environ.get("ALERTA_FALHAS_INGEST", "5"))  # falhas (4xx/5xx) do /ingest em 10 min
 ALERTA_REPETIR_MIN = int(os.environ.get("ALERTA_REPETIR_MINUTOS", "120"))
 SAIDA_JANELA_MINUTOS = int(os.environ.get("SAIDA_JANELA_MINUTOS", "60"))
@@ -364,7 +364,7 @@ def gravando() -> bool:
 
 
 CFG_PADRAO = {"wa_url": WA_URL, "wa_instance": WA_INSTANCE, "wa_apikey": WA_KEY, "wa_to": ",".join(WA_TO),
-              "ativo": "1", "sem_sinal_min": str(ALERTA_SEM_SINAL_MIN), "falhas": str(ALERTA_FALHAS),
+              "ativo": "1", "sem_sinal_seg": str(ALERTA_SEM_SINAL_SEG), "falhas": str(ALERTA_FALHAS),
               "repetir_min": str(ALERTA_REPETIR_MIN)}
 
 
@@ -405,13 +405,13 @@ def enviar_whatsapp(texto: str, c: dict | None = None) -> str | None:
 def avaliar_alertas(agora: float, ultimo_sinal, falhas: int, c: dict | None = None) -> list[str]:
     """Máquina de estados: devolve as mensagens a enviar (alerta na transição, lembrete a cada ALERTA_REPETIR_MIN, retomada)."""
     c = c or cfg()
-    sem_min, max_falhas, repetir = int(c["sem_sinal_min"]), int(c["falhas"]), int(c["repetir_min"])
+    sem_seg, max_falhas, repetir = int(c["sem_sinal_seg"]), int(c["falhas"]), int(c["repetir_min"])
     msgs = []
     base = ultimo_sinal or INICIO
-    sem_sinal = (agora - base) / 60
+    sem_sinal = agora - base
     condicoes = {
-        "sem_sinal": (sem_sinal >= sem_min,
-                      f"⚠️ Cabine RFID: o rádio está sem enviar sinal ao webhook há {sem_sinal:.0f} min."),
+        "sem_sinal": (sem_sinal >= sem_seg,
+                      f"⚠️ Cabine RFID: o rádio está sem enviar sinal ao webhook há {sem_sinal / 60:.1f} min ({sem_sinal:.0f}s)."),
         "falhas": (falhas >= max_falhas,
                    f"⚠️ Cabine RFID: {falhas} requisições do rádio ao /ingest falharam nos últimos 10 min (credencial ou JSON inválido?)."),
     }
@@ -508,15 +508,21 @@ async def loop_sessao():
             print("ciclo de sessão falhou:", e)
 
 
+async def loop_alertas():
+    """Checa o sinal do rádio a cada 10s (o laço de 60s do resumo/Kuma era lento demais para alertar)."""
+    while True:
+        await asyncio.sleep(10)
+        try:
+            await asyncio.to_thread(checar_alertas)
+        except Exception as e:  # noqa: BLE001
+            print("checagem de alertas falhou:", e)
+
+
 async def background():
     n = 0
     while True:
         await asyncio.sleep(60)
         await asyncio.to_thread(push_kuma)
-        try:
-            await asyncio.to_thread(checar_alertas)
-        except Exception as e:  # noqa: BLE001
-            print("checagem de alertas falhou:", e)
         def resumo():
             with closing(db()) as con:
                 agregar_horas(con)
@@ -549,8 +555,10 @@ async def lifespan(_):
     await asyncio.to_thread(init_db_retry)
     t = asyncio.create_task(background())
     ts = asyncio.create_task(loop_sessao()) if SESSAO_AUTO else None
+    ta = asyncio.create_task(loop_alertas())
     yield
     t.cancel()
+    ta.cancel()
     if ts:
         ts.cancel()
 
@@ -606,7 +614,7 @@ class AlertaCfg(BaseModel):
     wa_apikey: str = ""  # vazio = manter a atual
     wa_to: str = ""
     ativo: bool = True
-    sem_sinal_min: int = 30
+    sem_sinal_seg: int = 60
     falhas: int = 5
     repetir_min: int = 120
 
@@ -615,21 +623,21 @@ class AlertaCfg(BaseModel):
 def ler_config_alertas():
     c = cfg()
     return {"wa_url": c["wa_url"], "wa_instance": c["wa_instance"], "wa_apikey_definida": bool(c["wa_apikey"]),
-            "wa_to": c["wa_to"], "ativo": c["ativo"] == "1", "sem_sinal_min": int(c["sem_sinal_min"]),
+            "wa_to": c["wa_to"], "ativo": c["ativo"] == "1", "sem_sinal_seg": int(c["sem_sinal_seg"]),
             "falhas": int(c["falhas"]), "repetir_min": int(c["repetir_min"]),
             "alertas_abertos": sorted(state["alertas"])}
 
 
 @app.put("/api/config/alertas", dependencies=[Depends(admin_auth)])
 def salvar_config_alertas(b: AlertaCfg):
-    if not (1 <= b.sem_sinal_min <= 1440 and 1 <= b.falhas <= 1000 and 5 <= b.repetir_min <= 10080):
-        raise HTTPException(400, "limites inválidos (sem sinal 1–1440 min, falhas 1–1000, repetir 5–10080 min)")
+    if not (10 <= b.sem_sinal_seg <= 86400 and 1 <= b.falhas <= 1000 and 5 <= b.repetir_min <= 10080):
+        raise HTTPException(400, "limites inválidos (sem sinal 10–86400 s, falhas 1–1000, repetir 5–10080 min)")
     for n in (x.strip() for x in b.wa_to.split(",") if x.strip()):
         if not 10 <= len("".join(ch for ch in n if ch.isdigit())) <= 15:
             raise HTTPException(400, f"número inválido: {n} (use DDI+DDD+número)")
     valores = {"wa_url": b.wa_url.strip() or CFG_PADRAO["wa_url"], "wa_instance": b.wa_instance.strip(),
                "wa_to": ",".join(x.strip() for x in b.wa_to.split(",") if x.strip()), "ativo": "1" if b.ativo else "0",
-               "sem_sinal_min": str(b.sem_sinal_min), "falhas": str(b.falhas), "repetir_min": str(b.repetir_min)}
+               "sem_sinal_seg": str(b.sem_sinal_seg), "falhas": str(b.falhas), "repetir_min": str(b.repetir_min)}
     if b.wa_apikey.strip():
         valores["wa_apikey"] = b.wa_apikey.strip()
     with closing(db()) as con:
@@ -666,7 +674,7 @@ def summary():
             "tags_1h": q("SELECT COUNT(DISTINCT epc) FROM events WHERE epc IS NOT NULL AND received_at>%s", now - 3600),
             "tags_24h": q("SELECT COUNT(DISTINCT epc) FROM events WHERE epc IS NOT NULL AND received_at>%s", now - 86400),
             "total": q("SELECT COUNT(*) FROM events"),
-            "stale_minutes": STALE_MINUTES,
+            "stale_minutes": STALE_MINUTES, "sem_sinal_seg": int(cfg()["sem_sinal_seg"]),
         }
 
 

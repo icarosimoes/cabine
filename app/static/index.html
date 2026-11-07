@@ -288,7 +288,7 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
     <label class="mut">Número(s) de destino <input id="waTo" type="text" placeholder="5511999999999, 5511888888888" style="width:320px"></label>
   </div>
   <div class="row">
-    <label class="mut">Sem sinal após (min) <input id="waSem" type="number" min="1" max="1440" style="width:70px"></label>
+    <label class="mut">Sem sinal após (seg) <input id="waSem" type="number" min="10" max="86400" style="width:80px"></label>
     <label class="mut">Falhas no /ingest (10 min) <input id="waFalhas" type="number" min="1" max="1000" style="width:70px"></label>
     <label class="mut">Repetir lembrete (min) <input id="waRep" type="number" min="5" max="10080" style="width:80px"></label>
   </div>
@@ -402,9 +402,10 @@ async function tick(){
   try{
     const s=await j('/api/summary');
     $('c1').textContent=s.events_1min;$('c2').textContent=s.events_1h;$('c3').textContent=s.tags_1h;$('c4').textContent=s.tags_24h;$('c5').textContent=s.total;
-    const age=s.last_event?(s.now-s.last_event)/60:null,ok=age!==null&&age<=s.stale_minutes;
+    const age=s.last_event?s.now-s.last_event:null,ok=age!==null&&age<=s.sem_sinal_seg;
     $('dot').className='dot '+(ok?'ok':'bad');
-    $('status').textContent=age===null?'rádio: sem sinal':'rádio: '+(age<1?'enviando sinal':'sem sinal há '+Math.round(age)+' min')+(s.gravando?' · gravando':'');
+    const dur=a=>a<90?Math.round(a)+'s':Math.round(a/60)+' min';
+    $('status').textContent=age===null?'rádio: sem sinal':'rádio: '+(ok?'enviando sinal':'sem sinal há '+dur(age))+(s.gravando?' · gravando':'');
     const [pend,nao]=await Promise.all([j('/api/lotes?status=aguardando&limit=500'),j('/api/saida?documentado=false&limit=200')]);
     $('cPend').textContent=pend.length;$('cEvasao').textContent=nao.length;$('badgeEvasao').textContent=nao.length||'';
     await LOADERS[view]();
@@ -694,7 +695,7 @@ async function carregarAlertasWa(){
   if(waCarregado)return; // não sobrescreve o que está sendo digitado a cada 3s
   const c=await j('/api/config/alertas');
   $('waAtivo').checked=c.ativo;$('waUrl').value=c.wa_url;$('waInstance').value=c.wa_instance;$('waTo').value=c.wa_to;
-  $('waSem').value=c.sem_sinal_min;$('waFalhas').value=c.falhas;$('waRep').value=c.repetir_min;
+  $('waSem').value=c.sem_sinal_seg;$('waFalhas').value=c.falhas;$('waRep').value=c.repetir_min;
   $('waKey').placeholder=c.wa_apikey_definida?'•••••• (definida — deixe vazio para manter)':'cole a API key';
   $('waEstado').textContent=c.alertas_abertos.length?'⚠ em alerta: '+c.alertas_abertos.join(', '):'sem alertas abertos';
   waCarregado=true;
@@ -703,7 +704,7 @@ $('waSalvar').onclick=async()=>{
   const m=$('waMsg');
   try{await j('/api/config/alertas',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({
     ativo:$('waAtivo').checked,wa_url:$('waUrl').value,wa_instance:$('waInstance').value,wa_apikey:$('waKey').value,wa_to:$('waTo').value,
-    sem_sinal_min:Number($('waSem').value),falhas:Number($('waFalhas').value),repetir_min:Number($('waRep').value)})});
+    sem_sinal_seg:Number($('waSem').value),falhas:Number($('waFalhas').value),repetir_min:Number($('waRep').value)})});
     $('waKey').value='';waCarregado=false;await carregarAlertasWa();m.className='msg ok';m.textContent='configuração salva'}
   catch(e){m.className='msg bad';m.textContent=e.message}
 };

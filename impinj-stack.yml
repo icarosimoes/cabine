@@ -55,7 +55,7 @@ services:
       WHATSAPP_INSTANCE: "${WHATSAPP_INSTANCE:-}"
       WHATSAPP_APIKEY: "${WHATSAPP_APIKEY:-}"
       WHATSAPP_TO: "${WHATSAPP_TO:-}"
-      ALERTA_SEM_SINAL_MINUTOS: "${ALERTA_SEM_SINAL_MINUTOS:-${STALE_MINUTES:-30}}"
+      ALERTA_SEM_SINAL_SEGUNDOS: "${ALERTA_SEM_SINAL_SEGUNDOS:-60}"
     networks:
       - traefik-public
       - impinj-internal

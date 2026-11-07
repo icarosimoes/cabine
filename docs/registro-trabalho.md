@@ -79,3 +79,7 @@
   (descricao, modelo, localizacao, modo automatico/manual, alerta, IP, porta; `PUT /api/antenas/{id}`). Seed das 3 antenas
   atualizado com IPs 192.168.30.32 / .104 porta 8080. Aberto: deploy.
 
+- Monitor do radio em tempo quase real: limite "sem sinal" agora em **segundos** (padrao 60, configuravel na tela
+  Alertas WhatsApp, minimo 10), checagem de alerta a cada 10s (laco proprio) e indicador do painel usa o mesmo limite.
+  Observacao: o deploy do alerta quebrou 1x por default aninhado `${A:-${B:-30}}` no `impinj-stack.yml` (nao suportado
+  pelo `docker stack deploy`); corrigido. Nunca usar default aninhado no stack.

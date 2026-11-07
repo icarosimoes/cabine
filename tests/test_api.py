@@ -142,9 +142,9 @@ def test_sessao_automatica_vira_lote(client):
 def test_alertas_whatsapp_transicoes(client):
     main.state["alertas"].clear()
     t = 1_000_000.0
-    assert main.avaliar_alertas(t, t - 3600, 0) and "sem enviar sinal" in main.avaliar_alertas(t + 7200 * 2, t - 3600, 0)[0]
+    assert main.avaliar_alertas(t, t - 3600, 0, main.CFG_PADRAO) and "sem enviar sinal" in main.avaliar_alertas(t + 7200 * 2, t - 3600, 0)[0]
     main.state["alertas"].clear()
-    assert len(main.avaliar_alertas(t, t - 3600, 0)) == 1      # alerta
+    assert len(main.avaliar_alertas(t, t - 3600, 0, main.CFG_PADRAO)) == 1      # alerta
     assert main.avaliar_alertas(t + 60, t - 3540, 0) == []     # sem repetir
     assert "voltou" in main.avaliar_alertas(t + 120, t + 100, 0)[0]  # retomada
     assert "falharam" in main.avaliar_alertas(t + 200, t + 190, 5)[0]
@@ -155,12 +155,12 @@ def test_config_alertas_pela_ui(client):
     c = client.get("/api/config/alertas").json()
     assert c["wa_apikey_definida"] is False
     r = client.put("/api/config/alertas", json={"wa_instance": "inst", "wa_apikey": "segredo", "wa_to": "5511999999999",
-                                                "sem_sinal_min": 10})
+                                                "sem_sinal_seg": 45})
     assert r.status_code == 200 and r.json()["wa_apikey_definida"] and "segredo" not in r.text
-    client.put("/api/config/alertas", json={"wa_instance": "inst", "wa_to": "5511999999999", "sem_sinal_min": 10})
+    client.put("/api/config/alertas", json={"wa_instance": "inst", "wa_to": "5511999999999", "sem_sinal_seg": 45})
     assert client.get("/api/config/alertas").json()["wa_apikey_definida"]  # vazio mantém a chave
     assert client.put("/api/config/alertas", json={"wa_to": "123"}).status_code == 400
-    assert main.cfg()["sem_sinal_min"] == "10"
+    assert main.cfg()["sem_sinal_seg"] == "45"
     assert client.post("/api/alertas/teste").status_code == 400 or True  # sem Evolution real, só não pode quebrar
 
 
