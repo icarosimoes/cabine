@@ -48,7 +48,8 @@
 - **Proximo: `.msi`** (ver `docs/infra/agente-hotel.md` > Proximos passos): aparece em Aplicativos instalados, atualiza por cima, token por parametro.
 - Agente 0.1.5: online = host responde (nao sonda 8080 do Acura). 0.1.6: reinstalacao fecha servico/tray e mantem o token.
 - Idea: alertas extras vindos do agente — R700 fora de `running`, preset diferente do esperado, temperatura alta, comando de config com falha, Acura sem cliente na 8080 (lendo a pagina de status).
-- Instalado e funcionando no Windows do usuario (2026-11-07): agente "Governanca" reporta as 3 antenas; falta so reinstalar com 0.1.6.
+- Validado em producao (2026-11-07): agente 0.1.6 no Windows, 3 antenas reportando, alertas de offline/voltou entregues no grupo de WhatsApp. Proxima: `.msi`.
+- Ideia: cadastrar numero individual como destinatario alem do grupo (o grupo pode ficar silenciado/enterrado).
 - Codigo pronto (`agent/`, ver `docs/infra/agente-hotel.md`). Falta: teste no Windows real (servico + tray), validar API do
   R700, auto-atualizacao assinada, repositorio proprio, MSI, assinatura de codigo.
 
