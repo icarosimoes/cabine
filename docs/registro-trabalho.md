@@ -49,4 +49,7 @@
   em Destinos e "Enxoval esperado x atual" em Inventario. `scripts/seed_fera_palace.py` carrega os cadastros
   (11 ambientes, 3 antenas, 3 acomodacoes / 20 itens de enxoval). Testado local contra Postgres.
 - Tipo do item (catalogo) agora aparece em Eventos ao vivo e Tags lidas.
-- **Aberto:** deploy em producao destas duas mudancas e execucao do seed (aguardando autorizacao).
+- **Deploy em producao feito** (rsync + build + service update) e seed executado: 12 destinos (11 do eTrace +
+  Governanca), 3 antenas, 3 acomodacoes, 20 itens de enxoval. `/health` ok, leitor gravando, `esperado` responde.
+- **Aberto:** o CSV nao traz estado, entao o "atual" do Cabine (3.619 Em uso) fica acima do eTrace (3.232 Em uso):
+  ~387 itens estao em outros estados la (manutencao/vendido). Ajustar os estados para o esperado x atual bater.
