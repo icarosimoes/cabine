@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cabine RFID</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--fg:#1c2330;--mut:#6b7686;--bd:#dfe3ea;--ok:#13875a;--bad:#c62f3e;--acc:#1b5fbf}
+@media(prefers-color-scheme:dark){:root{--bg:#12161d;--card:#1b212b;--fg:#e6e9ef;--mut:#8f9aab;--bd:#2c3442;--ok:#3fbf8a;--bad:#ee6b78;--acc:#6aa5f5}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:0 0 12px;display:flex;align-items:center;gap:10px}
+.dot{width:12px;height:12px;border-radius:50%;background:var(--mut);display:inline-block}
+.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:10px 12px}
+.card b{display:block;font-size:22px}.card span{color:var(--mut);font-size:12px}
+section{background:var(--card);border:1px solid var(--bd);border-radius:8px;margin-bottom:16px;overflow:hidden}
+section h2{font-size:14px;margin:0;padding:10px 12px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;gap:8px}
+.scroll{overflow-x:auto;max-height:380px;overflow-y:auto}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 12px;border-bottom:1px solid var(--bd);white-space:nowrap}
+th{color:var(--mut);font-weight:500;font-size:12px;position:sticky;top:0;background:var(--card)}
+td.epc{font-family:ui-monospace,monospace;cursor:pointer;color:var(--acc)}
+select,button{font:inherit;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:3px 8px}
+</style>
+</head>
+<body>
+<main>
+<h1><span id="dot" class="dot"></span> Cabine RFID <small id="status" style="font-weight:400;color:var(--mut)"></small></h1>
+<div class="cards">
+  <div class="card"><b id="c1">–</b><span>leituras no último minuto</span></div>
+  <div class="card"><b id="c2">–</b><span>leituras na última hora</span></div>
+  <div class="card"><b id="c3">–</b><span>tags distintas (1h)</span></div>
+  <div class="card"><b id="c4">–</b><span>tags distintas (24h)</span></div>
+  <div class="card"><b id="c5">–</b><span>eventos guardados</span></div>
+</div>
+<section>
+  <h2><span>Tags <span id="filtro" style="color:var(--mut)"></span></span>
+    <span><select id="hours"><option value="1">1h</option><option value="24" selected>24h</option><option value="168">7 dias</option></select></span></h2>
+  <div class="scroll"><table><thead><tr><th>EPC</th><th>Leituras</th><th>Última</th><th>Antenas</th><th>Melhor RSSI</th></tr></thead><tbody id="tags"></tbody></table></div>
+</section>
+<section>
+  <h2><span>Eventos ao vivo</span><button id="limpar" hidden>limpar filtro</button></h2>
+  <div class="scroll"><table><thead><tr><th>Hora</th><th>Tipo</th><th>EPC</th><th>Antena</th><th>RSSI</th></tr></thead><tbody id="evs"></tbody></table></div>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id);let epc=null;
+const hm=t=>t?new Date(t*1000).toLocaleTimeString('pt-BR'):'–';
+const dt=t=>t?new Date(t*1000).toLocaleString('pt-BR'):'–';
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const j=u=>fetch(u).then(r=>r.json());
+async function tick(){
+  try{
+    const s=await j('/api/summary');
+    $('c1').textContent=s.events_1min;$('c2').textContent=s.events_1h;$('c3').textContent=s.tags_1h;$('c4').textContent=s.tags_24h;$('c5').textContent=s.total;
+    const age=s.last_event?(s.now-s.last_event)/60:null,ok=age!==null&&age<=s.stale_minutes;
+    $('dot').className='dot '+(ok?'ok':'bad');
+    $('status').textContent=age===null?'nenhum evento recebido ainda':'último evento '+(age<1?'agora há pouco':'há '+Math.round(age)+' min');
+    const tags=await j('/api/tags?hours='+$('hours').value);
+    $('tags').innerHTML=tags.map(t=>`<tr><td class="epc" data-e="${esc(t.epc)}">${esc(t.epc)}</td><td>${t.reads}</td><td>${dt(t.last)}</td><td>${esc(t.antennas)}</td><td>${t.best_rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem leituras</td></tr>';
+    const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
+    $('evs').innerHTML=evs.map(e=>`<tr><td>${hm(e.received_at)}</td><td>${esc(e.event_type)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>';
+  }catch(e){$('status').textContent='erro ao atualizar';$('dot').className='dot bad'}
+}
+document.addEventListener('click',e=>{const t=e.target.closest('td.epc');if(t&&t.dataset.e){epc=t.dataset.e;$('filtro').textContent='· filtro: '+epc;$('limpar').hidden=false;tick()}});
+$('limpar').onclick=()=>{epc=null;$('filtro').textContent='';$('limpar').hidden=true;tick()};
+$('hours').onchange=tick;tick();setInterval(tick,3000);
+</script>
+</body>
+</html>

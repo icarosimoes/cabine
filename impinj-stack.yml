@@ -1,0 +1,56 @@
+# Receptor de webhook do leitor RFID Impinj + painel de leituras (rfid.solidsd.com.br)
+# VPS principal (Swarm, nó único). Imagem buildada local no manager (sem registry).
+#
+#   ssh root@95.111.250.4
+#   cd /opt/impinj && docker build -t impinj-rfid:local .
+#   bash -c 'set -a; . ./.env; set +a; docker stack deploy -c impinj-stack.yml impinj'
+#
+# .env (chmod 600): WEBHOOK_USER, WEBHOOK_PASS, UI_USER, UI_PASS, KUMA_PUSH_URL (opcional)
+# Depois de rebuildar a imagem: docker service update --force impinj_impinj
+version: "3.8"
+
+services:
+  impinj:
+    image: impinj-rfid:local
+    environment:
+      WEBHOOK_USER: "${WEBHOOK_USER:?Informe WEBHOOK_USER}"
+      WEBHOOK_PASS: "${WEBHOOK_PASS:?Informe WEBHOOK_PASS}"
+      UI_USER: "${UI_USER:?Informe UI_USER}"
+      UI_PASS: "${UI_PASS:?Informe UI_PASS}"
+      KUMA_PUSH_URL: "${KUMA_PUSH_URL:-}"
+      STALE_MINUTES: "${STALE_MINUTES:-30}"
+      RETENTION_DAYS: "${RETENTION_DAYS:-30}"
+    volumes:
+      - impinj_data:/data
+    networks:
+      - traefik-public
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == ${IMPINJ_NODE_HOSTNAME:-vmi3286141}
+      resources:
+        limits:
+          memory: 128M
+      restart_policy:
+        condition: any
+      labels:
+        - traefik.enable=true
+        - traefik.swarm.network=traefik-public
+        - traefik.http.routers.impinj.rule=Host(`${RFID_HOST:-rfid.solidsd.com.br}`)
+        - traefik.http.routers.impinj.entrypoints=websecure
+        - traefik.http.routers.impinj.tls.certresolver=letsencrypt
+        - traefik.http.services.impinj.loadbalancer.server.port=8000
+
+volumes:
+  impinj_data:
+
+networks:
+  traefik-public:
+    external: true
