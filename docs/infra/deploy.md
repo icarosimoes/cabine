@@ -66,3 +66,24 @@ recebidos so no Postgres depois da migracao nao voltam para ele.
 - O R700 usa retry: durante o redeploy (segundos) ele reenvia, nao perde leituras.
 - Nao rodar `docker volume prune` na VPS sem checar `impinj_impinj_data` e `impinj_pgdata`.
 - Nao mexer em outras stacks do Swarm.
+
+## Deploy automatico pelo CI (GitHub Actions)
+
+O workflow `.github/workflows/ci.yml` roda os testes em todo push/PR e, no push para `main`, o job `deploy` compila o agente
+(`agent/build.sh`), faz rsync para `/opt/impinj`, build da imagem na VPS, `stack deploy`, `service update` e confere `/health`.
+Ele so executa se existirem os secrets `VPS_HOST` e `VPS_SSH_KEY`; sem eles termina com aviso (sem quebrar o CI).
+
+**Ativar (uma vez; precisa ser feito por quem tem acesso root a VPS — o assistente foi impedido de gravar chave no `authorized_keys`):**
+
+```
+ssh-keygen -t ed25519 -N "" -C github-actions-deploy-cabine -f /tmp/cabine_ci
+cat /tmp/cabine_ci.pub | ssh root@95.111.250.4 'cat >> /root/.ssh/authorized_keys'
+gh secret set VPS_SSH_KEY < /tmp/cabine_ci
+gh secret set VPS_HOST --body 95.111.250.4
+shred -u /tmp/cabine_ci /tmp/cabine_ci.pub
+gh workflow run ci   # valida o deploy automatico
+```
+
+Padrao da VPS: uma chave por projeto, comentario `github-actions-deploy-<projeto>` (hotspot, coleta, pdv ja usam). Para revogar,
+apague a linha dessa chave do `authorized_keys` e o secret. Pre-requisitos ja atendidos: `.env` da VPS com `SESSION_SECRET`;
+`impinj-stack.yml` sem parenteses no texto do `:?`. O deploy automatico nao muda o `.env` nem o banco.

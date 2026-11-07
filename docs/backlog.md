@@ -61,7 +61,7 @@
 ## Ideias
 
 - Sessao de leitura continua: pronta, opt-in (`SESSAO_AUTO=1`), desligada em producao.
-- CI/CD: workflow criado (testes + deploy por secrets); falta configurar secrets e validar. GHCR nao adotado.
+- CI/CD: workflow criado (testes + compila agente + deploy por secrets); **falta criar os secrets `VPS_HOST`/`VPS_SSH_KEY`** (passo a passo em `docs/infra/deploy.md`) e validar com `gh workflow run ci`. GHCR nao adotado.
 - Cadastrar o projeto em `erpsolid/docs/projetos/` (indice central de repos).
 
 - Evasao: antenas .32 e .104 so monitoramento de rede (online = pagina de status responde; agente 0.1.5 nao sonda a 8080). O Acura aceita 2 clientes na 8080 (hoje ocupadas por 192.168.30.18). Pendente: mapear protocolo da 8080, senha de administracao dos Acura.
