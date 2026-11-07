@@ -3,43 +3,107 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>try{if(localStorage.getItem("tema")==="light")document.documentElement.setAttribute("data-theme","light")}catch(e){}</script>
 <title>Cabine RFID</title>
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--fg:#1c2330;--mut:#6b7686;--bd:#dfe3ea;--ok:#13875a;--bad:#c62f3e;--acc:#1b5fbf}
-@media(prefers-color-scheme:dark){:root{--bg:#12161d;--card:#1b212b;--fg:#e6e9ef;--mut:#8f9aab;--bd:#2c3442;--ok:#3fbf8a;--bad:#ee6b78;--acc:#6aa5f5}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
-main{max-width:1100px;margin:0 auto;padding:16px}
-h1{font-size:18px;margin:0 0 12px;display:flex;align-items:center;gap:10px}
-.dot{width:12px;height:12px;border-radius:50%;background:var(--mut);display:inline-block}
-.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:10px 12px}
-.card b{display:block;font-size:22px}.card span{color:var(--mut);font-size:12px}
-section{background:var(--card);border:1px solid var(--bd);border-radius:8px;margin-bottom:16px;overflow:hidden}
-section h2{font-size:14px;margin:0;padding:10px 12px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;gap:8px;align-items:center}
-.scroll{overflow-x:auto;max-height:380px;overflow-y:auto}
-table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 12px;border-bottom:1px solid var(--bd);white-space:nowrap}
-th{color:var(--mut);font-weight:500;font-size:12px;position:sticky;top:0;background:var(--card)}
-td.epc{font-family:ui-monospace,monospace;cursor:pointer;color:var(--acc)}
-select,button,input{font:inherit;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:3px 8px}
-button{cursor:pointer}
-button.acc{background:var(--acc);color:#fff;border-color:var(--acc)}
-button.acc:disabled{opacity:.5;cursor:default}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 12px}
-.mut{color:var(--mut);font-size:12px}
-.pill{font-size:11px;padding:1px 7px;border-radius:999px;background:var(--bd)}
-.pill.setor{color:var(--acc)}.pill.lavanderia{color:var(--bad)}
-.pill.alerta{color:var(--bad);font-weight:600}.pill.ok{color:var(--ok)}
-.msg{padding:0 12px 10px;font-size:13px}
-.msg.ok{color:var(--ok)}.msg.bad{color:var(--bad)}
-.epcs{font-family:ui-monospace,monospace;font-size:11px;color:var(--mut);max-width:320px;overflow:hidden;text-overflow:ellipsis}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:14px}
+:root{--navy:#0f1623;--navy-mid:#1a2333;--navy-light:#243044;--teal:#14b8a6;--teal-soft:#14b8a61a;
+--red:#f87171;--red-soft:#f871711a;--green:#34d399;--green-soft:#34d3991a;--yellow:#fbbf24;
+--muted:#8896aa;--text:#e2e8f0;--text-dim:#94a3b8;--line:#1e2d42;--on-accent:#0f1623;
+--r-md:8px;--r-lg:12px;--sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:20px;--sp-6:24px;--sp-8:32px}
+:root[data-theme="light"]{--navy:#f7f8fa;--navy-mid:#fff;--navy-light:#eef1f5;--teal:#0f766e;--teal-soft:#0f766e14;
+--red:#dc2626;--red-soft:#dc262614;--green:#059669;--green-soft:#05966914;--yellow:#d97706;
+--muted:#6b7280;--text:#1c1e26;--text-dim:#4b5563;--line:#e2e5ea;--on-accent:#fff}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--navy);color:var(--text);line-height:1.5;-webkit-font-smoothing:antialiased}
+.app-shell{display:flex;min-height:100vh}
+.sidebar{width:220px;background:var(--navy-mid);border-right:1px solid var(--line);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;flex-shrink:0}
+.brand-row{display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-4);border-bottom:1px solid var(--line)}
+.brand-mark{width:32px;height:32px;background:var(--teal);border-radius:var(--r-md);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;color:var(--on-accent);flex-shrink:0}
+.brand-row strong{font-size:14px;display:block}.brand-row span{font-size:10px;color:var(--muted);display:block}
+.nav-list{flex:1;padding:var(--sp-3) var(--sp-2);overflow-y:auto}
+.nav-section{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;padding:var(--sp-3) var(--sp-3) var(--sp-1)}
+.nav-item{display:flex;align-items:center;gap:var(--sp-3);padding:8px var(--sp-3);border-radius:var(--r-md);font-size:12px;font-weight:600;color:var(--text-dim);text-decoration:none;cursor:pointer;background:none;border:none;width:100%;text-align:left}
+.nav-item:hover{background:var(--navy-light);color:var(--text)}
+.nav-item.active{background:var(--teal-soft);color:var(--teal)}
+.nav-item .badge{margin-left:auto;min-width:18px;padding:0 6px;border-radius:999px;background:var(--red);color:#fff;font-size:10.5px;text-align:center}
+.nav-item .badge:empty{display:none}
+.sidebar-footer{padding:var(--sp-3) var(--sp-2);border-top:1px solid var(--line)}
+.leitor{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) var(--sp-3);font-size:11px;color:var(--muted)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--muted);display:inline-block;flex-shrink:0}
+.dot.ok{background:var(--green)}.dot.bad{background:var(--red)}
+.main-content{flex:1;padding:var(--sp-6) var(--sp-8);min-width:0;max-width:1600px}
+h1{font-size:22px;font-weight:800;margin-bottom:var(--sp-5)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:var(--sp-3);margin-bottom:var(--sp-5)}
+.card{background:var(--navy-mid);border:1px solid var(--line);border-radius:var(--r-lg);padding:var(--sp-3) var(--sp-4)}
+.card b{display:block;font-size:24px}.card span{color:var(--muted);font-size:12px}
+a.card{color:inherit;text-decoration:none}a.card:hover{border-color:var(--teal)}
+section{background:var(--navy-mid);border:1px solid var(--line);border-radius:var(--r-lg);margin-bottom:var(--sp-5);overflow:hidden}
+section h2{font-size:14px;padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:var(--sp-2);align-items:center}
+.scroll{overflow:auto;max-height:480px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:9px var(--sp-4);border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:700;font-size:12px;text-transform:uppercase;position:sticky;top:0;background:var(--navy-mid)}
+tbody tr:hover{background:var(--navy-light)}tbody tr:last-child td{border-bottom:none}
+td.epc{font-family:ui-monospace,monospace;cursor:pointer;color:var(--teal)}
+select,button,input{font:inherit;font-size:12px;background:var(--navy-light);color:var(--text);border:1px solid var(--line);border-radius:var(--r-md);padding:7px var(--sp-3);outline:none}
+input:focus,select:focus{border-color:var(--teal)}
+button{cursor:pointer;font-weight:700}button:hover{opacity:.88}
+button.acc{background:var(--teal);color:var(--on-accent);border-color:var(--teal)}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:var(--sp-2);align-items:center;flex-wrap:wrap;padding:var(--sp-3) var(--sp-4)}
+.mut{color:var(--muted);font-size:12px}
+.pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--navy-light)}
+.pill.setor{color:var(--teal)}.pill.lavanderia{color:var(--yellow)}
+.pill.alerta{background:var(--red-soft);color:var(--red)}.pill.ok,.pill.ativo{background:var(--green-soft);color:var(--green)}.pill.inativo{background:var(--red-soft);color:var(--red)}
+.msg{padding:0 var(--sp-4) var(--sp-3);font-size:12px}.msg.ok{color:var(--green)}.msg.bad{color:var(--red)}
+.epcs{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted);max-width:320px;overflow:hidden;text-overflow:ellipsis}
 .epcs.open{white-space:normal;max-width:none;overflow:visible;text-overflow:unset;cursor:default}
 td.toggle{cursor:pointer}
+.view[hidden]{display:none}
+.topbar,.backdrop{display:none}
+@media(max-width:860px){
+.app-shell{display:block}
+.topbar{display:flex;align-items:center;gap:var(--sp-3);position:sticky;top:0;z-index:30;background:var(--navy-mid);border-bottom:1px solid var(--line);padding:var(--sp-3) var(--sp-4)}
+.menu-btn{font-size:18px;line-height:1;padding:6px 12px}
+.sidebar{position:fixed;top:0;left:0;bottom:0;width:min(82vw,290px);z-index:50;transform:translateX(-105%);transition:transform .2s;box-shadow:0 0 24px #00000066}
+.sidebar.open{transform:none}
+.backdrop.on{display:block;position:fixed;inset:0;background:#00000080;z-index:40}
+.main-content{padding:var(--sp-4)}h1{font-size:19px}
+input,select{font-size:16px;min-height:42px}button{min-height:42px}}
 </style>
 </head>
 <body>
-<main>
-<h1><span id="dot" class="dot"></span> Cabine RFID <small id="status" style="font-weight:400;color:var(--mut)"></small></h1>
+<div class="topbar"><button class="menu-btn" id="menuBtn" aria-label="Menu">☰</button><strong>Cabine RFID</strong></div>
+<div class="backdrop" id="backdrop"></div>
+<div class="app-shell">
+<aside class="sidebar" id="sidebar">
+  <div class="brand-row"><div class="brand-mark">C</div><div><strong>Cabine RFID</strong><span>Solid · enxoval</span></div></div>
+  <nav class="nav-list">
+    <div class="nav-section">Visão geral</div>
+    <a class="nav-item" href="#painel" data-nav="painel">Painel</a>
+    <div class="nav-section">Operação</div>
+    <a class="nav-item" href="#leitura" data-nav="leitura">Leitura da cabine</a>
+    <a class="nav-item" href="#transferencias" data-nav="transferencias">Transferências</a>
+    <div class="nav-section">Controle</div>
+    <a class="nav-item" href="#evasao" data-nav="evasao">Alertas de evasão <span class="badge" id="badgeEvasao"></span></a>
+    <div class="nav-section">Cadastros</div>
+    <a class="nav-item" href="#inventario" data-nav="inventario">Inventário</a>
+    <a class="nav-item" href="#catalogo" data-nav="catalogo">Catálogo de itens</a>
+    <a class="nav-item" href="#destinos" data-nav="destinos">Destinos</a>
+    <a class="nav-item" href="#estados" data-nav="estados">Estados de inventário</a>
+    <div class="nav-section">Leitor</div>
+    <a class="nav-item" href="#tags" data-nav="tags">Tags lidas</a>
+    <a class="nav-item" href="#eventos" data-nav="eventos">Eventos ao vivo</a>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="leitor"><span id="dot" class="dot"></span><span id="status">…</span></div>
+    <button class="nav-item" id="tema" type="button">Tema claro/escuro</button>
+  </div>
+</aside>
+<main class="main-content">
+<h1 id="titulo">Painel</h1>
+<div class="view" data-view="painel">
 <div class="cards">
   <div class="card"><b id="c1">–</b><span>leituras no último minuto</span></div>
   <div class="card"><b id="c2">–</b><span>leituras na última hora</span></div>
@@ -47,7 +111,61 @@ td.toggle{cursor:pointer}
   <div class="card"><b id="c4">–</b><span>tags distintas (24h)</span></div>
   <div class="card"><b id="c5">–</b><span>eventos guardados</span></div>
 </div>
-
+<div class="cards">
+  <a class="card" href="#leitura"><b id="cPend">–</b><span>lotes aguardando transferência</span></a>
+  <a class="card" href="#evasao"><b id="cEvasao">–</b><span>saídas não documentadas (últimas 200)</span></a>
+</div>
+</div>
+<div class="view" data-view="leitura" hidden>
+<section>
+  <h2><span>Registrar leitura da cabine</span></h2>
+  <div class="row">
+    <label class="mut">janela (s) <input id="janela" type="number" min="1" max="600" value="15" style="width:60px"></label>
+    <button class="acc" id="registrar">Registrar leitura</button>
+    <span class="mut">considera as tags distintas lidas nos últimos N segundos antes do clique</span>
+  </div>
+  <div id="registrarMsg" class="msg"></div>
+  <div id="loteResultado" hidden>
+    <div class="row" style="padding-top:0"><b id="loteResumo"></b></div>
+    <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th></tr></thead><tbody id="loteIdentificados"></tbody></table></div>
+    <div class="row" style="padding-top:0"><b>Tags novas — cadastre pra identificar</b></div>
+    <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th></th></tr></thead><tbody id="loteNovos"></tbody></table></div>
+  </div>
+</section>
+<section>
+  <h2><span>Lotes aguardando transferência <span id="pendCount" class="mut"></span></span></h2>
+  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th></th></tr></thead><tbody id="pendentes"></tbody></table></div>
+</section>
+</div>
+<div class="view" data-view="transferencias" hidden>
+<section>
+  <h2><span>Transferências (auditoria)</span></h2>
+  <div class="row">
+    <select id="fTipo"><option value="">todos os tipos</option><option value="setor">setor</option><option value="lavanderia">lavanderia</option></select>
+    <select id="fDestino"><option value="">todos os destinos</option></select>
+    <label class="mut">de <input id="fDesde" type="date"></label>
+    <label class="mut">até <input id="fAte" type="date"></label>
+    <button id="fAplicar">filtrar</button>
+    <button id="fLimpar">limpar</button>
+  </div>
+  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th>EPCs</th></tr></thead><tbody id="transf"></tbody></table></div>
+</section>
+</div>
+<div class="view" data-view="evasao" hidden>
+<section>
+  <h2><span>Alertas de evasão <span id="evasaoCount" class="mut"></span></span></h2>
+  <div class="row">
+    <select id="evDestino"><option value="">todos os destinos</option></select>
+    <select id="evDocumentado"><option value="">todos</option><option value="false">só não documentados</option><option value="true">só documentados</option></select>
+    <label class="mut">de <input id="evDesde" type="date"></label>
+    <label class="mut">até <input id="evAte" type="date"></label>
+    <button id="evAplicar">filtrar</button>
+    <button id="evLimpar">limpar</button>
+  </div>
+  <div class="scroll"><table><thead><tr><th>Data</th><th>EPC</th><th>Destino</th><th>Status</th></tr></thead><tbody id="evasoes"></tbody></table></div>
+</section>
+</div>
+<div class="view" data-view="inventario" hidden>
 <section>
   <h2><span>Inventário</span></h2>
   <div class="row">
@@ -62,7 +180,8 @@ td.toggle{cursor:pointer}
   <div class="row" style="padding-top:0"><b id="invResumo">Resumo — carregando…</b></div>
   <div class="scroll"><table><thead><tr><th>Tipo</th><th>Quantidade</th></tr></thead><tbody id="invTabela"></tbody></table></div>
 </section>
-
+</div>
+<div class="view" data-view="catalogo" hidden>
 <section>
   <h2><span>Catálogo de itens</span></h2>
   <div class="row">
@@ -81,64 +200,8 @@ td.toggle{cursor:pointer}
   </div>
   <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th>Localização</th><th>Estado</th><th></th></tr></thead><tbody id="catalogo"></tbody></table></div>
 </section>
-
-<section>
-  <h2><span>Registrar leitura da cabine</span></h2>
-  <div class="row">
-    <label class="mut">janela (s) <input id="janela" type="number" min="1" max="600" value="15" style="width:60px"></label>
-    <button class="acc" id="registrar">Registrar leitura</button>
-    <span class="mut">considera as tags distintas lidas nos últimos N segundos antes do clique</span>
-  </div>
-  <div id="registrarMsg" class="msg"></div>
-  <div id="loteResultado" hidden>
-    <div class="row" style="padding-top:0"><b id="loteResumo"></b></div>
-    <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th></tr></thead><tbody id="loteIdentificados"></tbody></table></div>
-    <div class="row" style="padding-top:0"><b>Tags novas — cadastre pra identificar</b></div>
-    <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th></th></tr></thead><tbody id="loteNovos"></tbody></table></div>
-  </div>
-</section>
-
-<section>
-  <h2><span>Lotes aguardando transferência <span id="pendCount" class="mut"></span></span></h2>
-  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th></th></tr></thead><tbody id="pendentes"></tbody></table></div>
-</section>
-
-<section>
-  <h2><span>Transferências (auditoria)</span></h2>
-  <div class="row">
-    <select id="fTipo"><option value="">todos os tipos</option><option value="setor">setor</option><option value="lavanderia">lavanderia</option></select>
-    <select id="fDestino"><option value="">todos os destinos</option></select>
-    <label class="mut">de <input id="fDesde" type="date"></label>
-    <label class="mut">até <input id="fAte" type="date"></label>
-    <button id="fAplicar">filtrar</button>
-    <button id="fLimpar">limpar</button>
-  </div>
-  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th>EPCs</th></tr></thead><tbody id="transf"></tbody></table></div>
-</section>
-
-<section>
-  <h2><span>Alertas de evasão <span id="evasaoCount" class="mut"></span></span></h2>
-  <div class="row">
-    <select id="evDestino"><option value="">todos os destinos</option></select>
-    <select id="evDocumentado"><option value="">todos</option><option value="false">só não documentados</option><option value="true">só documentados</option></select>
-    <label class="mut">de <input id="evDesde" type="date"></label>
-    <label class="mut">até <input id="evAte" type="date"></label>
-    <button id="evAplicar">filtrar</button>
-    <button id="evLimpar">limpar</button>
-  </div>
-  <div class="scroll"><table><thead><tr><th>Data</th><th>EPC</th><th>Destino</th><th>Status</th></tr></thead><tbody id="evasoes"></tbody></table></div>
-</section>
-
-<section>
-  <h2><span>Tags <span id="filtro" style="color:var(--mut)"></span></span>
-    <span><select id="hours"><option value="1">1h</option><option value="24" selected>24h</option><option value="168">7 dias</option></select></span></h2>
-  <div class="scroll"><table><thead><tr><th>EPC</th><th>Leituras</th><th>Última</th><th>Antenas</th><th>Melhor RSSI</th></tr></thead><tbody id="tags"></tbody></table></div>
-</section>
-<section>
-  <h2><span>Eventos ao vivo</span><button id="limpar" hidden>limpar filtro</button></h2>
-  <div class="scroll"><table><thead><tr><th>Hora</th><th>Tipo</th><th>EPC</th><th>Antena</th><th>RSSI</th></tr></thead><tbody id="evs"></tbody></table></div>
-</section>
-
+</div>
+<div class="view" data-view="destinos" hidden>
 <section>
   <h2><span>Destinos cadastrados</span></h2>
   <div class="row">
@@ -149,7 +212,8 @@ td.toggle{cursor:pointer}
   <div id="destinoMsg" class="msg"></div>
   <div class="scroll"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Status</th><th></th></tr></thead><tbody id="destinos"></tbody></table></div>
 </section>
-
+</div>
+<div class="view" data-view="estados" hidden>
 <section>
   <h2><span>Estados de inventário cadastrados</span></h2>
   <div class="row">
@@ -161,8 +225,22 @@ td.toggle{cursor:pointer}
   <div id="estadoMsg" class="msg"></div>
   <div class="scroll"><table><thead><tr><th>Nome</th><th>Descrição</th><th>Comportamento</th><th>Padrão</th></tr></thead><tbody id="estados"></tbody></table></div>
 </section>
-
+</div>
+<div class="view" data-view="tags" hidden>
+<section>
+  <h2><span>Tags <span id="filtro" style="color:var(--muted)"></span></span>
+    <span><select id="hours"><option value="1">1h</option><option value="24" selected>24h</option><option value="168">7 dias</option></select></span></h2>
+  <div class="scroll"><table><thead><tr><th>EPC</th><th>Leituras</th><th>Última</th><th>Antenas</th><th>Melhor RSSI</th></tr></thead><tbody id="tags"></tbody></table></div>
+</section>
+</div>
+<div class="view" data-view="eventos" hidden>
+<section>
+  <h2><span>Eventos ao vivo</span><button id="limpar" hidden>limpar filtro</button></h2>
+  <div class="scroll"><table><thead><tr><th>Hora</th><th>Tipo</th><th>EPC</th><th>Antena</th><th>RSSI</th></tr></thead><tbody id="evs"></tbody></table></div>
+</section>
+</div>
 </main>
+</div>
 <script>
 const $=id=>document.getElementById(id);let epc=null,destinosCache=[];
 const hm=t=>t?new Date(t*1000).toLocaleTimeString('pt-BR'):'–';
@@ -175,21 +253,53 @@ async function j(u,opts){
 }
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
+const TITULOS={painel:'Painel',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
+  inventario:'Inventário',catalogo:'Catálogo de itens',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
+let view='painel';
+const LOADERS={
+  painel:()=>Promise.resolve(),
+  leitura:()=>carregarPendentes(),
+  transferencias:async()=>{await carregarDestinos();await carregarTransferencias()},
+  evasao:async()=>{await carregarDestinos();await carregarEvasoes()},
+  inventario:async()=>{await carregarOpcoesInventario();await carregarInventario()},
+  catalogo:()=>carregarCatalogo(),
+  destinos:()=>carregarDestinos(),
+  estados:()=>carregarEstados(),
+  tags:async()=>{const t=await j('/api/tags?hours='+$('hours').value);
+    $('tags').innerHTML=t.map(t=>`<tr><td class="epc" data-e="${esc(t.epc)}">${esc(t.epc)}</td><td>${t.reads}</td><td>${dt(t.last)}</td><td>${esc(t.antennas)}</td><td>${t.best_rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem leituras</td></tr>'},
+  eventos:async()=>{const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
+    $('evs').innerHTML=evs.map(e=>`<tr><td>${hm(e.received_at)}</td><td>${esc(e.event_type)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>'},
+};
 async function tick(){
   try{
     const s=await j('/api/summary');
     $('c1').textContent=s.events_1min;$('c2').textContent=s.events_1h;$('c3').textContent=s.tags_1h;$('c4').textContent=s.tags_24h;$('c5').textContent=s.total;
     const age=s.last_event?(s.now-s.last_event)/60:null,ok=age!==null&&age<=s.stale_minutes;
     $('dot').className='dot '+(ok?'ok':'bad');
-    $('status').textContent=age===null?'nenhum evento recebido ainda':'último evento '+(age<1?'agora há pouco':'há '+Math.round(age)+' min');
-    const tags=await j('/api/tags?hours='+$('hours').value);
-    $('tags').innerHTML=tags.map(t=>`<tr><td class="epc" data-e="${esc(t.epc)}">${esc(t.epc)}</td><td>${t.reads}</td><td>${dt(t.last)}</td><td>${esc(t.antennas)}</td><td>${t.best_rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem leituras</td></tr>';
-    const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
-    $('evs').innerHTML=evs.map(e=>`<tr><td>${hm(e.received_at)}</td><td>${esc(e.event_type)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>';
+    $('status').textContent=age===null?'leitor: sem eventos':'leitor: '+(age<1?'agora':'há '+Math.round(age)+' min');
+    const [pend,nao]=await Promise.all([j('/api/lotes?status=aguardando&limit=500'),j('/api/saida?documentado=false&limit=200')]);
+    $('cPend').textContent=pend.length;$('cEvasao').textContent=nao.length;$('badgeEvasao').textContent=nao.length||'';
+    await LOADERS[view]();
   }catch(e){$('status').textContent='erro ao atualizar';$('dot').className='dot bad'}
-  await Promise.all([carregarPendentes(),carregarTransferencias(),carregarOpcoesInventario(),carregarInventario(),carregarCatalogo(),carregarEvasoes()]);
 }
-document.addEventListener('click',e=>{const t=e.target.closest('td.epc');if(t&&t.dataset.e){epc=t.dataset.e;$('filtro').textContent='· filtro: '+epc;$('limpar').hidden=false;tick()}});
+function rota(){
+  const h=(location.hash||'#painel').slice(1);
+  view=TITULOS[h]?h:'painel';
+  document.querySelectorAll('.view').forEach(v=>v.hidden=v.dataset.view!==view);
+  document.querySelectorAll('[data-nav]').forEach(a=>a.classList.toggle('active',a.dataset.nav===view));
+  $('titulo').textContent=TITULOS[view];document.title=TITULOS[view]+' — Cabine RFID';
+  $('sidebar').classList.remove('open');$('backdrop').classList.remove('on');
+  tick();
+}
+window.addEventListener('hashchange',rota);
+$('menuBtn').onclick=()=>{$('sidebar').classList.add('open');$('backdrop').classList.add('on')};
+$('backdrop').onclick=()=>{$('sidebar').classList.remove('open');$('backdrop').classList.remove('on')};
+$('tema').onclick=()=>{
+  const claro=document.documentElement.getAttribute('data-theme')!=='light';
+  if(claro)document.documentElement.setAttribute('data-theme','light');else document.documentElement.removeAttribute('data-theme');
+  try{localStorage.setItem('tema',claro?'light':'dark')}catch(e){}
+};
+document.addEventListener('click',e=>{const t=e.target.closest('td.epc');if(t&&t.dataset.e){epc=t.dataset.e;$('filtro').textContent='· filtro: '+epc;$('limpar').hidden=false;if(view==='eventos')tick();else location.hash='#eventos'}});
 $('limpar').onclick=()=>{epc=null;$('filtro').textContent='';$('limpar').hidden=true;tick()};
 $('hours').onchange=tick;
 
@@ -434,7 +544,7 @@ $('cadastrarItem').onclick=async()=>{
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
 
-tick();setInterval(tick,3000);
+rota();setInterval(tick,3000);
 </script>
 </body>
 </html>

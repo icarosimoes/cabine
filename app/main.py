@@ -203,9 +203,19 @@ async def background():
             await asyncio.to_thread(purge)
 
 
+def init_db_retry(tentativas=30):
+    for i in range(tentativas):
+        try:
+            return init_db()
+        except psycopg.OperationalError as e:
+            print(f"postgres indisponível ({i + 1}/{tentativas}): {e}")
+            time.sleep(2)
+    init_db()
+
+
 @asynccontextmanager
 async def lifespan(_):
-    init_db()
+    await asyncio.to_thread(init_db_retry)
     t = asyncio.create_task(background())
     yield
     t.cancel()
@@ -227,12 +237,14 @@ async def ingest(request: Request):
         p = parse_event(ev)
         rows.append((now, p["event_type"], p["epc"], p["tid"], p["antenna"], p["rssi"], p["seen_at"],
                      json.dumps(ev, ensure_ascii=False)))
-    with closing(db()) as con:
-        with con.cursor() as cur:
-            cur.executemany(
-                "INSERT INTO events(received_at,event_type,epc,tid,antenna,rssi,seen_at,raw) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
-                rows)
-        con.commit()
+    def gravar():
+        with closing(db()) as con:
+            with con.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO events(received_at,event_type,epc,tid,antenna,rssi,seen_at,raw) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                    rows)
+            con.commit()
+    await asyncio.to_thread(gravar)
     return {"ok": True, "received": len(rows)}
 
 
@@ -369,8 +381,11 @@ def transferir_lote(lote_id: int, payload: TransferenciaIn):
         destino = con.execute("SELECT * FROM destinos WHERE id=%s AND ativo=1", (payload.destino_id,)).fetchone()
         if not destino:
             raise HTTPException(400, "destino inválido ou inativo")
-        con.execute("INSERT INTO transferencias(lote_id,destino_id,observacao,criado_em) VALUES(%s,%s,%s,%s)",
-                    (lote_id, payload.destino_id, (payload.observacao or "").strip() or None, now))
+        try:
+            con.execute("INSERT INTO transferencias(lote_id,destino_id,observacao,criado_em) VALUES(%s,%s,%s,%s)",
+                        (lote_id, payload.destino_id, (payload.observacao or "").strip() or None, now))
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(409, "lote já foi transferido")
         con.execute("UPDATE lotes SET status='transferido' WHERE id=%s", (lote_id,))
         con.commit()
     return {"ok": True, "lote_id": lote_id, "destino": destino["nome"], "criado_em": now}
@@ -574,6 +589,9 @@ class SaidaIn(BaseModel):
 
 @app.post("/api/saida", dependencies=[Depends(saida_auth)])
 def registrar_saida(payload: SaidaIn):
+    payload.epc = payload.epc.strip()
+    if not payload.epc:
+        raise HTTPException(400, "epc é obrigatório")
     now = time.time()
     with closing(db()) as con:
         destino = con.execute("SELECT * FROM destinos WHERE id=%s", (payload.destino_id,)).fetchone()
