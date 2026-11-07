@@ -12,7 +12,7 @@ import psycopg  # noqa: E402
 from app import main  # noqa: E402
 
 TABELAS = ["conferencia_itens", "conferencias", "eventos_saida", "transferencias", "lote_itens", "lotes",
-           "acomodacao_itens", "acomodacoes", "antenas", "itens", "estados_inventario", "destinos", "usuarios", "events", "sessoes", "leituras_hora", "config"]
+           "acomodacao_itens", "acomodacoes", "antenas", "itens", "estados_inventario", "destinos", "usuarios", "events", "sessoes", "leituras_hora", "config", "alerta_envios", "alerta_destinatarios"]
 
 
 @pytest.fixture()

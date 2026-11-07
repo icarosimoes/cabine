@@ -29,10 +29,12 @@ Verificar: `docker service ps impinj_impinj` e `curl -s https://cabine.solidsd.c
 Avisa falhas de comunicacao do radio com o webhook: **sem sinal ha X min**, **falhas no /ingest** (>=5 respostas
 4xx/5xx em 10 min) e a **retomada**. Um aviso por transicao, lembrete a cada `ALERTA_REPETIR_MINUTOS` (120).
 **Configuracao pela UI** (admin): menu *Alertas WhatsApp* — URL da Evolution (padrao `http://evolution-api:8080`,
-via rede `traefik-public`), instancia, API key (so grava; nunca e devolvida pela API), numeros com DDI separados por
-virgula, limites e botao "Enviar mensagem de teste". Fica na tabela `config` (a chave em texto no banco: proteger
+via rede `traefik-public`), instancia, API key (so grava; nunca e devolvida pela API), limites e, abaixo, o **cadastro de destinatarios**
+(nome, WhatsApp, recebe "radio sem sinal" / "falhas no /ingest", ativo, botao Testar por pessoa e historico de envios, como
+no gestaointeligente). Fica na tabela `config` (a chave em texto no banco: proteger
 backups). Variaveis `WHATSAPP_*` no `.env` servem so de valor inicial. API: `GET/PUT /api/config/alertas`,
-`POST /api/alertas/teste`. Sem instancia+chave+numero o alerta nao envia.
+`/api/alertas/destinatarios` (CRUD + `/{id}/teste`), `/api/alertas/envios`. Sem instancia+chave+destinatario ativo
+nao envia. `WHATSAPP_TO` foi removido.
 
 ## Migracao SQLite -> PostgreSQL (2026-11-07)
 

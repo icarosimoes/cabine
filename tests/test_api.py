@@ -142,26 +142,24 @@ def test_sessao_automatica_vira_lote(client):
 def test_alertas_whatsapp_transicoes(client):
     main.state["alertas"].clear()
     t = 1_000_000.0
-    assert main.avaliar_alertas(t, t - 3600, 0, main.CFG_PADRAO) and "sem enviar sinal" in main.avaliar_alertas(t + 7200 * 2, t - 3600, 0)[0]
+    assert main.avaliar_alertas(t, t - 3600, 0, main.CFG_PADRAO) and "sem enviar sinal" in main.avaliar_alertas(t + 7200 * 2, t - 3600, 0)[0][1]
     main.state["alertas"].clear()
     assert len(main.avaliar_alertas(t, t - 3600, 0, main.CFG_PADRAO)) == 1      # alerta
     assert main.avaliar_alertas(t + 60, t - 3540, 0) == []     # sem repetir
-    assert "voltou" in main.avaliar_alertas(t + 120, t + 100, 0)[0]  # retomada
-    assert "falharam" in main.avaliar_alertas(t + 200, t + 190, 5)[0]
+    assert "voltou" in main.avaliar_alertas(t + 120, t + 100, 0)[0][1]  # retomada
+    assert "falharam" in main.avaliar_alertas(t + 200, t + 190, 5)[0][1]
     main.state["alertas"].clear()
 
 
 def test_config_alertas_pela_ui(client):
     c = client.get("/api/config/alertas").json()
     assert c["wa_apikey_definida"] is False
-    r = client.put("/api/config/alertas", json={"wa_instance": "inst", "wa_apikey": "segredo", "wa_to": "5511999999999",
+    r = client.put("/api/config/alertas", json={"wa_instance": "inst", "wa_apikey": "segredo",
                                                 "sem_sinal_seg": 45})
     assert r.status_code == 200 and r.json()["wa_apikey_definida"] and "segredo" not in r.text
-    client.put("/api/config/alertas", json={"wa_instance": "inst", "wa_to": "5511999999999", "sem_sinal_seg": 45})
+    client.put("/api/config/alertas", json={"wa_instance": "inst", "sem_sinal_seg": 45})
     assert client.get("/api/config/alertas").json()["wa_apikey_definida"]  # vazio mantém a chave
-    assert client.put("/api/config/alertas", json={"wa_to": "123"}).status_code == 400
     assert main.cfg()["sem_sinal_seg"] == "45"
-    assert client.post("/api/alertas/teste").status_code == 400 or True  # sem Evolution real, só não pode quebrar
 
 
 def test_antena_cria_edita_e_valida(client):
@@ -179,3 +177,27 @@ def test_antena_cria_edita_e_valida(client):
     assert a["nome"] == "edge1-b" and a["modo"] == "manual" and a["alerta"] is False and a["porta"] is None
     assert client.put(f"/api/antenas/{a['id']}", json={**body, "modo": "x"}).status_code == 400
     assert client.put("/api/antenas/99999", json=body).status_code == 404
+
+
+def test_destinatarios_alerta(client, monkeypatch):
+    enviados = []
+    monkeypatch.setattr(main, "enviar_um", lambda c, n, t: enviados.append(n) or None)
+    assert client.post("/api/alertas/destinatarios", json={"nome": "Ana", "whatsapp": "(11) 99999-0001"}).status_code == 200
+    client.post("/api/alertas/destinatarios", json={"nome": "Beto", "whatsapp": "5511999990002", "recebe_falhas": False})
+    client.post("/api/alertas/destinatarios", json={"nome": "Inativo", "whatsapp": "5511999990003", "ativo": False})
+    assert client.post("/api/alertas/destinatarios", json={"nome": "Dup", "whatsapp": "11999990001"}).status_code == 409
+    assert client.post("/api/alertas/destinatarios", json={"nome": "Ruim", "whatsapp": "123"}).status_code == 400
+    lista = client.get("/api/alertas/destinatarios").json()
+    assert {d["whatsapp"] for d in lista} == {"5511999990001", "5511999990002", "5511999990003"}  # DDI 55 assumido
+    main.notificar("falhas", "x")
+    assert enviados == ["5511999990001"]  # Beto não recebe falhas, Inativo não recebe nada
+    enviados.clear()
+    main.notificar("sem_sinal", "y")
+    assert sorted(enviados) == ["5511999990001", "5511999990002"]
+    ana = next(d for d in lista if d["nome"] == "Ana")
+    assert client.post(f"/api/alertas/destinatarios/{ana['id']}/teste").status_code == 200
+    assert len(client.get("/api/alertas/envios").json()) == 4
+    monkeypatch.setattr(main, "enviar_um", lambda c, n, t: "Evolution respondeu HTTP 401")
+    assert client.post(f"/api/alertas/destinatarios/{ana['id']}/teste").status_code == 400
+    assert client.delete(f"/api/alertas/destinatarios/{ana['id']}").status_code == 200
+    assert len(client.get("/api/alertas/destinatarios").json()) == 2

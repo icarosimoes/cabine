@@ -54,7 +54,6 @@ services:
       WHATSAPP_API_URL: "${WHATSAPP_API_URL:-http://evolution-api:8080}"
       WHATSAPP_INSTANCE: "${WHATSAPP_INSTANCE:-}"
       WHATSAPP_APIKEY: "${WHATSAPP_APIKEY:-}"
-      WHATSAPP_TO: "${WHATSAPP_TO:-}"
       ALERTA_SEM_SINAL_SEGUNDOS: "${ALERTA_SEM_SINAL_SEGUNDOS:-60}"
     networks:
       - traefik-public

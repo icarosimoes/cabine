@@ -24,7 +24,6 @@ SESSAO_OCIOSO = int(os.environ.get("SESSAO_OCIOSO_SEGUNDOS", "30"))
 WA_URL = os.environ.get("WHATSAPP_API_URL", "http://evolution-api:8080").rstrip("/")
 WA_KEY = os.environ.get("WHATSAPP_APIKEY", "")
 WA_INSTANCE = os.environ.get("WHATSAPP_INSTANCE", "")
-WA_TO = [n for n in (x.strip() for x in os.environ.get("WHATSAPP_TO", "").split(",")) if n]
 ALERTA_SEM_SINAL_SEG = int(os.environ.get("ALERTA_SEM_SINAL_SEGUNDOS", "60"))  # rádio lendo estoque envia ~5 eventos/s
 ALERTA_FALHAS = int(os.environ.get("ALERTA_FALHAS_INGEST", "5"))  # falhas (4xx/5xx) do /ingest em 10 min
 ALERTA_REPETIR_MIN = int(os.environ.get("ALERTA_REPETIR_MINUTOS", "120"))
@@ -142,6 +141,21 @@ def init_db():
         CREATE TABLE IF NOT EXISTS leituras_hora(
           hora BIGINT NOT NULL, epc TEXT NOT NULL, leituras INTEGER NOT NULL, melhor_rssi DOUBLE PRECISION,
           PRIMARY KEY(hora, epc))""")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS alerta_destinatarios(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          nome TEXT NOT NULL,
+          whatsapp TEXT NOT NULL UNIQUE,
+          ativo BOOLEAN NOT NULL DEFAULT TRUE,
+          recebe_sem_sinal BOOLEAN NOT NULL DEFAULT TRUE,
+          recebe_falhas BOOLEAN NOT NULL DEFAULT TRUE,
+          criado_em DOUBLE PRECISION NOT NULL)""")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS alerta_envios(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          quando DOUBLE PRECISION NOT NULL,
+          destinatario_id INTEGER REFERENCES alerta_destinatarios(id) ON DELETE SET NULL,
+          nome TEXT, whatsapp TEXT, tipo TEXT, status TEXT NOT NULL, detalhe TEXT)""")
         con.execute("""
         CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY, valor TEXT NOT NULL)""")
         con.execute("""
@@ -363,7 +377,7 @@ def gravando() -> bool:
     return state["conf_ativa"]
 
 
-CFG_PADRAO = {"wa_url": WA_URL, "wa_instance": WA_INSTANCE, "wa_apikey": WA_KEY, "wa_to": ",".join(WA_TO),
+CFG_PADRAO = {"wa_url": WA_URL, "wa_instance": WA_INSTANCE, "wa_apikey": WA_KEY,
               "ativo": "1", "sem_sinal_seg": str(ALERTA_SEM_SINAL_SEG), "falhas": str(ALERTA_FALHAS),
               "repetir_min": str(ALERTA_REPETIR_MIN)}
 
@@ -379,30 +393,45 @@ def cfg() -> dict:
     return c
 
 
-def enviar_whatsapp(texto: str, c: dict | None = None) -> str | None:
-    """Devolve None se enviou; senão a mensagem de erro."""
+def enviar_um(c: dict, numero: str, texto: str) -> str | None:
+    """Envia a um número pela Evolution. None = enviou; senão a mensagem de erro."""
+    if not (c["wa_apikey"] and c["wa_instance"]):
+        return "WhatsApp não configurado (instância e API key)"
+    req = urllib.request.Request(
+        f"{c['wa_url'].rstrip('/')}/message/sendText/{c['wa_instance']}", method="POST",
+        data=json.dumps({"number": "".join(ch for ch in numero if ch.isdigit()), "text": texto}).encode(),
+        headers={"apikey": c["wa_apikey"], "Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=15).read()
+        return None
+    except urllib.error.HTTPError as e:
+        return f"Evolution respondeu HTTP {e.code} (confira instância, chave e número)"
+    except Exception as e:  # noqa: BLE001
+        return f"falha ao falar com a Evolution: {e}"
+
+
+def notificar(tipo: str, texto: str, c: dict | None = None, destinatario_id: int | None = None) -> list[dict]:
+    """Envia a cada destinatário ativo que recebe esse tipo ('sem_sinal'|'falhas'|'teste') e registra em alerta_envios."""
     c = c or cfg()
-    destinos = [n for n in (x.strip() for x in c["wa_to"].split(",")) if n]
-    if not (c["wa_apikey"] and c["wa_instance"] and destinos):
-        return "WhatsApp não configurado (instância, chave e número)"
-    erro = None
-    for numero in destinos:
-        req = urllib.request.Request(
-            f"{c['wa_url'].rstrip('/')}/message/sendText/{c['wa_instance']}", method="POST",
-            data=json.dumps({"number": "".join(ch for ch in numero if ch.isdigit()), "text": texto}).encode(),
-            headers={"apikey": c["wa_apikey"], "Content-Type": "application/json"})
-        try:
-            urllib.request.urlopen(req, timeout=15).read()
-        except urllib.error.HTTPError as e:
-            erro = f"Evolution respondeu HTTP {e.code} (confira instância, chave e número)"
-        except Exception as e:  # noqa: BLE001
-            erro = f"falha ao falar com a Evolution: {e}"
-    if erro:
-        print("whatsapp falhou:", erro)
-    return erro
+    resultados = []
+    with closing(db()) as con:
+        if destinatario_id:
+            dests = con.execute("SELECT * FROM alerta_destinatarios WHERE id=%s", (destinatario_id,)).fetchall()
+        else:
+            filtro = {"sem_sinal": " AND recebe_sem_sinal", "falhas": " AND recebe_falhas"}.get(tipo, "")
+            dests = con.execute("SELECT * FROM alerta_destinatarios WHERE ativo" + filtro + " ORDER BY id").fetchall()
+        for d in dests:
+            erro = enviar_um(c, d["whatsapp"], texto)
+            con.execute("INSERT INTO alerta_envios(quando,destinatario_id,nome,whatsapp,tipo,status,detalhe) VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                        (time.time(), d["id"], d["nome"], d["whatsapp"], tipo, "erro" if erro else "enviado", erro))
+            resultados.append({"id": d["id"], "nome": d["nome"], "erro": erro})
+        con.commit()
+        con.execute("DELETE FROM alerta_envios WHERE quando<%s", (time.time() - 30 * 86400,))
+        con.commit()
+    return resultados
 
 
-def avaliar_alertas(agora: float, ultimo_sinal, falhas: int, c: dict | None = None) -> list[str]:
+def avaliar_alertas(agora: float, ultimo_sinal, falhas: int, c: dict | None = None) -> list[tuple[str, str]]:
     """Máquina de estados: devolve as mensagens a enviar (alerta na transição, lembrete a cada ALERTA_REPETIR_MIN, retomada)."""
     c = c or cfg()
     sem_seg, max_falhas, repetir = int(c["sem_sinal_seg"]), int(c["falhas"]), int(c["repetir_min"])
@@ -419,10 +448,10 @@ def avaliar_alertas(agora: float, ultimo_sinal, falhas: int, c: dict | None = No
         est = state["alertas"].get(nome)
         if ativo and (est is None or agora - est >= repetir * 60):
             state["alertas"][nome] = agora
-            msgs.append(texto)
+            msgs.append((nome, texto))
         elif not ativo and est is not None:
             del state["alertas"][nome]
-            msgs.append("✅ Cabine RFID: " + ("o rádio voltou a enviar sinal." if nome == "sem_sinal" else "as falhas no /ingest cessaram."))
+            msgs.append((nome, "✅ Cabine RFID: " + ("o rádio voltou a enviar sinal." if nome == "sem_sinal" else "as falhas no /ingest cessaram.")))
     return msgs
 
 
@@ -435,8 +464,8 @@ def checar_alertas():
     c = cfg()
     if c["ativo"] != "1":
         return
-    for m in avaliar_alertas(agora, ultimo, len(state["falhas_ingest"]), c):
-        enviar_whatsapp(m, c)
+    for tipo, texto in avaliar_alertas(agora, ultimo, len(state["falhas_ingest"]), c):
+        notificar(tipo, texto, c)
 
 
 def push_kuma():
@@ -612,7 +641,6 @@ class AlertaCfg(BaseModel):
     wa_url: str = ""
     wa_instance: str = ""
     wa_apikey: str = ""  # vazio = manter a atual
-    wa_to: str = ""
     ativo: bool = True
     sem_sinal_seg: int = 60
     falhas: int = 5
@@ -623,7 +651,7 @@ class AlertaCfg(BaseModel):
 def ler_config_alertas():
     c = cfg()
     return {"wa_url": c["wa_url"], "wa_instance": c["wa_instance"], "wa_apikey_definida": bool(c["wa_apikey"]),
-            "wa_to": c["wa_to"], "ativo": c["ativo"] == "1", "sem_sinal_seg": int(c["sem_sinal_seg"]),
+            "ativo": c["ativo"] == "1", "sem_sinal_seg": int(c["sem_sinal_seg"]),
             "falhas": int(c["falhas"]), "repetir_min": int(c["repetir_min"]),
             "alertas_abertos": sorted(state["alertas"])}
 
@@ -632,11 +660,8 @@ def ler_config_alertas():
 def salvar_config_alertas(b: AlertaCfg):
     if not (10 <= b.sem_sinal_seg <= 86400 and 1 <= b.falhas <= 1000 and 5 <= b.repetir_min <= 10080):
         raise HTTPException(400, "limites inválidos (sem sinal 10–86400 s, falhas 1–1000, repetir 5–10080 min)")
-    for n in (x.strip() for x in b.wa_to.split(",") if x.strip()):
-        if not 10 <= len("".join(ch for ch in n if ch.isdigit())) <= 15:
-            raise HTTPException(400, f"número inválido: {n} (use DDI+DDD+número)")
     valores = {"wa_url": b.wa_url.strip() or CFG_PADRAO["wa_url"], "wa_instance": b.wa_instance.strip(),
-               "wa_to": ",".join(x.strip() for x in b.wa_to.split(",") if x.strip()), "ativo": "1" if b.ativo else "0",
+               "ativo": "1" if b.ativo else "0",
                "sem_sinal_seg": str(b.sem_sinal_seg), "falhas": str(b.falhas), "repetir_min": str(b.repetir_min)}
     if b.wa_apikey.strip():
         valores["wa_apikey"] = b.wa_apikey.strip()
@@ -647,12 +672,79 @@ def salvar_config_alertas(b: AlertaCfg):
     return ler_config_alertas()
 
 
-@app.post("/api/alertas/teste", dependencies=[Depends(admin_auth)])
-def testar_alerta():
-    erro = enviar_whatsapp("✅ Cabine RFID: mensagem de teste do alerta por WhatsApp.")
-    if erro:
-        raise HTTPException(400, erro)
+class DestinatarioIn(BaseModel):
+    nome: str
+    whatsapp: str
+    ativo: bool = True
+    recebe_sem_sinal: bool = True
+    recebe_falhas: bool = True
+
+
+def _valida_dest(b: DestinatarioIn) -> dict:
+    nome, num = b.nome.strip(), "".join(ch for ch in b.whatsapp if ch.isdigit())
+    if not nome:
+        raise HTTPException(400, "nome é obrigatório")
+    if len(num) in (10, 11):  # DDD + número sem DDI: assume Brasil
+        num = "55" + num
+    if not 12 <= len(num) <= 15:
+        raise HTTPException(400, "número inválido: use DDI+DDD+número (ex.: 5511999999999)")
+    return {"nome": nome, "whatsapp": num, "ativo": b.ativo, "recebe_sem_sinal": b.recebe_sem_sinal, "recebe_falhas": b.recebe_falhas}
+
+
+@app.get("/api/alertas/destinatarios", dependencies=[Depends(admin_auth)])
+def listar_destinatarios():
+    with closing(db()) as con:
+        return con.execute("SELECT * FROM alerta_destinatarios ORDER BY nome").fetchall()
+
+
+@app.post("/api/alertas/destinatarios", dependencies=[Depends(admin_auth)])
+def criar_destinatario(b: DestinatarioIn):
+    v = _valida_dest(b)
+    with closing(db()) as con:
+        if con.execute("SELECT 1 FROM alerta_destinatarios WHERE whatsapp=%s", (v["whatsapp"],)).fetchone():
+            raise HTTPException(409, "esse número já está cadastrado")
+        con.execute("""INSERT INTO alerta_destinatarios(nome,whatsapp,ativo,recebe_sem_sinal,recebe_falhas,criado_em)
+                       VALUES(%(nome)s,%(whatsapp)s,%(ativo)s,%(recebe_sem_sinal)s,%(recebe_falhas)s,%(t)s)""", {**v, "t": time.time()})
+        con.commit()
     return {"ok": True}
+
+
+@app.put("/api/alertas/destinatarios/{dest_id}", dependencies=[Depends(admin_auth)])
+def editar_destinatario(dest_id: int, b: DestinatarioIn):
+    v = _valida_dest(b)
+    with closing(db()) as con:
+        if not con.execute("SELECT 1 FROM alerta_destinatarios WHERE id=%s", (dest_id,)).fetchone():
+            raise HTTPException(404, "destinatário não encontrado")
+        if con.execute("SELECT 1 FROM alerta_destinatarios WHERE whatsapp=%s AND id<>%s", (v["whatsapp"], dest_id)).fetchone():
+            raise HTTPException(409, "esse número já está cadastrado")
+        con.execute("""UPDATE alerta_destinatarios SET nome=%(nome)s, whatsapp=%(whatsapp)s, ativo=%(ativo)s,
+                       recebe_sem_sinal=%(recebe_sem_sinal)s, recebe_falhas=%(recebe_falhas)s WHERE id=%(id)s""", {**v, "id": dest_id})
+        con.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/alertas/destinatarios/{dest_id}", dependencies=[Depends(admin_auth)])
+def excluir_destinatario(dest_id: int):
+    with closing(db()) as con:
+        con.execute("DELETE FROM alerta_destinatarios WHERE id=%s", (dest_id,))
+        con.commit()
+    return {"ok": True}
+
+
+@app.post("/api/alertas/destinatarios/{dest_id}/teste", dependencies=[Depends(admin_auth)])
+def testar_destinatario(dest_id: int):
+    r = notificar("teste", "✅ Cabine RFID: mensagem de teste do alerta por WhatsApp.", destinatario_id=dest_id)
+    if not r:
+        raise HTTPException(404, "destinatário não encontrado")
+    if r[0]["erro"]:
+        raise HTTPException(400, r[0]["erro"])
+    return {"ok": True}
+
+
+@app.get("/api/alertas/envios", dependencies=[Depends(admin_auth)])
+def historico_envios(limit: int = 50):
+    with closing(db()) as con:
+        return con.execute("SELECT * FROM alerta_envios ORDER BY id DESC LIMIT %s", (max(1, min(limit, 500)),)).fetchall()
 
 
 @app.get("/health")

@@ -83,3 +83,5 @@
   Alertas WhatsApp, minimo 10), checagem de alerta a cada 10s (laco proprio) e indicador do painel usa o mesmo limite.
   Observacao: o deploy do alerta quebrou 1x por default aninhado `${A:-${B:-30}}` no `impinj-stack.yml` (nao suportado
   pelo `docker stack deploy`); corrigido. Nunca usar default aninhado no stack.
+- Cadastro de destinatarios do alerta (padrao gestaointeligente): tabelas `alerta_destinatarios`/`alerta_envios`, envio por
+  pessoa conforme o tipo, teste individual, historico (30 dias). Aberto: deploy.
