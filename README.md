@@ -84,6 +84,20 @@ item, com filtros por Localização, Estado, Tipo, Fabricante, Tamanho, Composi�
   - transferido pra destino tipo `setor` → `Em uso`, localização = nome do destino
   - transferido pra destino tipo `lavanderia` → `Na lavanderia`, localização = nome do destino
 
+### Dados de exemplo
+
+`scripts/seed_exemplo.py` popula destinos (Apartamentos, Rouparia Geral, Piscina) e catálogo (9
+itens com tipos/atributos vistos nos prints de referência do eTrace) via HTTP, contra qualquer
+instância rodando — local ou já deployada. Simula leitura + transferência de dois grupos de itens
+(deixa o resto como "Sem leitura" de propósito, pra mostrar o inventário com estados variados).
+Idempotente: pode rodar de novo sem duplicar destino ou item de catálogo (cada rodada só soma mais
+histórico de leitura, que é esperado).
+
+```bash
+BASE_URL=http://localhost:8000 UI_USER=... UI_PASS=... WEBHOOK_USER=... WEBHOOK_PASS=... \
+  python3 scripts/seed_exemplo.py
+```
+
 ### API adicional
 
 | Método | Rota | Descrição |
