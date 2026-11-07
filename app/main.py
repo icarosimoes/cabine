@@ -1,5 +1,5 @@
 """Receptor de webhook do leitor Impinj (R700 Event Reporting) + painel ao vivo."""
-import asyncio, json, os, secrets, time, urllib.parse, urllib.request
+import asyncio, base64, binascii, json, os, secrets, time, urllib.parse, urllib.request
 from pathlib import Path
 
 import psycopg
@@ -148,6 +148,19 @@ def first(d: dict, *keys):
             return d[k]
 
 
+def epc_hex(valor):
+    """EPC canônico = hex maiúsculo. O R700 manda `epcHex` (hex) ou `epc` (base64 dos mesmos bytes)."""
+    if not valor:
+        return None
+    s = str(valor).strip()
+    if len(s) % 4 == 0 and not (len(s) % 2 == 0 and all(c in "0123456789abcdefABCDEF" for c in s) and len(s) >= 20):
+        try:
+            return base64.b64decode(s, validate=True).hex().upper()
+        except (binascii.Error, ValueError):
+            pass
+    return s.upper()
+
+
 def parse_event(ev):
     """Extrai campos do evento do R700 de forma tolerante; o JSON bruto sempre é guardado."""
     if not isinstance(ev, dict):
@@ -155,7 +168,11 @@ def parse_event(ev):
     etype = first(ev, "eventType", "type")
     body = next((v for k, v in ev.items() if isinstance(v, dict) and "tag" in k.lower()), None) \
         or next((v for v in ev.values() if isinstance(v, dict)), ev)
-    epc = first(body, "epcHex", "epc") or first(ev, "epcHex", "epc")
+    epc = first(body, "epcHex") or first(ev, "epcHex")
+    if epc:
+        epc = str(epc).strip().upper()
+    else:
+        epc = epc_hex(first(body, "epc") or first(ev, "epc"))
     rssi = first(body, "peakRssiCdbm")
     if rssi is not None:
         rssi = rssi / 100
