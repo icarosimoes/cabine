@@ -87,3 +87,4 @@
   pessoa conforme o tipo, teste individual, historico (30 dias). Aberto: deploy.
 - Destinatario pode ser grupo de WhatsApp (ID @g.us) + botao Buscar grupos (Evolution fetchAllGroups). Aberto: deploy.
 - Busca de grupos da Evolution em segundo plano (instancia com 352 grupos leva ~130s): POST /api/alertas/grupos/atualizar + GET /api/alertas/grupos, com filtro por nome na tela. Aberto: deploy.
+- Corrigido alarme falso de 'sem sinal' logo apos cada restart/deploy (ultimo evento do banco e antigo por causa da gravacao sob demanda; agora conta a partir da subida do app).

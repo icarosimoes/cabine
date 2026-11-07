@@ -431,12 +431,13 @@ def notificar(tipo: str, texto: str, c: dict | None = None, destinatario_id: int
     return resultados
 
 
-def avaliar_alertas(agora: float, ultimo_sinal, falhas: int, c: dict | None = None) -> list[tuple[str, str]]:
+def avaliar_alertas(agora: float, ultimo_sinal, falhas: int, c: dict | None = None, inicio: float | None = None) -> list[tuple[str, str]]:
     """Máquina de estados: devolve as mensagens a enviar (alerta na transição, lembrete a cada ALERTA_REPETIR_MIN, retomada)."""
     c = c or cfg()
     sem_seg, max_falhas, repetir = int(c["sem_sinal_seg"]), int(c["falhas"]), int(c["repetir_min"])
     msgs = []
-    base = ultimo_sinal or INICIO
+    # Depois de um restart o último evento no banco é antigo (só gravamos sob demanda): conta a partir da subida do app.
+    base = max(ultimo_sinal or 0, INICIO if inicio is None else inicio)
     sem_sinal = agora - base
     condicoes = {
         "sem_sinal": (sem_sinal >= sem_seg,

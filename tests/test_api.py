@@ -139,7 +139,8 @@ def test_sessao_automatica_vira_lote(client):
     assert client.get("/api/lotes?status=aguardando").json()[0]["quantidade"] == 2
 
 
-def test_alertas_whatsapp_transicoes(client):
+def test_alertas_whatsapp_transicoes(client, monkeypatch):
+    monkeypatch.setattr(main, "INICIO", 0.0)
     main.state["alertas"].clear()
     t = 1_000_000.0
     assert main.avaliar_alertas(t, t - 3600, 0, main.CFG_PADRAO) and "sem enviar sinal" in main.avaliar_alertas(t + 7200 * 2, t - 3600, 0)[0][1]
@@ -212,3 +213,12 @@ def test_destinatario_grupo(client, monkeypatch):
     assert enviados == ["120363123456789012@g.us"]
     assert client.post("/api/alertas/grupos/atualizar").status_code == 400  # sem Evolution configurada
     assert client.get("/api/alertas/grupos").json()["status"] in ("vazio", "pronto", "erro")
+
+
+def test_alerta_nao_dispara_logo_apos_restart(client):
+    main.state["alertas"].clear()
+    agora = 2_000_000.0
+    # último evento no banco é de 1h atrás, mas o app acabou de subir (INICIO = agora - 5s)
+    assert main.avaliar_alertas(agora, agora - 3600, 0, main.CFG_PADRAO, inicio=agora - 5) == []
+    assert main.avaliar_alertas(agora + 70, agora - 3600, 0, main.CFG_PADRAO, inicio=agora - 5)[0][0] == "sem_sinal"
+    main.state["alertas"].clear()
