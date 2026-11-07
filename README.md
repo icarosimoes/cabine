@@ -61,6 +61,33 @@ no máximo uma `transferencias` por lote (1:1, com `destino_id`). Tudo é *appen
 sobrescrito, o que existe é o rastro completo de leitura → transferência. `destinos` é a lista de
 setores/lavanderias cadastrados manualmente pela tela (ver `/api/destinos`).
 
+## Inventário e catálogo de itens
+
+Inspirado numa tela de referência (eTrace/Fera Hotéis): mostra o estoque atual agrupado por tipo de
+item, com filtros por Localização, Estado, Tipo, Fabricante, Tamanho, Composição e Cor.
+
+- **Catálogo de itens**: o RFID só dá a EPC (um id opaco); pra ter tipo/fabricante/tamanho/composição/cor
+  é preciso cadastrar isso manualmente na seção "Catálogo de itens", vinculando esses atributos à EPC.
+  Cadastro é *upsert* por EPC: recadastrar uma EPC substitui todos os campos pelo que foi enviado
+  dessa vez (campo deixado em branco vira `null`, não mantém o valor anterior). Uma EPC lida pelo
+  leitor mas nunca cadastrada no catálogo não aparece no Inventário.
+- **Localização e Estado não são campos editáveis** — são calculados a partir do histórico de
+  transferências de cada EPC (a mesma tabela `transferencias` do recurso acima), pra não poderem ficar
+  desatualizados manualmente:
+  - sem nenhuma leitura em lote → `Sem leitura`
+  - leitura feita, lote ainda aguardando transferência → `Aguardando transferência`
+  - transferido pra destino tipo `setor` → `Em uso`, localização = nome do destino
+  - transferido pra destino tipo `lavanderia` → `Na lavanderia`, localização = nome do destino
+
+### API adicional
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `POST` | `/api/itens` | Body `{epc, tipo, fabricante?, tamanho?, composicao?, cor?}`. Upsert por EPC (substitui tudo). |
+| `GET` | `/api/itens?q=&limit=` | Lista o catálogo (busca por EPC/tipo), já com `localizacao`/`estado` calculados. |
+| `GET` | `/api/itens/opcoes` | Valores distintos pra preencher os filtros da tela (tipos, fabricantes, tamanhos, composições, cores, localizações, estados). |
+| `GET` | `/api/inventario?localizacao=&estado=&tipo=&fabricante=&tamanho=&composicao=&cor=` | `{total, resumo:[{tipo, quantidade}]}` — contagem agrupada por tipo, com todos os filtros combináveis. |
+
 ## Limitações e riscos conhecidos
 
 - O leitor só envia evento quando lê tag, não há heartbeat. O Kuma avisa "sem eventos há mais de

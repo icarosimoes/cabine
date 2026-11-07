@@ -48,6 +48,40 @@ td.toggle{cursor:pointer}
 </div>
 
 <section>
+  <h2><span>Inventário</span></h2>
+  <div class="row">
+    <select id="invLocal" class="mut"></select>
+    <select id="invEstado" class="mut"></select>
+    <select id="invTipo" class="mut"></select>
+    <select id="invFabricante" class="mut"></select>
+    <select id="invTamanho" class="mut"></select>
+    <select id="invComposicao" class="mut"></select>
+    <select id="invCor" class="mut"></select>
+  </div>
+  <div class="row" style="padding-top:0"><b id="invResumo">Resumo — carregando…</b></div>
+  <div class="scroll"><table><thead><tr><th>Tipo</th><th>Quantidade</th></tr></thead><tbody id="invTabela"></tbody></table></div>
+</section>
+
+<section>
+  <h2><span>Catálogo de itens</span></h2>
+  <div class="row">
+    <input id="itEpc" type="text" placeholder="EPC" style="width:160px;font-family:ui-monospace,monospace">
+    <input id="itTipo" type="text" placeholder="tipo (ex. Capa edredom king)" style="width:200px">
+    <input id="itFabricante" type="text" placeholder="fabricante">
+    <input id="itTamanho" type="text" placeholder="tamanho">
+    <input id="itComposicao" type="text" placeholder="composição">
+    <input id="itCor" type="text" placeholder="cor">
+    <button class="acc" id="cadastrarItem">Cadastrar / atualizar</button>
+  </div>
+  <div id="itemMsg" class="msg"></div>
+  <div class="row" style="padding-top:0">
+    <input id="itBusca" type="text" placeholder="buscar por EPC ou tipo" style="flex:1;min-width:180px">
+    <button id="itBuscar">buscar</button>
+  </div>
+  <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th>Localização</th><th>Estado</th></tr></thead><tbody id="catalogo"></tbody></table></div>
+</section>
+
+<section>
   <h2><span>Registrar leitura da cabine</span></h2>
   <div class="row">
     <label class="mut">janela (s) <input id="janela" type="number" min="1" max="600" value="15" style="width:60px"></label>
@@ -121,7 +155,7 @@ async function tick(){
     const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
     $('evs').innerHTML=evs.map(e=>`<tr><td>${hm(e.received_at)}</td><td>${esc(e.event_type)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>';
   }catch(e){$('status').textContent='erro ao atualizar';$('dot').className='dot bad'}
-  await Promise.all([carregarPendentes(),carregarTransferencias()]);
+  await Promise.all([carregarPendentes(),carregarTransferencias(),carregarOpcoesInventario(),carregarInventario(),carregarCatalogo()]);
 }
 document.addEventListener('click',e=>{const t=e.target.closest('td.epc');if(t&&t.dataset.e){epc=t.dataset.e;$('filtro').textContent='· filtro: '+epc;$('limpar').hidden=false;tick()}});
 $('limpar').onclick=()=>{epc=null;$('filtro').textContent='';$('limpar').hidden=true;tick()};
@@ -217,6 +251,54 @@ document.addEventListener('click',async e=>{
 });
 $('fAplicar').onclick=carregarTransferencias;
 $('fLimpar').onclick=()=>{$('fTipo').value='';$('fDestino').value='';$('fDesde').value='';$('fAte').value='';carregarTransferencias()};
+
+const INV_FILTROS=[['invLocal','localizacoes','localizacao'],['invEstado','estados','estado'],['invTipo','tipos','tipo'],
+  ['invFabricante','fabricantes','fabricante'],['invTamanho','tamanhos','tamanho'],['invComposicao','composicoes','composicao'],['invCor','cores','cor']];
+const INV_ROTULOS={invLocal:'Localização',invEstado:'Estado',invTipo:'Tipo de Item',invFabricante:'Fabricante',invTamanho:'Tamanho',invComposicao:'Composição',invCor:'Cor'};
+async function carregarOpcoesInventario(){
+  const op=await j('/api/itens/opcoes');
+  INV_FILTROS.forEach(([id,chave])=>{
+    const sel=$(id),cur=sel.value;
+    sel.innerHTML=`<option value="">${INV_ROTULOS[id]}: todos</option>`+op[chave].map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    if(cur)sel.value=cur;
+  });
+}
+function montaFiltroInventario(){
+  const p=new URLSearchParams();
+  INV_FILTROS.forEach(([id,,param])=>{if($(id).value)p.set(param,$(id).value)});
+  return p.toString();
+}
+async function carregarInventario(){
+  const qs=montaFiltroInventario();
+  const r=await j('/api/inventario'+(qs?'?'+qs:''));
+  const ativos=INV_FILTROS.filter(([id])=>$(id).value).map(([id])=>`${INV_ROTULOS[id].toLowerCase()} "${$(id).value}"`);
+  $('invResumo').textContent=`Resumo — ${r.total} item(ns)`+(ativos.length?' com '+ativos.join(', '):' cadastrados');
+  $('invTabela').innerHTML=r.resumo.map(x=>`<tr><td>${esc(x.tipo)}</td><td>${x.quantidade}</td></tr>`).join('')||'<tr><td colspan=2>nenhum item encontrado</td></tr>';
+}
+INV_FILTROS.forEach(([id])=>{$(id).onchange=carregarInventario});
+
+async function carregarCatalogo(){
+  const q=$('itBusca').value.trim();
+  const rows=await j('/api/itens'+(q?'?q='+encodeURIComponent(q):''));
+  $('catalogo').innerHTML=rows.map(i=>`<tr>
+    <td class="epc">${esc(i.epc)}</td><td>${esc(i.tipo)}</td><td>${esc(i.fabricante||'–')}</td>
+    <td>${esc(i.tamanho||'–')}</td><td>${esc(i.composicao||'–')}</td><td>${esc(i.cor||'–')}</td>
+    <td>${esc(i.localizacao||'–')}</td><td>${esc(i.estado)}</td>
+  </tr>`).join('')||'<tr><td colspan=8>nenhum item cadastrado</td></tr>';
+}
+$('itBuscar').onclick=carregarCatalogo;
+$('cadastrarItem').onclick=async()=>{
+  const epc=$('itEpc').value.trim(),tipo=$('itTipo').value.trim(),msg=$('itemMsg');
+  if(!epc||!tipo){msg.className='msg bad';msg.textContent='EPC e tipo são obrigatórios';return}
+  try{
+    await j('/api/itens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      epc,tipo,fabricante:$('itFabricante').value.trim()||null,tamanho:$('itTamanho').value.trim()||null,
+      composicao:$('itComposicao').value.trim()||null,cor:$('itCor').value.trim()||null})});
+    msg.className='msg ok';msg.textContent=`item ${epc} cadastrado`;
+    ['itEpc','itTipo','itFabricante','itTamanho','itComposicao','itCor'].forEach(id=>$(id).value='');
+    await Promise.all([carregarCatalogo(),carregarOpcoesInventario(),carregarInventario()]);
+  }catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
 
 tick();setInterval(tick,3000);
 </script>

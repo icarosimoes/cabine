@@ -18,6 +18,29 @@ RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
 STATIC = Path(__file__).parent / "static"
 security = HTTPBasic()
 
+ITENS_VIEW_SQL = """
+SELECT i.epc, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, i.criado_em, i.atualizado_em,
+       d.nome AS localizacao,
+       CASE
+         WHEN d.tipo='setor' THEN 'Em uso'
+         WHEN d.tipo='lavanderia' THEN 'Na lavanderia'
+         WHEN ul.status='aguardando' THEN 'Aguardando transferência'
+         ELSE 'Sem leitura'
+       END AS estado
+FROM itens i
+LEFT JOIN (
+  SELECT li.epc, t.destino_id,
+         ROW_NUMBER() OVER (PARTITION BY li.epc ORDER BY t.criado_em DESC) rn
+  FROM lote_itens li JOIN transferencias t ON t.lote_id = li.lote_id
+) ut ON ut.epc = i.epc AND ut.rn = 1
+LEFT JOIN destinos d ON d.id = ut.destino_id
+LEFT JOIN (
+  SELECT li.epc, l.status,
+         ROW_NUMBER() OVER (PARTITION BY li.epc ORDER BY l.criado_em DESC) rn
+  FROM lote_itens li JOIN lotes l ON l.id = li.lote_id
+) ul ON ul.epc = i.epc AND ul.rn = 1
+"""
+
 
 def db():
     con = sqlite3.connect(DB_PATH, timeout=10)
@@ -67,6 +90,13 @@ def init_db():
           criado_em REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS ix_transf_destino ON transferencias(destino_id);
         CREATE INDEX IF NOT EXISTS ix_transf_criado ON transferencias(criado_em);
+
+        CREATE TABLE IF NOT EXISTS itens(
+          epc TEXT PRIMARY KEY,
+          tipo TEXT NOT NULL,
+          fabricante TEXT, tamanho TEXT, composicao TEXT, cor TEXT,
+          criado_em REAL NOT NULL, atualizado_em REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS ix_itens_tipo ON itens(tipo);
         """)
         con.commit()
         if not con.execute("SELECT 1 FROM destinos").fetchone():
@@ -367,6 +397,79 @@ def listar_transferencias(destino_id: int | None = None, tipo: str | None = None
     sql += " ORDER BY t.id DESC LIMIT ?"; args.append(min(limit, 1000))
     with closing(db()) as con:
         return [dict(r) for r in con.execute(sql, args).fetchall()]
+
+
+class ItemIn(BaseModel):
+    epc: str
+    tipo: str
+    fabricante: str | None = None
+    tamanho: str | None = None
+    composicao: str | None = None
+    cor: str | None = None
+
+
+@app.post("/api/itens", dependencies=[Depends(ui_auth)])
+def cadastrar_item(payload: ItemIn):
+    epc, tipo = payload.epc.strip(), payload.tipo.strip()
+    if not epc or not tipo:
+        raise HTTPException(400, "epc e tipo são obrigatórios")
+    now = time.time()
+    with closing(db()) as con:
+        con.execute("""INSERT INTO itens(epc,tipo,fabricante,tamanho,composicao,cor,criado_em,atualizado_em)
+                        VALUES(?,?,?,?,?,?,?,?)
+                        ON CONFLICT(epc) DO UPDATE SET tipo=excluded.tipo, fabricante=excluded.fabricante,
+                          tamanho=excluded.tamanho, composicao=excluded.composicao, cor=excluded.cor,
+                          atualizado_em=excluded.atualizado_em""",
+                    (epc, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor, now, now))
+        con.commit()
+        row = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v WHERE v.epc=?", (epc,)).fetchone()
+    return dict(row)
+
+
+@app.get("/api/itens", dependencies=[Depends(ui_auth)])
+def listar_itens(q: str | None = None, limit: int = 200):
+    sql = f"SELECT * FROM ({ITENS_VIEW_SQL}) v"
+    args: list = []
+    if q:
+        sql += " WHERE v.epc LIKE ? OR v.tipo LIKE ?"
+        like = f"%{q}%"; args += [like, like]
+    sql += " ORDER BY v.atualizado_em DESC LIMIT ?"; args.append(min(limit, 1000))
+    with closing(db()) as con:
+        return [dict(r) for r in con.execute(sql, args).fetchall()]
+
+
+@app.get("/api/itens/opcoes", dependencies=[Depends(ui_auth)])
+def itens_opcoes():
+    with closing(db()) as con:
+        def distinct(col):
+            return [r[0] for r in con.execute(
+                f"SELECT DISTINCT {col} FROM itens WHERE {col} IS NOT NULL AND {col}<>'' ORDER BY {col}").fetchall()]
+        resultado = {
+            "tipos": distinct("tipo"), "fabricantes": distinct("fabricante"), "tamanhos": distinct("tamanho"),
+            "composicoes": distinct("composicao"), "cores": distinct("cor"),
+            "localizacoes": [r["nome"] for r in con.execute("SELECT nome FROM destinos ORDER BY nome").fetchall()],
+            "estados": ["Em uso", "Na lavanderia", "Aguardando transferência", "Sem leitura"],
+        }
+    return resultado
+
+
+@app.get("/api/inventario", dependencies=[Depends(ui_auth)])
+def inventario(localizacao: str | None = None, estado: str | None = None, tipo: str | None = None,
+                fabricante: str | None = None, tamanho: str | None = None,
+                composicao: str | None = None, cor: str | None = None):
+    cond, args = [], []
+    for campo, valor in (("localizacao", localizacao), ("estado", estado), ("tipo", tipo),
+                          ("fabricante", fabricante), ("tamanho", tamanho),
+                          ("composicao", composicao), ("cor", cor)):
+        if valor:
+            cond.append(f"v.{campo}=?"); args.append(valor)
+    where = (" WHERE " + " AND ".join(cond)) if cond else ""
+    with closing(db()) as con:
+        resumo = [dict(r) for r in con.execute(
+            f"SELECT v.tipo, COUNT(*) quantidade FROM ({ITENS_VIEW_SQL}) v{where} GROUP BY v.tipo ORDER BY quantidade DESC",
+            args).fetchall()]
+        total = con.execute(f"SELECT COUNT(*) FROM ({ITENS_VIEW_SQL}) v{where}", args).fetchone()[0]
+    return {"total": total, "resumo": resumo}
 
 
 @app.get("/", dependencies=[Depends(ui_auth)])
