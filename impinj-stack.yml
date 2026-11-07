@@ -5,14 +5,41 @@
 #   cd /opt/impinj && docker build -t impinj-rfid:local .
 #   bash -c 'set -a; . ./.env; set +a; docker stack deploy -c impinj-stack.yml impinj'
 #
-# .env (chmod 600): WEBHOOK_USER, WEBHOOK_PASS, UI_USER, UI_PASS, KUMA_PUSH_URL (opcional)
+# .env (chmod 600): WEBHOOK_USER, WEBHOOK_PASS, UI_USER, UI_PASS, POSTGRES_PASSWORD, KUMA_PUSH_URL (opcional)
 # Depois de rebuildar a imagem: docker service update --force impinj_impinj
 version: "3.8"
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: impinj
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Informe POSTGRES_PASSWORD}"
+      POSTGRES_DB: impinj
+    volumes:
+      - impinj_pgdata:/var/lib/postgresql/data
+    networks:
+      - impinj-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U impinj"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == ${IMPINJ_NODE_HOSTNAME:-vmi3286141}
+      resources:
+        limits:
+          memory: 256M
+      restart_policy:
+        condition: any
+
   impinj:
     image: impinj-rfid:local
     environment:
+      DATABASE_URL: "postgresql://impinj:${POSTGRES_PASSWORD:?Informe POSTGRES_PASSWORD}@postgres:5432/impinj"
       WEBHOOK_USER: "${WEBHOOK_USER:?Informe WEBHOOK_USER}"
       WEBHOOK_PASS: "${WEBHOOK_PASS:?Informe WEBHOOK_PASS}"
       UI_USER: "${UI_USER:?Informe UI_USER}"
@@ -20,10 +47,9 @@ services:
       KUMA_PUSH_URL: "${KUMA_PUSH_URL:-}"
       STALE_MINUTES: "${STALE_MINUTES:-30}"
       RETENTION_DAYS: "${RETENTION_DAYS:-30}"
-    volumes:
-      - impinj_data:/data
     networks:
       - traefik-public
+      - impinj-internal
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health')"]
       interval: 30s
@@ -49,8 +75,10 @@ services:
         - traefik.http.services.impinj.loadbalancer.server.port=8000
 
 volumes:
-  impinj_data:
+  impinj_pgdata:
 
 networks:
   traefik-public:
     external: true
+  impinj-internal:
+    driver: overlay

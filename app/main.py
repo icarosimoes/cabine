@@ -1,15 +1,16 @@
 """Receptor de webhook do leitor Impinj (R700 Event Reporting) + painel ao vivo."""
-import asyncio, base64, json, os, secrets, sqlite3, time, urllib.request
-from contextlib import asynccontextmanager, closing
-from datetime import datetime, timezone
+import asyncio, json, os, secrets, time, urllib.parse, urllib.request
 from pathlib import Path
 
+import psycopg
+from psycopg.rows import dict_row
+from contextlib import asynccontextmanager, closing
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
-DB_PATH = os.environ.get("DB_PATH", "/data/impinj.db")
+DATABASE_URL = os.environ["DATABASE_URL"]
 WEBHOOK_USER, WEBHOOK_PASS = os.environ["WEBHOOK_USER"], os.environ["WEBHOOK_PASS"]
 UI_USER, UI_PASS = os.environ["UI_USER"], os.environ["UI_PASS"]
 KUMA_PUSH_URL = os.environ.get("KUMA_PUSH_URL", "")
@@ -43,64 +44,65 @@ LEFT JOIN (
 
 
 def db():
-    con = sqlite3.connect(DB_PATH, timeout=10)
-    con.row_factory = sqlite3.Row
-    return con
+    return psycopg.connect(DATABASE_URL, autocommit=False, row_factory=dict_row)
 
 
 def init_db():
-    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     with closing(db()) as con:
-        con.executescript("""
-        PRAGMA journal_mode=WAL;
+        con.execute("""
         CREATE TABLE IF NOT EXISTS events(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          received_at REAL NOT NULL,
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          received_at DOUBLE PRECISION NOT NULL,
           event_type TEXT,
-          epc TEXT, tid TEXT, antenna TEXT, rssi REAL,
+          epc TEXT, tid TEXT, antenna TEXT, rssi DOUBLE PRECISION,
           seen_at TEXT,
-          raw TEXT NOT NULL);
-        CREATE INDEX IF NOT EXISTS ix_ev_recv ON events(received_at);
-        CREATE INDEX IF NOT EXISTS ix_ev_epc ON events(epc, received_at);
+          raw TEXT NOT NULL)""")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_ev_recv ON events(received_at)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_ev_epc ON events(epc, received_at)")
 
+        con.execute("""
         CREATE TABLE IF NOT EXISTS destinos(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           tipo TEXT NOT NULL CHECK(tipo IN ('setor','lavanderia')),
           nome TEXT NOT NULL UNIQUE,
           ativo INTEGER NOT NULL DEFAULT 1,
-          criado_em REAL NOT NULL);
+          criado_em DOUBLE PRECISION NOT NULL)""")
 
+        con.execute("""
         CREATE TABLE IF NOT EXISTS lotes(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          criado_em REAL NOT NULL,
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          criado_em DOUBLE PRECISION NOT NULL,
           janela_segundos INTEGER NOT NULL,
           quantidade INTEGER NOT NULL,
-          status TEXT NOT NULL DEFAULT 'aguardando' CHECK(status IN ('aguardando','transferido')));
+          status TEXT NOT NULL DEFAULT 'aguardando' CHECK(status IN ('aguardando','transferido')))""")
 
+        con.execute("""
         CREATE TABLE IF NOT EXISTS lote_itens(
           lote_id INTEGER NOT NULL REFERENCES lotes(id),
           epc TEXT NOT NULL,
-          PRIMARY KEY(lote_id, epc));
+          PRIMARY KEY(lote_id, epc))""")
 
+        con.execute("""
         CREATE TABLE IF NOT EXISTS transferencias(
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           lote_id INTEGER NOT NULL UNIQUE REFERENCES lotes(id),
           destino_id INTEGER NOT NULL REFERENCES destinos(id),
           observacao TEXT,
-          criado_em REAL NOT NULL);
-        CREATE INDEX IF NOT EXISTS ix_transf_destino ON transferencias(destino_id);
-        CREATE INDEX IF NOT EXISTS ix_transf_criado ON transferencias(criado_em);
+          criado_em DOUBLE PRECISION NOT NULL)""")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_transf_destino ON transferencias(destino_id)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_transf_criado ON transferencias(criado_em)")
 
+        con.execute("""
         CREATE TABLE IF NOT EXISTS itens(
           epc TEXT PRIMARY KEY,
           tipo TEXT NOT NULL,
           fabricante TEXT, tamanho TEXT, composicao TEXT, cor TEXT,
-          criado_em REAL NOT NULL, atualizado_em REAL NOT NULL);
-        CREATE INDEX IF NOT EXISTS ix_itens_tipo ON itens(tipo);
-        """)
+          criado_em DOUBLE PRECISION NOT NULL, atualizado_em DOUBLE PRECISION NOT NULL)""")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_itens_tipo ON itens(tipo)")
         con.commit()
+
         if not con.execute("SELECT 1 FROM destinos").fetchone():
-            con.execute("INSERT INTO destinos(tipo,nome,ativo,criado_em) VALUES('setor','Governança',1,?)", (time.time(),))
+            con.execute("INSERT INTO destinos(tipo,nome,ativo,criado_em) VALUES('setor','Governança',1,%s)", (time.time(),))
             con.commit()
 
 
@@ -171,7 +173,7 @@ async def background():
             cutoff = time.time() - RETENTION_DAYS * 86400
             def purge():
                 with closing(db()) as con:
-                    con.execute("DELETE FROM events WHERE received_at<?", (cutoff,))
+                    con.execute("DELETE FROM events WHERE received_at<%s", (cutoff,))
                     con.commit()
             await asyncio.to_thread(purge)
 
@@ -183,7 +185,6 @@ async def lifespan(_):
     yield
     t.cancel()
 
-import urllib.parse  # noqa: E402
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 
@@ -202,7 +203,10 @@ async def ingest(request: Request):
         rows.append((now, p["event_type"], p["epc"], p["tid"], p["antenna"], p["rssi"], p["seen_at"],
                      json.dumps(ev, ensure_ascii=False)))
     with closing(db()) as con:
-        con.executemany("INSERT INTO events(received_at,event_type,epc,tid,antenna,rssi,seen_at,raw) VALUES(?,?,?,?,?,?,?,?)", rows)
+        with con.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO events(received_at,event_type,epc,tid,antenna,rssi,seen_at,raw) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                rows)
         con.commit()
     return {"ok": True, "received": len(rows)}
 
@@ -216,14 +220,14 @@ def health():
 def summary():
     now = time.time()
     with closing(db()) as con:
-        q = lambda sql, *a: con.execute(sql, a).fetchone()[0]
+        q = lambda sql, *a: list(con.execute(sql, a).fetchone().values())[0]
         last = q("SELECT MAX(received_at) FROM events")
         return {
             "now": now, "last_event": last,
-            "events_1min": q("SELECT COUNT(*) FROM events WHERE received_at>?", now - 60),
-            "events_1h": q("SELECT COUNT(*) FROM events WHERE received_at>?", now - 3600),
-            "tags_1h": q("SELECT COUNT(DISTINCT epc) FROM events WHERE epc IS NOT NULL AND received_at>?", now - 3600),
-            "tags_24h": q("SELECT COUNT(DISTINCT epc) FROM events WHERE epc IS NOT NULL AND received_at>?", now - 86400),
+            "events_1min": q("SELECT COUNT(*) FROM events WHERE received_at>%s", now - 60),
+            "events_1h": q("SELECT COUNT(*) FROM events WHERE received_at>%s", now - 3600),
+            "tags_1h": q("SELECT COUNT(DISTINCT epc) FROM events WHERE epc IS NOT NULL AND received_at>%s", now - 3600),
+            "tags_24h": q("SELECT COUNT(DISTINCT epc) FROM events WHERE epc IS NOT NULL AND received_at>%s", now - 86400),
             "total": q("SELECT COUNT(*) FROM events"),
             "stale_minutes": STALE_MINUTES,
         }
@@ -235,21 +239,21 @@ def tags(hours: float = 24, limit: int = 200):
     with closing(db()) as con:
         rows = con.execute("""
           SELECT epc, COUNT(*) reads, MAX(received_at) last, MIN(received_at) first,
-                 MAX(rssi) best_rssi, GROUP_CONCAT(DISTINCT antenna) antennas
-          FROM events WHERE epc IS NOT NULL AND received_at>?
-          GROUP BY epc ORDER BY last DESC LIMIT ?""", (since, min(limit, 1000))).fetchall()
-    return [dict(r) for r in rows]
+                 MAX(rssi) best_rssi, STRING_AGG(DISTINCT antenna, ',') antennas
+          FROM events WHERE epc IS NOT NULL AND received_at>%s
+          GROUP BY epc ORDER BY last DESC LIMIT %s""", (since, min(limit, 1000))).fetchall()
+    return rows
 
 
 @app.get("/api/events", dependencies=[Depends(ui_auth)])
 def events(limit: int = 100, epc: str | None = None, after_id: int = 0, raw: bool = False):
-    sql = "SELECT id,received_at,event_type,epc,tid,antenna,rssi,seen_at" + (",raw" if raw else "") + " FROM events WHERE id>?"
+    sql = "SELECT id,received_at,event_type,epc,tid,antenna,rssi,seen_at" + (",raw" if raw else "") + " FROM events WHERE id>%s"
     args: list = [after_id]
     if epc:
-        sql += " AND epc=?"; args.append(epc)
-    sql += " ORDER BY id DESC LIMIT ?"; args.append(min(limit, 1000))
+        sql += " AND epc=%s"; args.append(epc)
+    sql += " ORDER BY id DESC LIMIT %s"; args.append(min(limit, 1000))
     with closing(db()) as con:
-        return [dict(r) for r in con.execute(sql, args).fetchall()]
+        return con.execute(sql, args).fetchall()
 
 
 class DestinoIn(BaseModel):
@@ -269,8 +273,8 @@ class TransferenciaIn(BaseModel):
 def classificar_epcs(con, epcs):
     if not epcs:
         return [], []
-    placeholders = ",".join("?" * len(epcs))
-    cadastrados = {r["epc"]: dict(r) for r in con.execute(
+    placeholders = ",".join(["%s"] * len(epcs))
+    cadastrados = {r["epc"]: r for r in con.execute(
         f"SELECT epc,tipo,fabricante,tamanho,composicao,cor FROM itens WHERE epc IN ({placeholders})", epcs).fetchall()}
     identificados = [cadastrados[e] for e in epcs if e in cadastrados]
     novos = [e for e in epcs if e not in cadastrados]
@@ -283,15 +287,15 @@ def registrar_lote(janela_segundos: int = 15):
     now = time.time()
     with closing(db()) as con:
         epcs = [r["epc"] for r in con.execute(
-            "SELECT DISTINCT epc FROM events WHERE epc IS NOT NULL AND received_at>?",
+            "SELECT DISTINCT epc FROM events WHERE epc IS NOT NULL AND received_at>%s",
             (now - janela_segundos,)).fetchall()]
         if not epcs:
             raise HTTPException(400, f"nenhuma tag lida nos últimos {janela_segundos}s")
-        cur = con.execute(
-            "INSERT INTO lotes(criado_em,janela_segundos,quantidade,status) VALUES(?,?,?,'aguardando')",
-            (now, janela_segundos, len(epcs)))
-        lote_id = cur.lastrowid
-        con.executemany("INSERT INTO lote_itens(lote_id,epc) VALUES(?,?)", [(lote_id, e) for e in epcs])
+        lote_id = con.execute(
+            "INSERT INTO lotes(criado_em,janela_segundos,quantidade,status) VALUES(%s,%s,%s,'aguardando') RETURNING id",
+            (now, janela_segundos, len(epcs))).fetchone()["id"]
+        with con.cursor() as cur:
+            cur.executemany("INSERT INTO lote_itens(lote_id,epc) VALUES(%s,%s)", [(lote_id, e) for e in epcs])
         con.commit()
         identificados, novos = classificar_epcs(con, epcs)
     return {"id": lote_id, "criado_em": now, "quantidade": len(epcs), "epcs": epcs, "status": "aguardando",
@@ -303,22 +307,22 @@ def listar_lotes(status: str | None = None, limit: int = 100):
     sql = "SELECT * FROM lotes"
     args: list = []
     if status:
-        sql += " WHERE status=?"; args.append(status)
-    sql += " ORDER BY id DESC LIMIT ?"; args.append(min(limit, 500))
+        sql += " WHERE status=%s"; args.append(status)
+    sql += " ORDER BY id DESC LIMIT %s"; args.append(min(limit, 500))
     with closing(db()) as con:
-        return [dict(r) for r in con.execute(sql, args).fetchall()]
+        return con.execute(sql, args).fetchall()
 
 
 @app.get("/api/lotes/{lote_id}", dependencies=[Depends(ui_auth)])
 def detalhe_lote(lote_id: int):
     with closing(db()) as con:
-        lote = con.execute("SELECT * FROM lotes WHERE id=?", (lote_id,)).fetchone()
+        lote = con.execute("SELECT * FROM lotes WHERE id=%s", (lote_id,)).fetchone()
         if not lote:
             raise HTTPException(404, "lote não encontrado")
-        epcs = [r["epc"] for r in con.execute("SELECT epc FROM lote_itens WHERE lote_id=?", (lote_id,)).fetchall()]
+        epcs = [r["epc"] for r in con.execute("SELECT epc FROM lote_itens WHERE lote_id=%s", (lote_id,)).fetchall()]
         transf = con.execute(
             """SELECT t.*, d.nome destino_nome, d.tipo destino_tipo FROM transferencias t
-               JOIN destinos d ON d.id=t.destino_id WHERE t.lote_id=?""", (lote_id,)).fetchone()
+               JOIN destinos d ON d.id=t.destino_id WHERE t.lote_id=%s""", (lote_id,)).fetchone()
         identificados, novos = classificar_epcs(con, epcs)
     out = dict(lote)
     out["epcs"] = epcs
@@ -332,17 +336,17 @@ def detalhe_lote(lote_id: int):
 def transferir_lote(lote_id: int, payload: TransferenciaIn):
     now = time.time()
     with closing(db()) as con:
-        lote = con.execute("SELECT * FROM lotes WHERE id=?", (lote_id,)).fetchone()
+        lote = con.execute("SELECT * FROM lotes WHERE id=%s", (lote_id,)).fetchone()
         if not lote:
             raise HTTPException(404, "lote não encontrado")
         if lote["status"] == "transferido":
             raise HTTPException(409, "lote já foi transferido")
-        destino = con.execute("SELECT * FROM destinos WHERE id=? AND ativo=1", (payload.destino_id,)).fetchone()
+        destino = con.execute("SELECT * FROM destinos WHERE id=%s AND ativo=1", (payload.destino_id,)).fetchone()
         if not destino:
             raise HTTPException(400, "destino inválido ou inativo")
-        con.execute("INSERT INTO transferencias(lote_id,destino_id,observacao,criado_em) VALUES(?,?,?,?)",
+        con.execute("INSERT INTO transferencias(lote_id,destino_id,observacao,criado_em) VALUES(%s,%s,%s,%s)",
                     (lote_id, payload.destino_id, (payload.observacao or "").strip() or None, now))
-        con.execute("UPDATE lotes SET status='transferido' WHERE id=?", (lote_id,))
+        con.execute("UPDATE lotes SET status='transferido' WHERE id=%s", (lote_id,))
         con.commit()
     return {"ok": True, "lote_id": lote_id, "destino": destino["nome"], "criado_em": now}
 
@@ -352,14 +356,14 @@ def listar_destinos(tipo: str | None = None, ativo: bool | None = None):
     sql = "SELECT * FROM destinos"
     cond, args = [], []
     if tipo:
-        cond.append("tipo=?"); args.append(tipo)
+        cond.append("tipo=%s"); args.append(tipo)
     if ativo is not None:
-        cond.append("ativo=?"); args.append(1 if ativo else 0)
+        cond.append("ativo=%s"); args.append(1 if ativo else 0)
     if cond:
         sql += " WHERE " + " AND ".join(cond)
     sql += " ORDER BY tipo, nome"
     with closing(db()) as con:
-        return [dict(r) for r in con.execute(sql, args).fetchall()]
+        return con.execute(sql, args).fetchall()
 
 
 @app.post("/api/destinos", dependencies=[Depends(ui_auth)])
@@ -371,24 +375,24 @@ def criar_destino(payload: DestinoIn):
         raise HTTPException(400, "nome é obrigatório")
     with closing(db()) as con:
         try:
-            con.execute("INSERT INTO destinos(tipo,nome,ativo,criado_em) VALUES(?,?,1,?)",
+            con.execute("INSERT INTO destinos(tipo,nome,ativo,criado_em) VALUES(%s,%s,1,%s)",
                         (payload.tipo, nome, time.time()))
             con.commit()
-        except sqlite3.IntegrityError:
+        except psycopg.errors.UniqueViolation:
             raise HTTPException(409, "já existe um destino com esse nome")
-        row = con.execute("SELECT * FROM destinos WHERE nome=?", (nome,)).fetchone()
-    return dict(row)
+        row = con.execute("SELECT * FROM destinos WHERE nome=%s", (nome,)).fetchone()
+    return row
 
 
 @app.patch("/api/destinos/{destino_id}", dependencies=[Depends(ui_auth)])
 def atualizar_destino(destino_id: int, payload: DestinoPatch):
     with closing(db()) as con:
-        con.execute("UPDATE destinos SET ativo=? WHERE id=?", (1 if payload.ativo else 0, destino_id))
+        con.execute("UPDATE destinos SET ativo=%s WHERE id=%s", (1 if payload.ativo else 0, destino_id))
         con.commit()
-        row = con.execute("SELECT * FROM destinos WHERE id=?", (destino_id,)).fetchone()
+        row = con.execute("SELECT * FROM destinos WHERE id=%s", (destino_id,)).fetchone()
     if not row:
         raise HTTPException(404, "destino não encontrado")
-    return dict(row)
+    return row
 
 
 @app.get("/api/transferencias", dependencies=[Depends(ui_auth)])
@@ -401,18 +405,18 @@ def listar_transferencias(destino_id: int | None = None, tipo: str | None = None
              JOIN lotes l ON l.id=t.lote_id"""
     cond, args = [], []
     if destino_id:
-        cond.append("t.destino_id=?"); args.append(destino_id)
+        cond.append("t.destino_id=%s"); args.append(destino_id)
     if tipo:
-        cond.append("d.tipo=?"); args.append(tipo)
+        cond.append("d.tipo=%s"); args.append(tipo)
     if desde:
-        cond.append("t.criado_em>=?"); args.append(desde)
+        cond.append("t.criado_em>=%s"); args.append(desde)
     if ate:
-        cond.append("t.criado_em<=?"); args.append(ate)
+        cond.append("t.criado_em<=%s"); args.append(ate)
     if cond:
         sql += " WHERE " + " AND ".join(cond)
-    sql += " ORDER BY t.id DESC LIMIT ?"; args.append(min(limit, 1000))
+    sql += " ORDER BY t.id DESC LIMIT %s"; args.append(min(limit, 1000))
     with closing(db()) as con:
-        return [dict(r) for r in con.execute(sql, args).fetchall()]
+        return con.execute(sql, args).fetchall()
 
 
 class ItemIn(BaseModel):
@@ -432,14 +436,14 @@ def cadastrar_item(payload: ItemIn):
     now = time.time()
     with closing(db()) as con:
         con.execute("""INSERT INTO itens(epc,tipo,fabricante,tamanho,composicao,cor,criado_em,atualizado_em)
-                        VALUES(?,?,?,?,?,?,?,?)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
                         ON CONFLICT(epc) DO UPDATE SET tipo=excluded.tipo, fabricante=excluded.fabricante,
                           tamanho=excluded.tamanho, composicao=excluded.composicao, cor=excluded.cor,
                           atualizado_em=excluded.atualizado_em""",
                     (epc, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor, now, now))
         con.commit()
-        row = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v WHERE v.epc=?", (epc,)).fetchone()
-    return dict(row)
+        row = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v WHERE v.epc=%s", (epc,)).fetchone()
+    return row
 
 
 @app.get("/api/itens", dependencies=[Depends(ui_auth)])
@@ -447,18 +451,18 @@ def listar_itens(q: str | None = None, limit: int = 200):
     sql = f"SELECT * FROM ({ITENS_VIEW_SQL}) v"
     args: list = []
     if q:
-        sql += " WHERE v.epc LIKE ? OR v.tipo LIKE ?"
+        sql += " WHERE v.epc ILIKE %s OR v.tipo ILIKE %s"
         like = f"%{q}%"; args += [like, like]
-    sql += " ORDER BY v.atualizado_em DESC LIMIT ?"; args.append(min(limit, 1000))
+    sql += " ORDER BY v.atualizado_em DESC LIMIT %s"; args.append(min(limit, 1000))
     with closing(db()) as con:
-        return [dict(r) for r in con.execute(sql, args).fetchall()]
+        return con.execute(sql, args).fetchall()
 
 
 @app.get("/api/itens/opcoes", dependencies=[Depends(ui_auth)])
 def itens_opcoes():
     with closing(db()) as con:
         def distinct(col):
-            return [r[0] for r in con.execute(
+            return [r[col] for r in con.execute(
                 f"SELECT DISTINCT {col} FROM itens WHERE {col} IS NOT NULL AND {col}<>'' ORDER BY {col}").fetchall()]
         resultado = {
             "tipos": distinct("tipo"), "fabricantes": distinct("fabricante"), "tamanhos": distinct("tamanho"),
@@ -478,13 +482,13 @@ def inventario(localizacao: str | None = None, estado: str | None = None, tipo: 
                           ("fabricante", fabricante), ("tamanho", tamanho),
                           ("composicao", composicao), ("cor", cor)):
         if valor:
-            cond.append(f"v.{campo}=?"); args.append(valor)
+            cond.append(f"v.{campo}=%s"); args.append(valor)
     where = (" WHERE " + " AND ".join(cond)) if cond else ""
     with closing(db()) as con:
-        resumo = [dict(r) for r in con.execute(
+        resumo = con.execute(
             f"SELECT v.tipo, COUNT(*) quantidade FROM ({ITENS_VIEW_SQL}) v{where} GROUP BY v.tipo ORDER BY quantidade DESC",
-            args).fetchall()]
-        total = con.execute(f"SELECT COUNT(*) FROM ({ITENS_VIEW_SQL}) v{where}", args).fetchone()[0]
+            args).fetchall()
+        total = list(con.execute(f"SELECT COUNT(*) FROM ({ITENS_VIEW_SQL}) v{where}", args).fetchone().values())[0]
     return {"total": total, "resumo": resumo}
 
 

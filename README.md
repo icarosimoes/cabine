@@ -1,6 +1,6 @@
 # Cabine — leitor RFID Impinj
 
-Recebe o webhook de Event Reporting do leitor Impinj (R700), guarda as leituras de tags (SQLite) e
+Recebe o webhook de Event Reporting do leitor Impinj (R700), guarda as leituras de tags (PostgreSQL) e
 mostra um painel ao vivo. Opcionalmente manda heartbeat pro Uptime Kuma (monitor Push).
 
 - Webhook: `POST https://cabine.solidsd.com.br/ingest` (basic auth `WEBHOOK_USER`/`WEBHOOK_PASS`)
@@ -16,8 +16,23 @@ cd /opt/impinj && docker build -t impinj-rfid:local .
 bash -c 'set -a; . ./.env; set +a; docker stack deploy -c impinj-stack.yml impinj'
 ```
 
-`.env` só na VPS (chmod 600): `WEBHOOK_USER`, `WEBHOOK_PASS`, `UI_USER`, `UI_PASS`, `KUMA_PUSH_URL` (opcional),
-`STALE_MINUTES` (padrão 30), `RETENTION_DAYS` (padrão 30). DNS: `cabine.solidsd.com.br` → `95.111.250.4` no Cloudflare.
+`.env` só na VPS (chmod 600): `WEBHOOK_USER`, `WEBHOOK_PASS`, `UI_USER`, `UI_PASS`, `POSTGRES_PASSWORD`,
+`KUMA_PUSH_URL` (opcional), `STALE_MINUTES` (padrão 30), `RETENTION_DAYS` (padrão 30).
+DNS: `cabine.solidsd.com.br` → `95.111.250.4` no Cloudflare.
+
+### Banco de dados (PostgreSQL)
+
+A stack sobe um serviço `postgres:16-alpine` próprio (volume `impinj_pgdata`, só acessível pela rede
+interna `impinj-internal`, sem porta exposta pra fora). O app se conecta via `DATABASE_URL`, montada
+automaticamente pelo `impinj-stack.yml` a partir de `POSTGRES_PASSWORD`. Para rodar local (fora da
+stack), suba um Postgres e exporte `DATABASE_URL=postgresql://usuario:senha@host:5432/banco` — o app
+cria as tabelas sozinho no primeiro start (`init_db()`), não precisa rodar migration à parte.
+
+**Risco se já existe um deploy anterior rodando em SQLite**: esta mudança troca o motor de banco —
+não existe migração automática de dados do SQLite antigo (`/data/impinj.db`) pro Postgres novo. Se a
+VPS já tiver histórico real de leituras em SQLite, ele fica pra trás a menos que seja exportado antes
+do primeiro deploy desta versão. Antes de rodar `docker stack deploy` com essa stack nova em cima de
+um ambiente que já tinha dados, confirme se isso importa.
 
 ## Config no leitor (Event Reporting → Webhook)
 
