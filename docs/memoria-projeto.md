@@ -64,3 +64,7 @@ Data de referencia: 2026-11-07.
 
 - `app/static/`: `manifest.webmanifest`, `sw.js`, `offline.html`, `icons/` (gerados por `scripts/gerar_icones.py`). Rotas publicas em `app/main.py` (`pwa_*`). O SW nunca cacheia `/api/*` nem HTML do painel — so icones e offline. Mudou o SW? Incremente `VERSAO` em `sw.js`.
 - Tabelas responsiveis: classe `rt` na `<table>` e `data-l="Rotulo"` nas `<td>` (a primeira celula e o titulo do cartao).
+
+## Estado dos alertas
+
+- `state["alertas"]` (memoria) guarda quando cada alerta foi enviado. Chaves `antena:ID`, `webhook:ID`, `agente:ID` sao espelhadas na tabela `alerta_estado` (restart/deploy nao reenvia). `sem_sinal` e `falhas` ficam so em memoria (dependem de dados que zeram no restart). Alerta novo derivado do banco: use um prefixo e inclua em `PERSISTE_ALERTA`.

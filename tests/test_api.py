@@ -467,3 +467,41 @@ def test_pwa_arquivos_publicos_e_manifest_valido(client):
     for pagina in (anon.get("/login").text, client.get("/").text):
         assert 'rel="manifest"' in pagina and "serviceWorker" in pagina and "viewport-fit=cover" in pagina
     assert anon.get("/api/dashboard").status_code == 401  # e a API continua protegida
+
+
+def test_alerta_de_agente_nao_repete_apos_restart(client, monkeypatch):
+    """Deploy/restart zera a memória: o estado dos alertas de antena/agente precisa vir do banco para não reenviar o aviso."""
+    enviados = []
+    monkeypatch.setattr(main, "notificar", lambda tipo, texto, c=None, destinatario_id=None: enviados.append(tipo))
+    main.state["alertas"].clear(); main.state.pop("_salvo", None)
+    client.post("/api/agentes", json={"nome": "hotel"})
+    def contato(seg_atras):
+        with main_db() as con:
+            con.execute("UPDATE agentes SET visto_em=%s", (time.time() - seg_atras,)); con.commit()
+    def linhas():
+        with main_db() as con:
+            return con.execute("SELECT COUNT(*) n FROM alerta_estado").fetchone()["n"]
+    def n(tipo="agente_offline"):
+        return enviados.count(tipo)
+    contato(1000)
+    main.checar_alertas()
+    assert n() == 1 and linhas() == 1
+    main.checar_alertas()
+    assert n() == 1  # sem repetir dentro da janela
+    main.state["alertas"].clear(); main.state.pop("_salvo", None)  # "restart"
+    main.carregar_estado_alertas()
+    main.checar_alertas()
+    assert n() == 1 and linhas() == 1, "o restart reenviou o alerta"
+    contato(1)  # agente voltou: manda a retomada uma vez e limpa o estado
+    main.checar_alertas()
+    assert n() == 2 and linhas() == 0
+    main.checar_alertas()
+    assert n() == 2
+    main.state["alertas"].clear()
+
+
+def test_estado_de_alerta_de_item_removido_e_descartado(client):
+    main.state["alertas"].clear(); main.state.pop("_salvo", None)
+    main.state["alertas"]["antena:999"] = time.time()
+    main.salvar_estado_alertas([], [])
+    assert "antena:999" not in main.state["alertas"]

@@ -173,6 +173,9 @@ def init_db():
           tags INTEGER NOT NULL DEFAULT 0, lote_id INTEGER REFERENCES lotes(id))""")
 
         con.execute("""
+        CREATE TABLE IF NOT EXISTS alerta_estado(
+          chave TEXT PRIMARY KEY, desde DOUBLE PRECISION NOT NULL)""")  # alertas de antena/agente já enviados (sobrevive a restart/deploy)
+        con.execute("""
         CREATE TABLE IF NOT EXISTS conferencias(
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           filtros_desc TEXT NOT NULL,
@@ -563,6 +566,34 @@ def avaliar_agentes(agora: float, antenas: list[dict], agentes: list[dict], c: d
     return msgs
 
 
+PERSISTE_ALERTA = ("antena:", "webhook:", "agente:")  # derivados do banco; sem_sinal/falhas dependem de memória e ficam fora
+
+
+def carregar_estado_alertas():
+    """Restaura os alertas de antena/agente já enviados, para um restart/deploy não reenviar o mesmo aviso."""
+    with closing(db()) as con:
+        rows = con.execute("SELECT chave, desde FROM alerta_estado").fetchall()
+    for r in rows:
+        state["alertas"][r["chave"]] = r["desde"]
+    state["_salvo"] = {r["chave"]: r["desde"] for r in rows}
+
+
+def salvar_estado_alertas(antenas: list[dict], agentes: list[dict]):
+    """Grava no banco o estado dos alertas de antena/agente (só se mudou) e descarta os de itens que não existem mais."""
+    validas = {f"{p}{a['id']}" for a in antenas for p in ("antena:", "webhook:")} | {f"agente:{g['id']}" for g in agentes}
+    for chave in [k for k in state["alertas"] if k.startswith(PERSISTE_ALERTA) and k not in validas]:
+        del state["alertas"][chave]
+    atual = {k: v for k, v in state["alertas"].items() if k.startswith(PERSISTE_ALERTA)}
+    if atual == state.get("_salvo"):
+        return
+    with closing(db()) as con:
+        con.execute("DELETE FROM alerta_estado")
+        for k, v in atual.items():
+            con.execute("INSERT INTO alerta_estado(chave, desde) VALUES(%s,%s)", (k, v))
+        con.commit()
+    state["_salvo"] = dict(atual)
+
+
 def checar_alertas():
     agora = time.time()
     state["falhas_ingest"] = [t for t in state["falhas_ingest"] if agora - t < 600]
@@ -580,6 +611,7 @@ def checar_alertas():
         agentes = con.execute("SELECT id,nome,visto_em FROM agentes").fetchall()
     for tipo, texto in avaliar_agentes(agora, antenas, agentes, c):
         notificar(tipo, texto, c)
+    salvar_estado_alertas(antenas, agentes)
 
 
 def push_kuma():
@@ -696,6 +728,7 @@ def init_db_retry(tentativas=30):
 @asynccontextmanager
 async def lifespan(_):
     await asyncio.to_thread(init_db_retry)
+    await asyncio.to_thread(carregar_estado_alertas)
     t = asyncio.create_task(background())
     ts = asyncio.create_task(loop_sessao()) if SESSAO_AUTO else None
     ta = asyncio.create_task(loop_alertas())
