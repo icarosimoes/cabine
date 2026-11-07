@@ -196,6 +196,27 @@ def init_db():
             con.execute(f"ALTER TABLE antenas ADD COLUMN IF NOT EXISTS {col}")
 
         con.execute("""
+        CREATE TABLE IF NOT EXISTS agentes(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          nome TEXT NOT NULL UNIQUE,
+          token_hash TEXT NOT NULL UNIQUE,
+          criado_em DOUBLE PRECISION NOT NULL,
+          visto_em DOUBLE PRECISION, versao TEXT, host TEXT)""")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS antena_status(
+          antena_id INTEGER PRIMARY KEY REFERENCES antenas(id) ON DELETE CASCADE,
+          online BOOLEAN NOT NULL, latencia_ms INTEGER, detalhe TEXT, extra TEXT,
+          verificado_em DOUBLE PRECISION NOT NULL, agente_id INTEGER REFERENCES agentes(id) ON DELETE SET NULL)""")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS comandos(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          antena_id INTEGER NOT NULL REFERENCES antenas(id) ON DELETE CASCADE,
+          metodo TEXT NOT NULL, caminho TEXT NOT NULL, corpo TEXT,
+          status TEXT NOT NULL DEFAULT 'pendente',  -- pendente | enviado | ok | erro | expirado
+          http_status INTEGER, resposta TEXT,
+          usuario TEXT, criado_em DOUBLE PRECISION NOT NULL, enviado_em DOUBLE PRECISION, concluido_em DOUBLE PRECISION)""")
+
+        con.execute("""
         CREATE TABLE IF NOT EXISTS acomodacoes(
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           nome TEXT NOT NULL UNIQUE,
@@ -457,6 +478,32 @@ def avaliar_alertas(agora: float, ultimo_sinal, falhas: int, c: dict | None = No
     return msgs
 
 
+def avaliar_agentes(agora: float, antenas: list[dict], agentes: list[dict], c: dict) -> list[tuple[str, str]]:
+    """Alertas do agente do hotel: antena offline (com alerta ligado) e agente sem contato. Um aviso por transição."""
+    msgs = []
+    repetir = int(c["repetir_min"])
+    condicoes = {}
+    for a in antenas:
+        if a["alerta"] and a["verificado_em"] is not None:
+            off = (not a["online"]) and agora - a["verificado_em"] < AGENTE_SEM_CONTATO_SEG
+            condicoes[f"antena:{a['id']}"] = (off, f"⚠️ Cabine RFID: antena {a['nome']} ({a.get('ip') or 'sem IP'}) está OFFLINE — {a.get('detalhe') or 'sem resposta'}.",
+                                              f"✅ Cabine RFID: antena {a['nome']} voltou a responder.")
+    for ag in agentes:
+        if ag["visto_em"] is not None:
+            sem = agora - ag["visto_em"] >= AGENTE_SEM_CONTATO_SEG
+            condicoes[f"agente:{ag['id']}"] = (sem, f"⚠️ Cabine RFID: o agente '{ag['nome']}' do hotel está sem contato há {int(agora - ag['visto_em'])}s (PC desligado ou sem internet?).",
+                                               f"✅ Cabine RFID: o agente '{ag['nome']}' voltou a se comunicar.")
+    for chave, (ativo, texto, ok_texto) in condicoes.items():
+        est = state["alertas"].get(chave)
+        if ativo and (est is None or agora - est >= repetir * 60):
+            state["alertas"][chave] = agora
+            msgs.append((chave.split(":")[0] + "_offline", texto))
+        elif not ativo and est is not None:
+            del state["alertas"][chave]
+            msgs.append((chave.split(":")[0] + "_offline", ok_texto))
+    return msgs
+
+
 def checar_alertas():
     agora = time.time()
     state["falhas_ingest"] = [t for t in state["falhas_ingest"] if agora - t < 600]
@@ -467,6 +514,12 @@ def checar_alertas():
     if c["ativo"] != "1":
         return
     for tipo, texto in avaliar_alertas(agora, ultimo, len(state["falhas_ingest"]), c):
+        notificar(tipo, texto, c)
+    with closing(db()) as con:
+        antenas = con.execute("""SELECT a.id,a.nome,a.ip,a.alerta,s.online,s.detalhe,s.verificado_em FROM antenas a
+                                 JOIN antena_status s ON s.antena_id=a.id""").fetchall()
+        agentes = con.execute("SELECT id,nome,visto_em FROM agentes").fetchall()
+    for tipo, texto in avaliar_agentes(agora, antenas, agentes, c):
         notificar(tipo, texto, c)
 
 
@@ -1287,8 +1340,10 @@ def _valida_antena(con, p: AntenaIn) -> dict:
 def listar_antenas():
     with closing(db()) as con:
         return con.execute("""SELECT a.id, a.nome, a.descricao, a.modelo, a.destino_id, d.nome destino_nome,
-                                     a.modo, a.alerta, a.ip, a.porta
-                              FROM antenas a LEFT JOIN destinos d ON d.id=a.destino_id ORDER BY a.nome""").fetchall()
+                                     a.modo, a.alerta, a.ip, a.porta,
+                                     s.online, s.latencia_ms, s.detalhe, s.verificado_em, s.extra
+                              FROM antenas a LEFT JOIN destinos d ON d.id=a.destino_id
+                              LEFT JOIN antena_status s ON s.antena_id=a.id ORDER BY a.nome""").fetchall()
 
 
 @app.post("/api/antenas", dependencies=[Depends(admin_auth)])
@@ -1316,6 +1371,156 @@ def editar_antena(antena_id: int, payload: AntenaIn):
                        modo=%(modo)s, alerta=%(alerta)s, ip=%(ip)s, porta=%(porta)s WHERE id=%(id)s""", {**v, "id": antena_id})
         con.commit()
     return {"ok": True}
+
+
+AGENTE_INTERVALO_SEG = int(os.environ.get("AGENTE_INTERVALO_SEGUNDOS", "15"))
+AGENTE_SEM_CONTATO_SEG = int(os.environ.get("AGENTE_SEM_CONTATO_SEGUNDOS", "120"))
+CMD_CAMINHO = re.compile(r"^/api/v1/[A-Za-z0-9_\-/.?=&]*$")  # só a API REST do leitor; nada fora de /api/v1/
+
+
+def _hash_token(t: str) -> str:
+    return hashlib.sha256(t.encode()).hexdigest()
+
+
+def agente_auth(request: Request) -> dict:
+    token = request.headers.get("x-agent-token", "")
+    if not token:
+        raise HTTPException(401, "token do agente ausente")
+    with closing(db()) as con:
+        ag = con.execute("SELECT * FROM agentes WHERE token_hash=%s", (_hash_token(token),)).fetchone()
+        if not ag:
+            raise HTTPException(401, "token do agente inválido")
+        con.execute("UPDATE agentes SET visto_em=%s WHERE id=%s", (time.time(), ag["id"]))
+        con.commit()
+    return ag
+
+
+class AgenteIn(BaseModel):
+    nome: str
+
+
+@app.post("/api/agentes")
+def criar_agente(b: AgenteIn, _: dict = Depends(admin_auth)):
+    nome = b.nome.strip()
+    if not nome:
+        raise HTTPException(400, "nome é obrigatório")
+    token = secrets.token_urlsafe(32)
+    with closing(db()) as con:
+        try:
+            ag = con.execute("INSERT INTO agentes(nome,token_hash,criado_em) VALUES(%s,%s,%s) RETURNING id",
+                             (nome, _hash_token(token), time.time())).fetchone()
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(409, "já existe agente com esse nome")
+        con.commit()
+    return {"id": ag["id"], "nome": nome, "token": token, "aviso": "guarde o token agora: ele não é mostrado de novo"}
+
+
+@app.get("/api/agentes", dependencies=[Depends(admin_auth)])
+def listar_agentes():
+    with closing(db()) as con:
+        return con.execute("SELECT id,nome,criado_em,visto_em,versao,host FROM agentes ORDER BY nome").fetchall()
+
+
+@app.delete("/api/agentes/{agente_id}", dependencies=[Depends(admin_auth)])
+def excluir_agente(agente_id: int):
+    with closing(db()) as con:
+        con.execute("DELETE FROM agentes WHERE id=%s", (agente_id,))
+        con.commit()
+    return {"ok": True}
+
+
+@app.get("/api/agente/config")
+def agente_config(ag: dict = Depends(agente_auth)):
+    """Lista de antenas a monitorar (as que têm IP) + intervalo."""
+    with closing(db()) as con:
+        antenas = con.execute("""SELECT id,nome,modelo,ip,porta,modo,alerta FROM antenas
+                                 WHERE ip IS NOT NULL AND ip<>'' ORDER BY nome""").fetchall()
+    return {"agente": ag["nome"], "intervalo_seg": AGENTE_INTERVALO_SEG, "antenas": antenas}
+
+
+class StatusAntenaIn(BaseModel):
+    id: int
+    online: bool
+    latencia_ms: int | None = None
+    detalhe: str | None = None
+    extra: dict | None = None
+
+
+class StatusIn(BaseModel):
+    versao: str | None = None
+    host: str | None = None
+    antenas: list[StatusAntenaIn] = []
+
+
+@app.post("/api/agente/status")
+def agente_status(b: StatusIn, ag: dict = Depends(agente_auth)):
+    """Recebe o status das antenas e devolve os comandos pendentes (marcados como enviados)."""
+    now = time.time()
+    with closing(db()) as con:
+        con.execute("UPDATE agentes SET versao=%s, host=%s WHERE id=%s", (b.versao, b.host, ag["id"]))
+        for a in b.antenas:
+            con.execute("""INSERT INTO antena_status(antena_id,online,latencia_ms,detalhe,extra,verificado_em,agente_id)
+                           SELECT id,%s,%s,%s,%s,%s,%s FROM antenas WHERE id=%s
+                           ON CONFLICT(antena_id) DO UPDATE SET online=EXCLUDED.online, latencia_ms=EXCLUDED.latencia_ms,
+                             detalhe=EXCLUDED.detalhe, extra=EXCLUDED.extra, verificado_em=EXCLUDED.verificado_em, agente_id=EXCLUDED.agente_id""",
+                        (a.online, a.latencia_ms, (a.detalhe or "")[:300], json.dumps(a.extra) if a.extra else None, now, ag["id"], a.id))
+        con.execute("UPDATE comandos SET status='expirado', concluido_em=%s WHERE status IN ('pendente','enviado') AND criado_em<%s",
+                    (now, now - 120))
+        cmds = con.execute("""UPDATE comandos SET status='enviado', enviado_em=%s WHERE status='pendente'
+                              RETURNING id, antena_id, metodo, caminho, corpo""", (now,)).fetchall()
+        con.commit()
+    return {"ok": True, "comandos": cmds}
+
+
+class ResultadoIn(BaseModel):
+    ok: bool
+    http_status: int | None = None
+    resposta: str | None = None
+
+
+@app.post("/api/agente/comandos/{cmd_id}/resultado")
+def agente_resultado(cmd_id: int, b: ResultadoIn, _: dict = Depends(agente_auth)):
+    with closing(db()) as con:
+        con.execute("UPDATE comandos SET status=%s, http_status=%s, resposta=%s, concluido_em=%s WHERE id=%s",
+                    ("ok" if b.ok else "erro", b.http_status, (b.resposta or "")[:20000], time.time(), cmd_id))
+        con.commit()
+    return {"ok": True}
+
+
+class ComandoIn(BaseModel):
+    metodo: str = "GET"
+    caminho: str
+    corpo: str | None = None
+
+
+@app.post("/api/antenas/{antena_id}/comandos")
+def criar_comando(antena_id: int, b: ComandoIn, user: dict = Depends(admin_auth)):
+    metodo = b.metodo.upper()
+    if metodo not in ("GET", "PUT", "POST"):
+        raise HTTPException(400, "método deve ser GET, PUT ou POST")
+    if not CMD_CAMINHO.match(b.caminho) or ".." in b.caminho:
+        raise HTTPException(400, "caminho inválido: use a API do leitor, começando por /api/v1/")
+    if b.corpo:
+        try:
+            json.loads(b.corpo)
+        except ValueError:
+            raise HTTPException(400, "o corpo precisa ser JSON válido")
+    with closing(db()) as con:
+        if not con.execute("SELECT 1 FROM antenas WHERE id=%s", (antena_id,)).fetchone():
+            raise HTTPException(404, "antena não encontrada")
+        cid = con.execute("INSERT INTO comandos(antena_id,metodo,caminho,corpo,usuario,criado_em) VALUES(%s,%s,%s,%s,%s,%s) RETURNING id",
+                          (antena_id, metodo, b.caminho, b.corpo or None, user["usuario"], time.time())).fetchone()["id"]
+        con.commit()
+    return {"id": cid}
+
+
+@app.get("/api/comandos/{cmd_id}", dependencies=[Depends(admin_auth)])
+def ler_comando(cmd_id: int):
+    with closing(db()) as con:
+        c = con.execute("SELECT * FROM comandos WHERE id=%s", (cmd_id,)).fetchone()
+    if not c:
+        raise HTTPException(404, "comando não encontrado")
+    return c
 
 
 class AcomodacaoItemIn(BaseModel):

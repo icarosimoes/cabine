@@ -370,7 +370,14 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
     <button class="acc" id="anSalvar">Salvar</button><button id="anCancelar" type="button" hidden>Cancelar edição</button>
   </div>
   <div id="antenaMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th>Nome</th><th>Descrição</th><th>Modelo</th><th>Localização</th><th>Modo</th><th>Alerta</th><th>IP:porta</th><th></th></tr></thead><tbody id="antenas"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Nome</th><th>Descrição</th><th>Modelo</th><th>Localização</th><th>Modo</th><th>Alerta</th><th>IP:porta</th><th>Status (agente)</th><th></th></tr></thead><tbody id="antenas"></tbody></table></div>
+</section>
+<section id="secAgentes" hidden>
+  <h2><span>Agente do hotel (Windows)</span></h2>
+  <div class="mut" style="padding:0 16px 8px">Programa instalado no PC do hotel que testa cada antena (IP cadastrado acima), envia o status para cá e aplica as configurações de rádio. Gere um token, instale com o <code>instalar.cmd</code> e cole o token quando pedir.</div>
+  <div class="row"><input id="agNome" type="text" placeholder="nome (ex.: PC Recepção Fera)" style="width:240px"><button class="acc" id="agCriar">Gerar token</button></div>
+  <div id="agMsg" class="msg"></div>
+  <div class="scroll"><table><thead><tr><th>Agente</th><th>Último contato</th><th>Versão</th><th>Computador</th><th></th></tr></thead><tbody id="agentes"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="acomodacoes" hidden>
@@ -879,15 +886,71 @@ async function carregarAntenas(){
   await carregarDestinos();
   if(antenaEdit===null)$('anDestino').innerHTML='<option value="">–</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
   antenasCache=await j('/api/antenas');
+  carregarAgentes().catch(()=>{});
   $('antenas').innerHTML=antenasCache.map(a=>`<tr><td>${esc(a.nome)}</td><td>${esc(a.descricao||'–')}</td><td>${esc(a.modelo||'–')}</td><td>${esc(a.destino_nome||'–')}</td>
     <td>${a.modo==='manual'?'Manual':'Automático'}</td><td>${a.alerta?'<span class="pill ok">sim</span>':'não'}</td><td>${a.ip?esc(a.ip)+(a.porta?':'+a.porta:''):'–'}</td>
-    <td><button data-edit="${a.id}">Editar</button></td></tr>`).join('')||'<tr><td colspan=8>nenhuma antena cadastrada</td></tr>';
+    <td>${statusAntena(a)}</td>
+    <td><button data-edit="${a.id}">Editar</button> <button data-cfg="${a.id}">Configurar rádio</button></td></tr>`).join('')||'<tr><td colspan=9>nenhuma antena cadastrada</td></tr>';
+}
+const idade=t=>{const a=Date.now()/1000-t;return a<90?Math.round(a)+'s':a<5400?Math.round(a/60)+' min':Math.round(a/3600)+' h'};
+function statusAntena(a){
+  if(!a.ip)return '<span class="mut">sem IP</span>';
+  if(a.verificado_em==null)return '<span class="mut">sem dados (agente não instalado?)</span>';
+  const velho=Date.now()/1000-a.verificado_em>90;
+  if(velho)return `<span class="pill alerta">sem contato do agente</span> <span class="mut">há ${idade(a.verificado_em)}</span>`;
+  return (a.online?'<span class="pill ok">online</span>':'<span class="pill alerta">OFFLINE</span>')+` <span class="mut">${a.latencia_ms!=null&&a.online?a.latencia_ms+' ms · ':''}${esc(a.detalhe||'')}</span>`;
+}
+async function carregarAgentes(){
+  const adm=!$('navUsuarios').hidden;$('secAgentes').hidden=!adm;if(!adm)return;
+  const r=await j('/api/agentes');
+  $('agentes').innerHTML=r.map(a=>`<tr><td>${esc(a.nome)}</td><td>${a.visto_em?(Date.now()/1000-a.visto_em<90?'<span class="pill ok">online</span> ':'<span class="pill alerta">sem contato</span> ')+'há '+idade(a.visto_em):'nunca'}</td>
+    <td>${esc(a.versao||'–')}</td><td>${esc(a.host||'–')}</td><td><button data-agdel="${a.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=5>nenhum agente cadastrado</td></tr>';
+}
+$('agCriar').onclick=async()=>{
+  const m=$('agMsg'),nome=$('agNome').value.trim();if(!nome){m.className='msg bad';m.textContent='informe o nome';return}
+  try{const r=await j('/api/agentes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome})});
+    $('agNome').value='';m.textContent='';
+    dialogo(`<h3>Token do agente "${esc(r.nome)}"</h3><p class="mut" style="padding:8px 0">Copie agora — ele não é mostrado de novo.</p>
+      <input id="tkVal" type="text" readonly value="${esc(r.token)}" style="width:100%;font-family:monospace" onclick="this.select()">
+      <p class="mut" style="padding-top:8px">No PC do hotel: copie <b>cabine-agent.exe</b> e <b>instalar.cmd</b>, dê dois cliques no instalar.cmd e cole este token.</p>`,[['Fechar','',()=>{}]]);
+    await carregarAgentes()}
+  catch(e){m.className='msg bad';m.textContent=e.message}
+};
+document.addEventListener('click',async e=>{
+  const d=e.target.closest('[data-agdel]');if(!d||!confirm('Excluir este agente? O programa instalado deixa de funcionar.'))return;
+  try{await j('/api/agentes/'+d.dataset.agdel,{method:'DELETE'});await carregarAgentes()}catch(err){alert(err.message)}
+});
+async function enviarComando(antenaId,metodo,caminho,corpo,saida){
+  saida.textContent='enviando ao agente… (pode levar até ~15s)';
+  const c=await j('/api/antenas/'+antenaId+'/comandos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({metodo,caminho,corpo:corpo||null})});
+  for(let i=0;i<65;i++){
+    await new Promise(r=>setTimeout(r,2000));
+    const r=await j('/api/comandos/'+c.id);
+    if(['ok','erro','expirado'].includes(r.status)){
+      let txt=r.resposta||'';try{txt=JSON.stringify(JSON.parse(txt),null,2)}catch(e){}
+      saida.textContent=(r.status==='ok'?'✔ HTTP '+r.http_status:r.status==='expirado'?'✖ expirou: o agente não respondeu (instalado e online?)':'✖ erro'+(r.http_status?' HTTP '+r.http_status:''))+'\n\n'+txt;return}
+  }
+  saida.textContent='✖ sem resposta do agente';
+}
+function configurarRadio(a){
+  dialogo(`<h3>Configurar rádio — ${esc(a.nome)}</h3>
+    <p class="mut" style="padding:6px 0">API REST do leitor (Impinj R700), executada pelo agente na rede do hotel. Cuidado: alterações valem na hora.</p>
+    <div class="row" style="padding:0"><select id="cmM"><option>GET</option><option>PUT</option><option>POST</option></select>
+      <input id="cmP" type="text" value="/api/v1/status" style="flex:1;min-width:260px"></div>
+    <textarea id="cmB" rows="6" placeholder="corpo JSON (PUT/POST)" style="width:100%;margin-top:8px;font-family:monospace"></textarea>
+    <div class="row" style="padding:8px 0 0"><button id="cmStatus" type="button">Ler status</button><button id="cmPresets" type="button">Ler presets</button><button class="acc" id="cmEnviar" type="button">Enviar</button></div>
+    <pre id="cmOut" style="margin-top:8px;max-height:260px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre>`,[['Fechar','',()=>{}]]);
+  const out=$('cmOut'),run=(m,p,b)=>enviarComando(a.id,m,p,b,out).catch(e=>out.textContent='✖ '+e.message);
+  $('cmStatus').onclick=()=>{$('cmM').value='GET';$('cmP').value='/api/v1/status';run('GET','/api/v1/status')};
+  $('cmPresets').onclick=()=>{$('cmM').value='GET';$('cmP').value='/api/v1/profiles/inventory/presets';run('GET','/api/v1/profiles/inventory/presets')};
+  $('cmEnviar').onclick=()=>{if($('cmM').value!=='GET'&&!confirm('Enviar '+$('cmM').value+' '+$('cmP').value+' para o leitor?'))return;run($('cmM').value,$('cmP').value.trim(),$('cmB').value.trim())};
 }
 function limparAntena(){
   antenaEdit=null;['anNome','anDesc','anIp','anPorta'].forEach(i=>$(i).value='');$('anModelo').value='';$('anDestino').value='';
   $('anModo').value='automatico';$('anAlerta').checked=true;$('anTitulo').textContent='Antenas cadastradas';$('anSalvar').textContent='Salvar';$('anCancelar').hidden=true;
 }
 $('antenas').addEventListener('click',e=>{
+  const cf=e.target.closest('[data-cfg]');if(cf){const a=antenasCache.find(x=>x.id===Number(cf.dataset.cfg));if(a)configurarRadio(a);return}
   const b=e.target.closest('[data-edit]');if(!b)return;
   const a=antenasCache.find(x=>x.id===Number(b.dataset.edit));if(!a)return;
   antenaEdit=a.id;$('anNome').value=a.nome;$('anDesc').value=a.descricao||'';$('anModelo').value=a.modelo||'';$('anDestino').value=a.destino_id||'';

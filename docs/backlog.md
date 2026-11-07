@@ -34,6 +34,11 @@
   Consequencia: Tags lidas, Eventos ao vivo e Leituras por hora refletem apenas leituras solicitadas.
   Pendente: botao "Capturar" na tela Eventos ao vivo e validar `/ingest` com leitor real.
 
+## Agente do hotel (2026-11-07)
+
+- Codigo pronto (`agent/`, ver `docs/infra/agente-hotel.md`). Falta: teste no Windows real (servico + tray), validar API do
+  R700, auto-atualizacao assinada, repositorio proprio, MSI, assinatura de codigo.
+
 ## Ideias
 
 - Sessao de leitura continua: pronta, opt-in (`SESSAO_AUTO=1`), desligada em producao.

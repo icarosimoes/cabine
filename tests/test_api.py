@@ -1,3 +1,4 @@
+import time
 from contextlib import closing
 from tests.conftest import ingest
 from app import main
@@ -257,3 +258,43 @@ def test_movimentacao_cabine_completa(client, monkeypatch):
     novo = client.post("/api/lotes/registrar?janela_segundos=60").json()
     assert client.delete(f"/api/lotes/{novo['id']}").status_code == 200
     assert client.get(f"/api/lotes/{novo['id']}").status_code == 404
+
+
+def test_agente_status_comandos_e_alertas(client):
+    client.post("/api/antenas", json={"nome": "edge1", "modelo": "ImpinjR700", "ip": "192.168.30.5", "porta": 80, "alerta": True})
+    aid = client.get("/api/antenas").json()[0]["id"]
+    # sem token / token inválido
+    assert client.get("/api/agente/config", auth=None).status_code == 401
+    assert client.get("/api/agente/config", headers={"X-Agent-Token": "x"}, auth=None).status_code == 401
+    ag = client.post("/api/agentes", json={"nome": "hotel"}).json()
+    H = {"X-Agent-Token": ag["token"]}
+    assert client.post("/api/agentes", json={"nome": "hotel"}).status_code == 409
+    cfg = client.get("/api/agente/config", headers=H, auth=None).json()
+    assert cfg["antenas"][0]["ip"] == "192.168.30.5" and cfg["intervalo_seg"] > 0
+    # comando: valida caminho/método/corpo
+    assert client.post(f"/api/antenas/{aid}/comandos", json={"caminho": "/etc/passwd"}).status_code == 400
+    assert client.post(f"/api/antenas/{aid}/comandos", json={"caminho": "/api/v1/../x"}).status_code == 400
+    assert client.post(f"/api/antenas/{aid}/comandos", json={"metodo": "DELETE", "caminho": "/api/v1/system"}).status_code == 400
+    assert client.post(f"/api/antenas/{aid}/comandos", json={"metodo": "PUT", "caminho": "/api/v1/system", "corpo": "{ruim"}).status_code == 400
+    cid = client.post(f"/api/antenas/{aid}/comandos", json={"caminho": "/api/v1/system"}).json()["id"]
+    r = client.post("/api/agente/status", headers=H, auth=None, json={"versao": "1.0", "host": "PC-HOTEL", "antenas": [
+        {"id": aid, "online": True, "latencia_ms": 12, "detalhe": "ok", "extra": {"serial": "123"}}]}).json()
+    assert [c["id"] for c in r["comandos"]] == [cid] and r["comandos"][0]["caminho"] == "/api/v1/system"
+    assert client.post("/api/agente/status", headers=H, auth=None, json={"antenas": []}).json()["comandos"] == []  # não reenvia
+    assert client.get(f"/api/comandos/{cid}").json()["status"] == "enviado"
+    client.post(f"/api/agente/comandos/{cid}/resultado", headers=H, auth=None, json={"ok": True, "http_status": 200, "resposta": "{}"})
+    assert client.get(f"/api/comandos/{cid}").json()["status"] == "ok"
+    a = client.get("/api/antenas").json()[0]
+    assert a["online"] is True and a["latencia_ms"] == 12
+    # alertas: antena offline -> 1 aviso; volta -> aviso de retomada; agente sem contato
+    main.state["alertas"].clear()
+    now = time.time()
+    c = main.cfg()
+    def ant(online): return [{"id": aid, "nome": "edge1", "ip": "192.168.30.5", "alerta": True, "online": online, "detalhe": "timeout", "verificado_em": now}]
+    msgs = main.avaliar_agentes(now, ant(False), [], c)
+    assert len(msgs) == 1 and msgs[0][0] == "antena_offline" and "OFFLINE" in msgs[0][1]
+    assert main.avaliar_agentes(now + 5, ant(False), [], c) == []
+    assert "voltou" in main.avaliar_agentes(now + 10, ant(True), [], c)[0][1]
+    msgs = main.avaliar_agentes(now + 1000, [], [{"id": 1, "nome": "hotel", "visto_em": now}], c)
+    assert msgs[0][0] == "agente_offline" and "sem contato" in msgs[0][1]
+    main.state["alertas"].clear()
