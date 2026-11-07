@@ -35,6 +35,11 @@ transferi-lo para um setor interno (ex. Governança) ou para a lavanderia (forne
 - **Transferir**: cada lote fica "aguardando" até ser transferido para um único destino (setor ou
   lavanderia). Depois de transferido não pode ser transferido de novo — é um registro de auditoria,
   não um estoque editável.
+- **Identificadas / Novas**: ao registrar, as EPCs do lote são separadas entre as que já têm cadastro
+  no catálogo ("identificadas", com tipo/fabricante/etc. à mostra) e as que não têm ("novas"). Dá pra
+  cadastrar uma tag nova direto nessa tela — ela entra no catálogo e migra pra lista de identificadas
+  sem recarregar a página. (Inspirado na tela "Cabine" do eTrace, que faz o mesmo em fluxo de sessão
+  contínua; aqui ainda é por clique único — ver limitação abaixo.)
 - **Destinos**: cadastrados manualmente na tela ("Destinos cadastrados"), com tipo `setor` ou
   `lavanderia`. O banco já nasce com um setor `Governança`. Destinos podem ser desativados (ficam no
   histórico, mas somem da lista de seleção para novas transferências).
@@ -45,9 +50,9 @@ transferi-lo para um setor interno (ex. Governança) ou para a lavanderia (forne
 
 | Método | Rota | Descrição |
 |---|---|---|
-| `POST` | `/api/lotes/registrar?janela_segundos=15` | Cria um lote com as EPCs distintas lidas na janela. 400 se nenhuma tag foi lida. |
+| `POST` | `/api/lotes/registrar?janela_segundos=15` | Cria um lote com as EPCs distintas lidas na janela. Retorna também `identificados` (já no catálogo) e `novos` (EPCs sem cadastro). 400 se nenhuma tag foi lida. |
 | `GET` | `/api/lotes?status=&limit=` | Lista lotes (filtro opcional por `aguardando`/`transferido`). |
-| `GET` | `/api/lotes/{id}` | Detalhe do lote: EPCs e transferência (se houver). |
+| `GET` | `/api/lotes/{id}` | Detalhe do lote: EPCs, `identificados`/`novos` e transferência (se houver). |
 | `POST` | `/api/lotes/{id}/transferir` | Body `{destino_id, observacao?}`. 409 se já transferido, 400 se destino inválido/inativo. |
 | `GET` | `/api/destinos?tipo=&ativo=` | Lista destinos. |
 | `POST` | `/api/destinos` | Body `{tipo: "setor"\|"lavanderia", nome}`. 409 se nome já existe. |
@@ -99,3 +104,7 @@ item, com filtros por Localização, Estado, Tipo, Fabricante, Tamanho, Composi�
 - `main → deploy` não é automático: dar merge nesta branch só atualiza o histórico do git. Subir pra
   produção ainda exige os passos manuais da seção **Deploy** (rsync + build + `docker stack deploy`
   na VPS).
+- **Modelo de leitura ainda é por clique único**, não sessão contínua automática como o eTrace (que
+  detecta sozinho início/fim de sessão por cabine, classifica resultado — inclusive "leitor sem
+  comunicação" — e mantém histórico de sessões). Migrar pra esse modelo é mudança de arquitetura, não
+  feita ainda; ver conversa do projeto antes de decidir se vale a pena.

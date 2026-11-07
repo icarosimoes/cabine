@@ -266,6 +266,17 @@ class TransferenciaIn(BaseModel):
     observacao: str | None = None
 
 
+def classificar_epcs(con, epcs):
+    if not epcs:
+        return [], []
+    placeholders = ",".join("?" * len(epcs))
+    cadastrados = {r["epc"]: dict(r) for r in con.execute(
+        f"SELECT epc,tipo,fabricante,tamanho,composicao,cor FROM itens WHERE epc IN ({placeholders})", epcs).fetchall()}
+    identificados = [cadastrados[e] for e in epcs if e in cadastrados]
+    novos = [e for e in epcs if e not in cadastrados]
+    return identificados, novos
+
+
 @app.post("/api/lotes/registrar", dependencies=[Depends(ui_auth)])
 def registrar_lote(janela_segundos: int = 15):
     janela_segundos = max(1, min(janela_segundos, 600))
@@ -282,7 +293,9 @@ def registrar_lote(janela_segundos: int = 15):
         lote_id = cur.lastrowid
         con.executemany("INSERT INTO lote_itens(lote_id,epc) VALUES(?,?)", [(lote_id, e) for e in epcs])
         con.commit()
-    return {"id": lote_id, "criado_em": now, "quantidade": len(epcs), "epcs": epcs, "status": "aguardando"}
+        identificados, novos = classificar_epcs(con, epcs)
+    return {"id": lote_id, "criado_em": now, "quantidade": len(epcs), "epcs": epcs, "status": "aguardando",
+            "identificados": identificados, "novos": novos}
 
 
 @app.get("/api/lotes", dependencies=[Depends(ui_auth)])
@@ -306,8 +319,11 @@ def detalhe_lote(lote_id: int):
         transf = con.execute(
             """SELECT t.*, d.nome destino_nome, d.tipo destino_tipo FROM transferencias t
                JOIN destinos d ON d.id=t.destino_id WHERE t.lote_id=?""", (lote_id,)).fetchone()
+        identificados, novos = classificar_epcs(con, epcs)
     out = dict(lote)
     out["epcs"] = epcs
+    out["identificados"] = identificados
+    out["novos"] = novos
     out["transferencia"] = dict(transf) if transf else None
     return out
 

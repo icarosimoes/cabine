@@ -89,6 +89,12 @@ td.toggle{cursor:pointer}
     <span class="mut">considera as tags distintas lidas nos últimos N segundos antes do clique</span>
   </div>
   <div id="registrarMsg" class="msg"></div>
+  <div id="loteResultado" hidden>
+    <div class="row" style="padding-top:0"><b id="loteResumo"></b></div>
+    <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th></tr></thead><tbody id="loteIdentificados"></tbody></table></div>
+    <div class="row" style="padding-top:0"><b>Tags novas — cadastre pra identificar</b></div>
+    <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th></th></tr></thead><tbody id="loteNovos"></tbody></table></div>
+  </div>
 </section>
 
 <section>
@@ -215,12 +221,50 @@ document.addEventListener('click',async e=>{
   }catch(err){alert(err.message);b.disabled=false}
 });
 
+let loteAtual=null;
+function renderLoteResultado(){
+  if(!loteAtual){$('loteResultado').hidden=true;return}
+  $('loteResultado').hidden=false;
+  $('loteResumo').textContent=`Lote #${loteAtual.id} — ${loteAtual.identificados.length} identificada(s), ${loteAtual.novos.length} nova(s)`;
+  $('loteIdentificados').innerHTML=loteAtual.identificados.map(i=>`<tr>
+    <td class="epc">${esc(i.epc)}</td><td>${esc(i.tipo)}</td><td>${esc(i.fabricante||'–')}</td>
+    <td>${esc(i.tamanho||'–')}</td><td>${esc(i.composicao||'–')}</td><td>${esc(i.cor||'–')}</td>
+  </tr>`).join('')||'<tr><td colspan=6>nenhuma tag identificada neste lote</td></tr>';
+  $('loteNovos').innerHTML=loteAtual.novos.map(epc=>`<tr>
+    <td class="epc">${esc(epc)}</td>
+    <td><input type="text" class="novoTipo" data-epc="${esc(epc)}" placeholder="tipo"></td>
+    <td><input type="text" class="novoFab" data-epc="${esc(epc)}" placeholder="fabricante"></td>
+    <td><input type="text" class="novoTam" data-epc="${esc(epc)}" placeholder="tamanho"></td>
+    <td><input type="text" class="novoComp" data-epc="${esc(epc)}" placeholder="composição"></td>
+    <td><input type="text" class="novoCor" data-epc="${esc(epc)}" placeholder="cor"></td>
+    <td><button class="acc cadastrarNovo" data-epc="${esc(epc)}">Cadastrar</button></td>
+  </tr>`).join('')||'<tr><td colspan=7>nenhuma tag nova neste lote</td></tr>';
+}
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('.cadastrarNovo');if(!b)return;
+  const epc=b.dataset.epc,sel=s=>document.querySelector(`${s}[data-epc="${CSS.escape(epc)}"]`);
+  const tipo=sel('.novoTipo').value.trim();
+  if(!tipo){alert('informe o tipo pra identificar essa tag');return}
+  b.disabled=true;
+  try{
+    const item=await j('/api/itens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      epc,tipo,fabricante:sel('.novoFab').value.trim()||null,tamanho:sel('.novoTam').value.trim()||null,
+      composicao:sel('.novoComp').value.trim()||null,cor:sel('.novoCor').value.trim()||null})});
+    loteAtual.novos=loteAtual.novos.filter(e=>e!==epc);
+    loteAtual.identificados.push({epc:item.epc,tipo:item.tipo,fabricante:item.fabricante,tamanho:item.tamanho,composicao:item.composicao,cor:item.cor});
+    renderLoteResultado();
+    await Promise.all([carregarCatalogo(),carregarOpcoesInventario(),carregarInventario()]);
+  }catch(err){alert(err.message);b.disabled=false}
+});
+
 $('registrar').onclick=async()=>{
   const janela=Number($('janela').value)||15,msg=$('registrarMsg'),btn=$('registrar');
   btn.disabled=true;msg.className='msg';msg.textContent='lendo tags…';
   try{
     const r=await j('/api/lotes/registrar?janela_segundos='+janela,{method:'POST'});
     msg.className='msg ok';msg.textContent=`lote #${r.id} registrado: ${r.quantidade} tag(s) distinta(s).`;
+    loteAtual={id:r.id,identificados:r.identificados,novos:r.novos};
+    renderLoteResultado();
     await carregarPendentes();
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
   btn.disabled=false;
