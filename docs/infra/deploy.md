@@ -9,7 +9,8 @@
   codigo chega por `rsync` para `/opt/impinj/`.
 - `.env` so na VPS (`/opt/impinj/.env`, chmod 600): `WEBHOOK_USER`, `WEBHOOK_PASS`, `UI_USER`, `UI_PASS`,
   `SAIDA_USER`, `SAIDA_PASS`, `POSTGRES_PASSWORD`; opcionais `KUMA_PUSH_URL`, `STALE_MINUTES`,
-  `RETENTION_DAYS`, `SAIDA_JANELA_MINUTOS`.
+  `RETENTION_DAYS`, `SAIDA_JANELA_MINUTOS`, `SESSION_SECRET`, `SESSION_HORAS`, `SESSAO_AUTO`.
+Defina `SESSION_SECRET` no `.env`; no primeiro acesso o navegador vai para `/login` (nao mais o prompt Basic).
 
 ## Deploy de rotina
 

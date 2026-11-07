@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: impinj, POSTGRES_PASSWORD: teste, POSTGRES_DB: impinj }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U impinj" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://impinj:teste@localhost:5432/impinj
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install fastapi==0.115.6 "uvicorn[standard]==0.34.0" "psycopg[binary]==3.2.3" -r requirements-dev.txt
+      - run: python -m pytest -q tests
+
+  deploy:
+    needs: testes
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency: deploy-cabine
+    steps:
+      - uses: actions/checkout@v4
+      # Deploy manual-equivalente (rsync + build na VPS + stack deploy), ver docs/infra/deploy.md.
+      # Só roda se os secrets existirem; sem eles o job termina com aviso, sem quebrar o CI.
+      - name: Deploy na VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          if [ -z "$VPS_HOST" ] || [ -z "$VPS_SSH_KEY" ]; then
+            echo "::notice::secrets VPS_HOST/VPS_SSH_KEY ausentes: deploy automático desligado"; exit 0
+          fi
+          install -m 600 /dev/null key && printf '%s\n' "$VPS_SSH_KEY" > key
+          SSH="ssh -i key -o StrictHostKeyChecking=accept-new"
+          rsync -a -e "$SSH" --exclude .git --exclude .github --exclude .claude --exclude .env --exclude docs --exclude tests ./ root@"$VPS_HOST":/opt/impinj/
+          $SSH root@"$VPS_HOST" 'cd /opt/impinj && docker build -t impinj-rfid:local . && bash -c "set -a; . ./.env; set +a; docker stack deploy -c impinj-stack.yml impinj" && docker service update --force --detach=false impinj_impinj'
+          curl -fsS "https://${RFID_HOST:-cabine.solidsd.com.br}/health"

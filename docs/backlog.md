@@ -27,12 +27,15 @@
   configuraveis.
 - Itens de acomodacao: so "Piscina", "Solteiro" e "King" do Fera Palace; Usuarios do eTrace nao foram lidos.
 
+## Decisoes recentes
+
+- (2026-11-07) `/ingest` so grava eventos durante leitura solicitada (`POST /api/leitura/armar` ou conferencia em
+  andamento); fora disso descarta e guarda so o "ultimo sinal" em memoria (indicador "radio: enviando sinal").
+  Consequencia: Tags lidas, Eventos ao vivo e Leituras por hora refletem apenas leituras solicitadas.
+  Pendente: botao "Capturar" na tela Eventos ao vivo e validar `/ingest` com leitor real.
+
 ## Ideias
 
-- Resumo de leituras por hora (retido para sempre) + export CSV, com `RETENTION_DAYS` menor para eventos
-  brutos (rascunho no stash `wip-main-py-resumo-hora-csv`).
-- Sessao de leitura continua por cabine (modelo eTrace) em vez de clique unico.
-- CI/CD (GitHub Actions + GHCR) no padrao erpsolid/hotspot, no lugar do deploy manual por rsync.
-- Login com usuarios/papeis em vez de Basic Auth unico, se mais de uma pessoa operar.
-- Testes automatizados (pytest contra Postgres descartavel); hoje nao ha suite.
+- Sessao de leitura continua: pronta, opt-in (`SESSAO_AUTO=1`), desligada em producao.
+- CI/CD: workflow criado (testes + deploy por secrets); falta configurar secrets e validar. GHCR nao adotado.
 - Cadastrar o projeto em `erpsolid/docs/projetos/` (indice central de repos).

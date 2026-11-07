@@ -46,6 +46,13 @@ Data de referencia: 2026-11-07.
   andamento por vez). "Conferido" = tag lida pelo leitor depois do inicio (calculado ao vivo a partir de
   `events`); ao finalizar, grava `conferido_em` por item. Nao ha usuario ainda (depende do login com papeis).
 
+- **Gravacao sob demanda (2026-11-07):** o leitor R700 envia continuamente, mas `/ingest` so persiste em
+  `events` durante leitura solicitada (`/api/leitura/armar` ou conferencia `andamento`); o resto e descartado
+  (resposta `stored: 0`). O "ultimo sinal" fica em memoria (`state["ultimo_sinal"]`) para o indicador e o Kuma.
+- **Auth (2026-11-07):** Basic separado para webhook/saida; painel usa cookie de sessao (HMAC, scrypt) com
+  papeis leitura<operador<admin; admin de ambiente via `UI_USER/UI_PASS`. Env: `SESSION_SECRET`,
+  `SESSION_HORAS`, `TZ_OFFSET_HOURS`, `SESSAO_AUTO`. CI em `.github/workflows/ci.yml` (secrets `VPS_HOST`, `VPS_SSH_KEY`).
+
 ## Convencoes
 
 - Textos de UI em pt-BR; tabelas/rotas de dominio em pt-BR; termos do leitor/evento em ingles (Impinj).

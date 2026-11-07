@@ -60,3 +60,14 @@
   "Iniciar conferencia de inventario". Nova tela Conferencia de estoque (lista, detalhe com esperados/
   conferidos/nao conferidos/%/duracao, filtro "so nao conferidos", finalizar). Testado local (3 de 9 = 33%).
 - **Aberto:** deploy em producao (aguardando autorizacao).
+
+### Login, relatorios, sessoes, CI e gravacao sob demanda (2026-11-07)
+
+- Login com usuarios/papeis (leitura < operador < admin), cookie assinado, tela `/login`, tela Usuarios.
+  `scripts/seed_usuarios_fera.py` cadastra os usuarios vistos no eTrace (jucimara, artur, daniela,
+  supervisoras, sg) como operador, **sem senha** (admin define na tela Usuarios).
+- Relatorio Leituras por hora (+CSV), sessao continua opt-in (`SESSAO_AUTO=1`), testes pytest (12) e CI.
+- **Gravacao sob demanda:** `/ingest` so grava com leitura armada (`POST /api/leitura/armar`, usado por
+  "Registrar leitura") ou conferencia em andamento; fora disso descarta e guarda so o ultimo sinal em memoria.
+  Indicador do painel agora diz "radio: enviando sinal / sem sinal ha X min (· gravando)".
+

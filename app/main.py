@@ -1,12 +1,12 @@
 """Receptor de webhook do leitor Impinj (R700 Event Reporting) + painel ao vivo."""
-import asyncio, base64, binascii, json, os, secrets, time, urllib.parse, urllib.request
+import asyncio, base64, csv, io, binascii, hashlib, hmac, json, os, secrets, time, urllib.parse, urllib.request
 from pathlib import Path
 
 import psycopg
 from psycopg.rows import dict_row
 from contextlib import asynccontextmanager, closing
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
@@ -16,10 +16,17 @@ UI_USER, UI_PASS = os.environ["UI_USER"], os.environ["UI_PASS"]
 SAIDA_USER, SAIDA_PASS = os.environ["SAIDA_USER"], os.environ["SAIDA_PASS"]
 KUMA_PUSH_URL = os.environ.get("KUMA_PUSH_URL", "")
 STALE_MINUTES = int(os.environ.get("STALE_MINUTES", "30"))
-RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))  # só dos eventos brutos; leituras_hora fica pra sempre
+TZ_OFFSET = int(os.environ.get("TZ_OFFSET_HOURS", "-3")) * 3600  # America/Sao_Paulo (só para os CSV)
+SESSAO_AUTO = os.environ.get("SESSAO_AUTO", "0") == "1"  # sessões de leitura automáticas (opt-in)
+SESSAO_OCIOSO = int(os.environ.get("SESSAO_OCIOSO_SEGUNDOS", "30"))
 SAIDA_JANELA_MINUTOS = int(os.environ.get("SAIDA_JANELA_MINUTOS", "60"))
 STATIC = Path(__file__).parent / "static"
 security = HTTPBasic()
+SESSION_SECRET = (os.environ.get("SESSION_SECRET") or hashlib.sha256((UI_PASS + "|cabine-sessao").encode()).hexdigest()).encode()
+SESSION_HORAS = int(os.environ.get("SESSION_HORAS", "12"))
+COOKIE = "cabine_sessao"
+PAPEIS = {"leitura": 1, "operador": 2, "admin": 3}
 
 ITENS_VIEW_SQL = """
 SELECT i.epc, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, i.criado_em, i.atualizado_em,
@@ -113,6 +120,26 @@ def init_db():
         con.execute("CREATE INDEX IF NOT EXISTS ix_saida_epc ON eventos_saida(epc, detectado_em)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_saida_destino ON eventos_saida(destino_id, detectado_em)")
         con.execute("ALTER TABLE destinos ADD COLUMN IF NOT EXISTS alerta INTEGER NOT NULL DEFAULT 0")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          usuario TEXT NOT NULL UNIQUE,
+          nome TEXT,
+          senha_hash TEXT,
+          papel TEXT NOT NULL DEFAULT 'operador' CHECK(papel IN ('leitura','operador','admin')),
+          ativo INTEGER NOT NULL DEFAULT 1,
+          criado_em DOUBLE PRECISION NOT NULL)""")
+        con.execute("ALTER TABLE transferencias ADD COLUMN IF NOT EXISTS usuario TEXT")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS leituras_hora(
+          hora BIGINT NOT NULL, epc TEXT NOT NULL, leituras INTEGER NOT NULL, melhor_rssi DOUBLE PRECISION,
+          PRIMARY KEY(hora, epc))""")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS sessoes(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          inicio DOUBLE PRECISION NOT NULL, fim DOUBLE PRECISION,
+          status TEXT NOT NULL DEFAULT 'aberta' CHECK(status IN ('aberta','encerrada')),
+          tags INTEGER NOT NULL DEFAULT 0, lote_id INTEGER REFERENCES lotes(id))""")
 
         con.execute("""
         CREATE TABLE IF NOT EXISTS conferencias(
@@ -123,6 +150,7 @@ def init_db():
           status TEXT NOT NULL DEFAULT 'andamento' CHECK(status IN ('andamento','finalizada')),
           esperados INTEGER NOT NULL,
           conferidos INTEGER)""")
+        con.execute("ALTER TABLE conferencias ADD COLUMN IF NOT EXISTS usuario TEXT")
         con.execute("""
         CREATE TABLE IF NOT EXISTS conferencia_itens(
           conferencia_id INTEGER NOT NULL REFERENCES conferencias(id) ON DELETE CASCADE,
@@ -178,8 +206,84 @@ def auth(user, pw):
     return dep
 
 
-webhook_auth, ui_auth = auth(WEBHOOK_USER, WEBHOOK_PASS), auth(UI_USER, UI_PASS)
+webhook_auth = auth(WEBHOOK_USER, WEBHOOK_PASS)
 saida_auth = auth(SAIDA_USER, SAIDA_PASS)
+
+# ---- Login com usuários e papéis (leitura < operador < admin) ------------------------------------
+# Aceita cookie de sessão (tela /login) ou HTTP Basic (scripts/curl). O par UI_USER/UI_PASS do ambiente
+# continua valendo como admin (não depende do banco). Usuários do banco sem senha cadastrada não logam.
+_basic_opt = HTTPBasic(auto_error=False)
+_falhas: dict[str, list[float]] = {}
+
+
+def hash_senha(senha: str) -> str:
+    salt = os.urandom(16)
+    return f"scrypt${salt.hex()}${hashlib.scrypt(senha.encode(), salt=salt, n=2**14, r=8, p=1).hex()}"
+
+
+def confere_senha(senha: str, guardado: str | None) -> bool:
+    try:
+        _, salt, h = (guardado or "").split("$")
+        novo = hashlib.scrypt(senha.encode(), salt=bytes.fromhex(salt), n=2**14, r=8, p=1).hex()
+        return hmac.compare_digest(novo, h)
+    except ValueError:
+        return False
+
+
+def autentica(usuario: str, senha: str):
+    if secrets.compare_digest(usuario, UI_USER) & secrets.compare_digest(senha, UI_PASS):
+        return {"usuario": UI_USER, "nome": UI_USER, "papel": "admin", "env": True}
+    with closing(db()) as con:
+        u = con.execute("SELECT usuario,nome,papel,senha_hash FROM usuarios WHERE usuario=%s AND ativo=1", (usuario,)).fetchone()
+    if u and u["senha_hash"] and confere_senha(senha, u["senha_hash"]):
+        return {"usuario": u["usuario"], "nome": u["nome"] or u["usuario"], "papel": u["papel"], "env": False}
+
+
+def emite_token(u: dict) -> str:
+    corpo = base64.urlsafe_b64encode(json.dumps({"u": u["usuario"], "e": u["env"], "x": int(time.time()) + SESSION_HORAS * 3600}).encode()).decode()
+    return corpo + "." + hmac.new(SESSION_SECRET, corpo.encode(), hashlib.sha256).hexdigest()
+
+
+def valida_token(tok: str):
+    try:
+        corpo, sig = tok.rsplit(".", 1)
+        if not hmac.compare_digest(sig, hmac.new(SESSION_SECRET, corpo.encode(), hashlib.sha256).hexdigest()):
+            return None
+        d = json.loads(base64.urlsafe_b64decode(corpo))
+        if d["x"] < time.time():
+            return None
+        if d["e"]:
+            return {"usuario": UI_USER, "nome": UI_USER, "papel": "admin", "env": True}
+        with closing(db()) as con:  # papel e "ativo" valem na hora, não só no login
+            u = con.execute("SELECT usuario,nome,papel FROM usuarios WHERE usuario=%s AND ativo=1", (d["u"],)).fetchone()
+        return {"usuario": u["usuario"], "nome": u["nome"] or u["usuario"], "papel": u["papel"], "env": False} if u else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def usuario_opt(request: Request, c: HTTPBasicCredentials | None = Depends(_basic_opt)):
+    tok = request.cookies.get(COOKIE)
+    u = valida_token(tok) if tok else None
+    if not u and c:
+        u = autentica(c.username, c.password)
+    return u
+
+
+def ui_auth(u=Depends(usuario_opt)):
+    if not u:
+        raise HTTPException(401, "não autenticado")
+    return u
+
+
+def exige(papel: str):
+    def dep(u=Depends(ui_auth)):
+        if PAPEIS[u["papel"]] < PAPEIS[papel]:
+            raise HTTPException(403, f"ação exige papel '{papel}'")
+        return u
+    return dep
+
+
+op_auth, admin_auth = exige("operador"), exige("admin")
 
 
 def first(d: dict, *keys):
@@ -199,6 +303,11 @@ def epc_hex(valor):
         except (binascii.Error, ValueError):
             pass
     return s.upper()
+
+
+def epc_manual(valor):
+    """EPC digitado/importado (API, CSV): já é hex; só normaliza espaços e caixa. Nunca tenta base64."""
+    return str(valor).strip().upper() if valor else None
 
 
 def parse_event(ev):
@@ -225,7 +334,19 @@ def parse_event(ev):
         rssi=rssi, seen_at=first(body, "lastSeenTime", "lastSeenTimestamp", "timestamp") or first(ev, "timestamp"))
 
 
-state = {"last_push": None}
+state = {"last_push": None, "ultimo_sinal": None, "armado_ate": 0.0, "conf_ate": 0.0, "conf_ativa": False}
+
+
+def gravando() -> bool:
+    """Eventos do leitor só vão pro banco durante uma leitura solicitada (janela armada ou conferência em andamento)."""
+    now = time.time()
+    if now < state["armado_ate"]:
+        return True
+    if now > state["conf_ate"]:  # reconsulta a conferência no máximo a cada 5s
+        with closing(db()) as con:
+            state["conf_ativa"] = bool(con.execute("SELECT 1 FROM conferencias WHERE status='andamento'").fetchone())
+        state["conf_ate"] = now + 5
+    return state["conf_ativa"]
 
 
 def push_kuma():
@@ -233,6 +354,7 @@ def push_kuma():
         return
     with closing(db()) as con:
         last = con.execute("SELECT MAX(received_at) m FROM events").fetchone()["m"]
+    last = max(x for x in (last, state["ultimo_sinal"], 0) if x is not None) or None
     age = None if last is None else (time.time() - last) / 60
     up = age is not None and age <= STALE_MINUTES
     msg = "sem eventos ainda" if age is None else f"ultimo evento ha {age:.0f} min"
@@ -245,11 +367,69 @@ def push_kuma():
         print("push kuma falhou:", e)
 
 
+def agregar_horas(con):
+    """Resumo por hora (EPC x hora) recalculando as últimas 2h; sobrevive à purga dos eventos brutos."""
+    ult = con.execute("SELECT MAX(hora) h FROM leituras_hora").fetchone()["h"]
+    desde = (ult - 7200) if ult is not None else 0
+    con.execute("""INSERT INTO leituras_hora(hora,epc,leituras,melhor_rssi)
+                   SELECT (FLOOR(received_at/3600)*3600)::bigint, epc, COUNT(*), MAX(rssi)
+                   FROM events WHERE epc IS NOT NULL AND received_at>=%s GROUP BY 1,2
+                   ON CONFLICT(hora,epc) DO UPDATE SET leituras=excluded.leituras, melhor_rssi=excluded.melhor_rssi""", (desde,))
+    con.commit()
+
+
+def ciclo_sessao(con, now, ocioso, desde):
+    """Sessão = rajada de leituras separada por `ocioso` segundos de silêncio; ao encerrar vira um lote 'aguardando'."""
+    aberta = con.execute("SELECT * FROM sessoes WHERE status='aberta' ORDER BY id DESC LIMIT 1").fetchone()
+    ultimo = con.execute("SELECT MAX(received_at) m FROM events WHERE epc IS NOT NULL").fetchone()["m"]
+    if aberta:
+        if ultimo is None or now - ultimo >= ocioso:
+            fim = max(ultimo or aberta["inicio"], aberta["inicio"])
+            epcs = [r["epc"] for r in con.execute(
+                "SELECT DISTINCT epc FROM events WHERE epc IS NOT NULL AND received_at>=%s AND received_at<=%s",
+                (aberta["inicio"], fim)).fetchall()]
+            lote_id = None
+            if epcs:
+                lote_id = con.execute("INSERT INTO lotes(criado_em,janela_segundos,quantidade,status) VALUES(%s,%s,%s,'aguardando') RETURNING id",
+                                      (now, max(1, int(fim - aberta["inicio"])), len(epcs))).fetchone()["id"]
+                with con.cursor() as cur:
+                    cur.executemany("INSERT INTO lote_itens(lote_id,epc) VALUES(%s,%s)", [(lote_id, e) for e in epcs])
+            con.execute("UPDATE sessoes SET status='encerrada', fim=%s, tags=%s, lote_id=%s WHERE id=%s",
+                        (fim, len(epcs), lote_id, aberta["id"]))
+            con.commit()
+        return
+    ult_fim = con.execute("SELECT MAX(fim) m FROM sessoes").fetchone()["m"] or desde
+    inicio = con.execute("SELECT MIN(received_at) m FROM events WHERE epc IS NOT NULL AND received_at>%s", (ult_fim,)).fetchone()["m"]
+    if inicio is not None and ultimo is not None and now - ultimo < ocioso:
+        con.execute("INSERT INTO sessoes(inicio,status) VALUES(%s,'aberta')", (inicio,))
+        con.commit()
+
+
+async def loop_sessao():
+    desde = time.time()
+    while True:
+        await asyncio.sleep(5)
+        def ciclo():
+            with closing(db()) as con:
+                ciclo_sessao(con, time.time(), SESSAO_OCIOSO, desde)
+        try:
+            await asyncio.to_thread(ciclo)
+        except Exception as e:  # noqa: BLE001
+            print("ciclo de sessão falhou:", e)
+
+
 async def background():
     n = 0
     while True:
         await asyncio.sleep(60)
         await asyncio.to_thread(push_kuma)
+        def resumo():
+            with closing(db()) as con:
+                agregar_horas(con)
+        try:
+            await asyncio.to_thread(resumo)
+        except Exception as e:  # noqa: BLE001
+            print("resumo por hora falhou:", e)
         n += 1
         if n % 60 == 0:
             cutoff = time.time() - RETENTION_DAYS * 86400
@@ -274,8 +454,11 @@ def init_db_retry(tentativas=30):
 async def lifespan(_):
     await asyncio.to_thread(init_db_retry)
     t = asyncio.create_task(background())
+    ts = asyncio.create_task(loop_sessao()) if SESSAO_AUTO else None
     yield
     t.cancel()
+    if ts:
+        ts.cancel()
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -289,6 +472,9 @@ async def ingest(request: Request):
         raise HTTPException(400, "JSON inválido")
     events = data if isinstance(data, list) else data.get("events", [data]) if isinstance(data, dict) else []
     now = time.time()
+    state["ultimo_sinal"] = now  # só em memória: prova que o rádio está enviando, sem gastar banco
+    if not await asyncio.to_thread(gravando):
+        return {"ok": True, "received": len(events), "stored": 0}
     rows = []
     for ev in events:
         p = parse_event(ev)
@@ -302,7 +488,14 @@ async def ingest(request: Request):
                     rows)
             con.commit()
     await asyncio.to_thread(gravar)
-    return {"ok": True, "received": len(rows)}
+    return {"ok": True, "received": len(rows), "stored": len(rows)}
+
+
+@app.post("/api/leitura/armar", dependencies=[Depends(op_auth)])
+def armar_leitura(segundos: int = 15):
+    segundos = max(1, min(segundos, 600))
+    state["armado_ate"] = time.time() + segundos
+    return {"ok": True, "segundos": segundos, "armado_ate": state["armado_ate"]}
 
 
 @app.get("/health")
@@ -316,8 +509,9 @@ def summary():
     with closing(db()) as con:
         q = lambda sql, *a: list(con.execute(sql, a).fetchone().values())[0]
         last = q("SELECT MAX(received_at) FROM events")
+        sinal = max(x for x in (last, state["ultimo_sinal"], 0) if x is not None) or None
         return {
-            "now": now, "last_event": last,
+            "now": now, "last_event": sinal, "gravando": now < state["armado_ate"] or state["conf_ativa"],
             "events_1min": q("SELECT COUNT(*) FROM events WHERE received_at>%s", now - 60),
             "events_1h": q("SELECT COUNT(*) FROM events WHERE received_at>%s", now - 3600),
             "tags_1h": q("SELECT COUNT(DISTINCT epc) FROM events WHERE epc IS NOT NULL AND received_at>%s", now - 3600),
@@ -381,7 +575,7 @@ def classificar_epcs(con, epcs):
     return identificados, novos
 
 
-@app.post("/api/lotes/registrar", dependencies=[Depends(ui_auth)])
+@app.post("/api/lotes/registrar", dependencies=[Depends(op_auth)])
 def registrar_lote(janela_segundos: int = 15):
     janela_segundos = max(1, min(janela_segundos, 600))
     now = time.time()
@@ -432,8 +626,8 @@ def detalhe_lote(lote_id: int):
     return out
 
 
-@app.post("/api/lotes/{lote_id}/transferir", dependencies=[Depends(ui_auth)])
-def transferir_lote(lote_id: int, payload: TransferenciaIn):
+@app.post("/api/lotes/{lote_id}/transferir")
+def transferir_lote(lote_id: int, payload: TransferenciaIn, user: dict = Depends(op_auth)):
     now = time.time()
     with closing(db()) as con:
         lote = con.execute("SELECT * FROM lotes WHERE id=%s", (lote_id,)).fetchone()
@@ -445,8 +639,8 @@ def transferir_lote(lote_id: int, payload: TransferenciaIn):
         if not destino:
             raise HTTPException(400, "destino inválido ou inativo")
         try:
-            con.execute("INSERT INTO transferencias(lote_id,destino_id,observacao,criado_em) VALUES(%s,%s,%s,%s)",
-                        (lote_id, payload.destino_id, (payload.observacao or "").strip() or None, now))
+            con.execute("INSERT INTO transferencias(lote_id,destino_id,observacao,criado_em,usuario) VALUES(%s,%s,%s,%s,%s)",
+                        (lote_id, payload.destino_id, (payload.observacao or "").strip() or None, now, user["usuario"]))
         except psycopg.errors.UniqueViolation:
             raise HTTPException(409, "lote já foi transferido")
         con.execute("UPDATE lotes SET status='transferido' WHERE id=%s", (lote_id,))
@@ -469,7 +663,7 @@ def listar_destinos(tipo: str | None = None, ativo: bool | None = None):
         return con.execute(sql, args).fetchall()
 
 
-@app.post("/api/destinos", dependencies=[Depends(ui_auth)])
+@app.post("/api/destinos", dependencies=[Depends(admin_auth)])
 def criar_destino(payload: DestinoIn):
     if payload.tipo not in ("setor", "lavanderia"):
         raise HTTPException(400, "tipo deve ser 'setor' ou 'lavanderia'")
@@ -487,7 +681,7 @@ def criar_destino(payload: DestinoIn):
     return row
 
 
-@app.patch("/api/destinos/{destino_id}", dependencies=[Depends(ui_auth)])
+@app.patch("/api/destinos/{destino_id}", dependencies=[Depends(admin_auth)])
 def atualizar_destino(destino_id: int, payload: DestinoPatch):
     with closing(db()) as con:
         if payload.ativo is not None:
@@ -505,7 +699,7 @@ def atualizar_destino(destino_id: int, payload: DestinoPatch):
 def listar_transferencias(destino_id: int | None = None, tipo: str | None = None,
                            desde: float | None = None, ate: float | None = None, limit: int = 200):
     sql = """SELECT t.id, t.lote_id, t.destino_id, d.nome destino_nome, d.tipo destino_tipo,
-                    t.observacao, t.criado_em, l.quantidade
+                    t.observacao, t.criado_em, t.usuario, l.quantidade
              FROM transferencias t
              JOIN destinos d ON d.id=t.destino_id
              JOIN lotes l ON l.id=t.lote_id"""
@@ -534,9 +728,9 @@ class ItemIn(BaseModel):
     cor: str | None = None
 
 
-@app.post("/api/itens", dependencies=[Depends(ui_auth)])
+@app.post("/api/itens", dependencies=[Depends(op_auth)])
 def cadastrar_item(payload: ItemIn):
-    epc, tipo = payload.epc.strip(), payload.tipo.strip()
+    epc, tipo = epc_manual(payload.epc) or "", payload.tipo.strip()
     if not epc or not tipo:
         raise HTTPException(400, "epc e tipo são obrigatórios")
     now = time.time()
@@ -597,7 +791,7 @@ def listar_estados():
         return con.execute("SELECT * FROM estados_inventario ORDER BY padrao DESC, nome").fetchall()
 
 
-@app.post("/api/estados", dependencies=[Depends(ui_auth)])
+@app.post("/api/estados", dependencies=[Depends(admin_auth)])
 def criar_estado(payload: EstadoIn):
     if payload.comportamento not in ("ativo", "inativo"):
         raise HTTPException(400, "comportamento deve ser 'ativo' ou 'inativo'")
@@ -615,7 +809,7 @@ def criar_estado(payload: EstadoIn):
     return row
 
 
-@app.patch("/api/itens/{epc}/estado", dependencies=[Depends(ui_auth)])
+@app.patch("/api/itens/{epc}/estado", dependencies=[Depends(op_auth)])
 def definir_estado_item(epc: str, payload: EstadoItemIn):
     with closing(db()) as con:
         if not con.execute("SELECT 1 FROM itens WHERE epc=%s", (epc,)).fetchone():
@@ -655,7 +849,7 @@ class SaidaIn(BaseModel):
 
 @app.post("/api/saida", dependencies=[Depends(saida_auth)])
 def registrar_saida(payload: SaidaIn):
-    payload.epc = payload.epc.strip()
+    payload.epc = epc_manual(payload.epc) or ""
     if not payload.epc:
         raise HTTPException(400, "epc é obrigatório")
     now = time.time()
@@ -713,7 +907,7 @@ def listar_antenas():
                               FROM antenas a LEFT JOIN destinos d ON d.id=a.destino_id ORDER BY a.nome""").fetchall()
 
 
-@app.post("/api/antenas", dependencies=[Depends(ui_auth)])
+@app.post("/api/antenas", dependencies=[Depends(admin_auth)])
 def salvar_antena(payload: AntenaIn):
     nome = payload.nome.strip()
     if not nome:
@@ -750,7 +944,7 @@ def listar_acomodacoes():
     return acs
 
 
-@app.post("/api/acomodacoes", dependencies=[Depends(ui_auth)])
+@app.post("/api/acomodacoes", dependencies=[Depends(admin_auth)])
 def salvar_acomodacao(payload: AcomodacaoIn):
     nome = payload.nome.strip()
     if not nome or payload.uhs < 0:
@@ -805,8 +999,8 @@ def _stats(itens, iniciada, finalizada, agora):
             "duracao_min": round(((finalizada or agora) - iniciada) / 60)}
 
 
-@app.post("/api/conferencias", dependencies=[Depends(ui_auth)])
-def iniciar_conferencia(payload: ConferenciaIn):
+@app.post("/api/conferencias")
+def iniciar_conferencia(payload: ConferenciaIn, user: dict = Depends(op_auth)):
     filtros = {k: v for k, v in payload.filtros.items() if k in FILTRO_CAMPOS and v}
     where, args = filtro_sql(filtros)
     now = time.time()
@@ -817,8 +1011,8 @@ def iniciar_conferencia(payload: ConferenciaIn):
         if not itens:
             raise HTTPException(400, "nenhum item cadastrado com esses filtros")
         desc = ", ".join(f'{k} "{v}"' for k, v in filtros.items()) or "sem filtros"
-        cid = con.execute("""INSERT INTO conferencias(filtros_desc,iniciada_em,status,esperados)
-                             VALUES(%s,%s,'andamento',%s) RETURNING id""", (desc, now, len(itens))).fetchone()["id"]
+        cid = con.execute("""INSERT INTO conferencias(filtros_desc,iniciada_em,status,esperados,usuario)
+                             VALUES(%s,%s,'andamento',%s,%s) RETURNING id""", (desc, now, len(itens), user["usuario"])).fetchone()["id"]
         with con.cursor() as cur:
             cur.executemany("INSERT INTO conferencia_itens(conferencia_id,epc,tipo) VALUES(%s,%s,%s)",
                             [(cid, i["epc"], i["tipo"]) for i in itens])
@@ -854,7 +1048,7 @@ def detalhe_conferencia(cid: int, somente: str | None = None, limit: int = 5000)
     return {**c, **stats, "itens": itens[:min(limit, 10000)]}
 
 
-@app.post("/api/conferencias/{cid}/finalizar", dependencies=[Depends(ui_auth)])
+@app.post("/api/conferencias/{cid}/finalizar", dependencies=[Depends(op_auth)])
 def finalizar_conferencia(cid: int):
     now = time.time()
     with closing(db()) as con:
@@ -873,6 +1067,165 @@ def finalizar_conferencia(cid: int):
         con.commit()
     return {"ok": True, "id": cid, "esperados": c["esperados"], "conferidos": conf}
 
-@app.get("/", dependencies=[Depends(ui_auth)])
-def index():
+
+class LoginIn(BaseModel):
+    usuario: str
+    senha: str
+
+
+@app.post("/api/login")
+def login(payload: LoginIn, request: Request):
+    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "?")).split(",")[0].strip()
+    agora = time.time()
+    _falhas[ip] = [t for t in _falhas.get(ip, []) if agora - t < 300]
+    if len(_falhas[ip]) >= 8:
+        raise HTTPException(429, "muitas tentativas; aguarde alguns minutos")
+    u = autentica(payload.usuario.strip(), payload.senha)
+    if not u:
+        _falhas[ip].append(agora)
+        raise HTTPException(401, "usuário ou senha inválidos")
+    resp = JSONResponse({"usuario": u["usuario"], "nome": u["nome"], "papel": u["papel"]})
+    resp.set_cookie(COOKIE, emite_token(u), max_age=SESSION_HORAS * 3600, httponly=True, samesite="lax",
+                    secure=request.headers.get("x-forwarded-proto") == "https")
+    return resp
+
+
+@app.post("/api/logout")
+def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(COOKIE)
+    return resp
+
+
+@app.get("/api/me")
+def me(u: dict = Depends(ui_auth)):
+    return {"usuario": u["usuario"], "nome": u["nome"], "papel": u["papel"]}
+
+
+
+def csv_resp(nome, cabecalho, linhas):
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(cabecalho); w.writerows(linhas)
+    return Response("\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+
+def hora_local(epoch):
+    return time.strftime("%d/%m/%Y %H:%M", time.gmtime(epoch + TZ_OFFSET)) if epoch else ""
+
+
+@app.get("/api/leituras-hora", dependencies=[Depends(ui_auth)])
+def leituras_hora(horas: int = 168):
+    desde = int(time.time() // 3600 * 3600) - max(1, min(horas, 24 * 90)) * 3600
+    with closing(db()) as con:
+        return con.execute("""SELECT hora, SUM(leituras)::int leituras, COUNT(*)::int tags FROM leituras_hora
+                              WHERE hora>=%s GROUP BY hora ORDER BY hora DESC""", (desde,)).fetchall()
+
+
+@app.get("/api/export/leituras.csv", dependencies=[Depends(ui_auth)])
+def export_leituras(horas: int = 168):
+    desde = int(time.time() // 3600 * 3600) - max(1, min(horas, 24 * 365)) * 3600
+    with closing(db()) as con:
+        rows = con.execute("""SELECT l.hora, l.epc, i.tipo, l.leituras, l.melhor_rssi FROM leituras_hora l
+                              LEFT JOIN itens i ON i.epc=l.epc WHERE l.hora>=%s ORDER BY l.hora DESC, l.epc""", (desde,)).fetchall()
+    return csv_resp("leituras-por-hora.csv", ["hora_local", "epc", "item", "leituras", "melhor_rssi"],
+                    [(hora_local(r["hora"]), r["epc"], r["tipo"] or "", r["leituras"], r["melhor_rssi"] if r["melhor_rssi"] is not None else "") for r in rows])
+
+
+@app.get("/api/export/inventario.csv", dependencies=[Depends(ui_auth)])
+def export_inventario():
+    with closing(db()) as con:
+        rows = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v ORDER BY v.tipo, v.epc").fetchall()
+    return csv_resp("inventario.csv", ["epc", "item", "fabricante", "tamanho", "composicao", "cor", "localizacao", "estado"],
+                    [(r["epc"], r["tipo"], r["fabricante"] or "", r["tamanho"] or "", r["composicao"] or "", r["cor"] or "",
+                      r["localizacao"] or "", r["estado"]) for r in rows])
+
+
+@app.get("/api/export/transferencias.csv", dependencies=[Depends(ui_auth)])
+def export_transferencias():
+    with closing(db()) as con:
+        rows = con.execute("""SELECT t.lote_id, t.criado_em, d.nome destino, d.tipo, t.usuario, l.quantidade, t.observacao
+                              FROM transferencias t JOIN destinos d ON d.id=t.destino_id JOIN lotes l ON l.id=t.lote_id
+                              ORDER BY t.id DESC""").fetchall()
+    return csv_resp("transferencias.csv", ["lote", "data", "destino", "tipo_destino", "usuario", "quantidade", "observacao"],
+                    [(r["lote_id"], hora_local(r["criado_em"]), r["destino"], r["tipo"], r["usuario"] or "", r["quantidade"], r["observacao"] or "") for r in rows])
+
+
+@app.get("/api/sessoes", dependencies=[Depends(ui_auth)])
+def listar_sessoes(limit: int = 50):
+    with closing(db()) as con:
+        return {"auto": SESSAO_AUTO, "ocioso_segundos": SESSAO_OCIOSO,
+                "sessoes": con.execute("SELECT * FROM sessoes ORDER BY id DESC LIMIT %s", (min(limit, 500),)).fetchall()}
+
+@app.get("/login")
+def pagina_login():
+    return FileResponse(STATIC / "login.html")
+
+
+class UsuarioIn(BaseModel):
+    usuario: str
+    nome: str | None = None
+    papel: str = "operador"
+    senha: str | None = None
+
+
+class UsuarioPatch(BaseModel):
+    nome: str | None = None
+    papel: str | None = None
+    ativo: bool | None = None
+    senha: str | None = None
+
+
+def _valida_usuario(papel, senha):
+    if papel is not None and papel not in PAPEIS:
+        raise HTTPException(400, "papel deve ser leitura, operador ou admin")
+    if senha is not None and len(senha) < 8:
+        raise HTTPException(400, "a senha precisa ter ao menos 8 caracteres")
+
+
+@app.get("/api/usuarios", dependencies=[Depends(admin_auth)])
+def listar_usuarios():
+    with closing(db()) as con:
+        return con.execute("""SELECT id,usuario,nome,papel,ativo,(senha_hash IS NOT NULL) AS tem_senha
+                              FROM usuarios ORDER BY usuario""").fetchall()
+
+
+@app.post("/api/usuarios", dependencies=[Depends(admin_auth)])
+def criar_usuario(payload: UsuarioIn):
+    nome_login = payload.usuario.strip().lower()
+    if not nome_login or " " in nome_login:
+        raise HTTPException(400, "usuário obrigatório, sem espaços")
+    _valida_usuario(payload.papel, payload.senha)
+    with closing(db()) as con:
+        try:
+            con.execute("INSERT INTO usuarios(usuario,nome,senha_hash,papel,ativo,criado_em) VALUES(%s,%s,%s,%s,1,%s)",
+                        (nome_login, payload.nome, hash_senha(payload.senha) if payload.senha else None, payload.papel, time.time()))
+            con.commit()
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(409, "já existe um usuário com esse login")
+    return {"ok": True}
+
+
+@app.patch("/api/usuarios/{uid}", dependencies=[Depends(admin_auth)])
+def atualizar_usuario(uid: int, payload: UsuarioPatch):
+    _valida_usuario(payload.papel, payload.senha)
+    with closing(db()) as con:
+        if not con.execute("SELECT 1 FROM usuarios WHERE id=%s", (uid,)).fetchone():
+            raise HTTPException(404, "usuário não encontrado")
+        if payload.nome is not None:
+            con.execute("UPDATE usuarios SET nome=%s WHERE id=%s", (payload.nome, uid))
+        if payload.papel is not None:
+            con.execute("UPDATE usuarios SET papel=%s WHERE id=%s", (payload.papel, uid))
+        if payload.ativo is not None:
+            con.execute("UPDATE usuarios SET ativo=%s WHERE id=%s", (1 if payload.ativo else 0, uid))
+        if payload.senha is not None:
+            con.execute("UPDATE usuarios SET senha_hash=%s WHERE id=%s", (hash_senha(payload.senha), uid))
+        con.commit()
+    return {"ok": True}
+
+@app.get("/")
+def index(u=Depends(usuario_opt)):
+    if not u:
+        return RedirectResponse("/login", status_code=302)
     return FileResponse(STATIC / "index.html")

@@ -29,6 +29,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Ar
 .nav-item .badge{margin-left:auto;min-width:18px;padding:0 6px;border-radius:999px;background:var(--red);color:#fff;font-size:10.5px;text-align:center}
 .nav-item .badge:empty{display:none}
 .sidebar-footer{padding:var(--sp-3) var(--sp-2);border-top:1px solid var(--line)}
+[hidden]{display:none!important}
 .leitor{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-2) var(--sp-3);font-size:11px;color:var(--muted)}
 .dot{width:10px;height:10px;border-radius:50%;background:var(--muted);display:inline-block;flex-shrink:0}
 .dot.ok{background:var(--green)}.dot.bad{background:var(--red)}
@@ -88,6 +89,8 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
     <a class="nav-item" href="#transferencias" data-nav="transferencias">Transferências</a>
     <div class="nav-section">Controle</div>
     <a class="nav-item" href="#evasao" data-nav="evasao">Alertas de evasão <span class="badge" id="badgeEvasao"></span></a>
+    <div class="nav-section">Relatórios</div>
+    <a class="nav-item" href="#relatorios" data-nav="relatorios">Leituras por hora</a>
     <div class="nav-section">Cadastros</div>
     <a class="nav-item" href="#inventario" data-nav="inventario">Inventário</a>
     <a class="nav-item" href="#catalogo" data-nav="catalogo">Catálogo de itens</a>
@@ -101,7 +104,10 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
   </nav>
   <div class="sidebar-footer">
     <div class="leitor"><span id="dot" class="dot"></span><span id="status">…</span></div>
+    <a class="nav-item" href="#usuarios" data-nav="usuarios" id="navUsuarios" hidden>Usuários</a>
+    <div class="leitor" id="usuarioBox" style="color:var(--text-dim)"></div>
     <button class="nav-item" id="tema" type="button">Tema claro/escuro</button>
+    <button class="nav-item" id="sair" type="button">Sair</button>
   </div>
 </aside>
 <main class="main-content">
@@ -125,7 +131,7 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
   <div class="row">
     <label class="mut">janela (s) <input id="janela" type="number" min="1" max="600" value="15" style="width:60px"></label>
     <button class="acc" id="registrar">Registrar leitura</button>
-    <span class="mut">considera as tags distintas lidas nos últimos N segundos antes do clique</span>
+    <span class="mut">o leitor só grava durante essa janela, depois do clique (economiza banco)</span>
   </div>
   <div id="registrarMsg" class="msg"></div>
   <div id="loteResultado" hidden>
@@ -135,6 +141,11 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
     <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th></th></tr></thead><tbody id="loteNovos"></tbody></table></div>
   </div>
 </section>
+<section>
+  <h2><span>Sessões de leitura automáticas</span><span id="sessaoEstado" class="mut"></span></h2>
+  <div class="scroll"><table><thead><tr><th>Início</th><th>Fim</th><th>Tags</th><th>Lote</th><th>Status</th></tr></thead><tbody id="sessoes"></tbody></table></div>
+</section>
+
 <section>
   <h2><span>Lotes aguardando transferência <span id="pendCount" class="mut"></span></span></h2>
   <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th></th></tr></thead><tbody id="pendentes"></tbody></table></div>
@@ -151,7 +162,7 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
     <button id="fAplicar">filtrar</button>
     <button id="fLimpar">limpar</button>
   </div>
-  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th>EPCs</th></tr></thead><tbody id="transf"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Usuário</th><th>Obs.</th><th>EPCs</th></tr></thead><tbody id="transf"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="evasao" hidden>
@@ -248,7 +259,7 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
 <section>
   <h2><span>Conferências de estoque</span></h2>
   <div class="mut" style="padding:10px 16px 0">Para iniciar uma conferência, use o botão em Inventário (respeita os filtros escolhidos). Conferido = tag lida pelo leitor depois do início.</div>
-  <div class="scroll"><table><thead><tr><th>Início</th><th>Filtros aplicados</th><th>Esperados</th><th>Status</th><th></th></tr></thead><tbody id="confLista"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Início</th><th>Usuário</th><th>Filtros aplicados</th><th>Esperados</th><th>Status</th><th></th></tr></thead><tbody id="confLista"></tbody></table></div>
 </section>
 <section id="confDetalhe" hidden>
   <h2><span id="confTitulo">Detalhes da conferência</span><span><button id="confFinalizar" class="acc">Finalizar conferência</button> <button id="confFechar">fechar</button></span></h2>
@@ -260,6 +271,36 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
   </div>
   <div class="row"><span class="mut" id="cfInfo"></span><label class="mut"><input type="checkbox" id="cfSoNao"> exibir só não conferidos</label></div>
   <div class="scroll"><table><thead><tr><th>Status</th><th>Tag RFID</th><th>Item</th><th>Conferido em</th></tr></thead><tbody id="cfItens"></tbody></table></div>
+</section>
+</div>
+<div class="view" data-view="usuarios" hidden>
+<section>
+  <h2><span>Usuários</span></h2>
+  <div class="row">
+    <input id="usLogin" type="text" placeholder="login (sem espaços)">
+    <input id="usNome" type="text" placeholder="nome">
+    <select id="usPapel"><option value="operador">operador</option><option value="leitura">leitura</option><option value="admin">admin</option></select>
+    <input id="usSenha" type="password" placeholder="senha (mín. 8) — opcional" autocomplete="new-password">
+    <button class="acc" id="usSalvar">Cadastrar</button>
+  </div>
+  <div id="usMsg" class="msg"></div>
+  <div class="mut" style="padding:0 16px 8px">Papéis: <b>leitura</b> só consulta · <b>operador</b> também registra leituras, transfere, cadastra itens e faz conferências · <b>admin</b> também gerencia destinos, estados, antenas, acomodações e usuários. Sem senha cadastrada o usuário não consegue entrar.</div>
+  <div class="scroll"><table><thead><tr><th>Login</th><th>Nome</th><th>Papel</th><th>Senha</th><th>Status</th><th></th></tr></thead><tbody id="usuarios"></tbody></table></div>
+</section>
+</div>
+<div class="view" data-view="relatorios" hidden>
+<section>
+  <h2><span>Exportar (CSV, abre no Excel)</span></h2>
+  <div class="row">
+    <a class="nav-item" style="width:auto;border:1px solid var(--line)" href="/api/export/inventario.csv">Inventário</a>
+    <a class="nav-item" style="width:auto;border:1px solid var(--line)" href="/api/export/transferencias.csv">Transferências</a>
+    <a class="nav-item" style="width:auto;border:1px solid var(--line)" href="/api/export/leituras.csv?horas=168">Leituras por hora (7 dias)</a>
+    <a class="nav-item" style="width:auto;border:1px solid var(--line)" href="/api/export/leituras.csv?horas=720">Leituras por hora (30 dias)</a>
+  </div>
+</section>
+<section>
+  <h2><span>Leituras por hora <span class="mut">(últimos 7 dias; o resumo é mantido mesmo depois que os eventos brutos expiram)</span></span></h2>
+  <div class="scroll"><table><thead><tr><th>Hora</th><th>Leituras</th><th>Tags distintas</th></tr></thead><tbody id="horas"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="antenas" hidden>
@@ -297,23 +338,26 @@ const dt=t=>t?new Date(t*1000).toLocaleString('pt-BR'):'–';
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function j(u,opts){
   const r=await fetch(u,opts);
+  if(r.status===401){location.href='/login';throw new Error('sessão expirada')}
   if(!r.ok){let m;try{m=(await r.json()).detail}catch(e){m=r.statusText}throw new Error(m||('erro '+r.status))}
   return r.status===204?null:r.json();
 }
 const itemTipo=t=>t?esc(t):'<span class="mut">não cadastrada</span>';
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
-const TITULOS={conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Painel',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
+const TITULOS={relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Painel',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
   inventario:'Inventário',catalogo:'Catálogo de itens',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
 let view='painel';
 const LOADERS={
   painel:()=>Promise.resolve(),
-  leitura:()=>carregarPendentes(),
+  leitura:async()=>{await carregarPendentes();await carregarSessoes()},
+  relatorios:()=>carregarHoras(),
   transferencias:async()=>{await carregarDestinos();await carregarTransferencias()},
   evasao:async()=>{await carregarDestinos();await carregarEvasoes()},
   inventario:async()=>{await carregarOpcoesInventario();await carregarInventario()},
   conferencia:()=>carregarConferencias(),
   antenas:()=>carregarAntenas(),
+  usuarios:()=>carregarUsuarios(),
   acomodacoes:()=>carregarAcomodacoes(),
   catalogo:()=>carregarCatalogo(),
   destinos:()=>carregarDestinos(),
@@ -329,7 +373,7 @@ async function tick(){
     $('c1').textContent=s.events_1min;$('c2').textContent=s.events_1h;$('c3').textContent=s.tags_1h;$('c4').textContent=s.tags_24h;$('c5').textContent=s.total;
     const age=s.last_event?(s.now-s.last_event)/60:null,ok=age!==null&&age<=s.stale_minutes;
     $('dot').className='dot '+(ok?'ok':'bad');
-    $('status').textContent=age===null?'leitor: sem eventos':'leitor: '+(age<1?'agora':'há '+Math.round(age)+' min');
+    $('status').textContent=age===null?'rádio: sem sinal':'rádio: '+(age<1?'enviando sinal':'sem sinal há '+Math.round(age)+' min')+(s.gravando?' · gravando':'');
     const [pend,nao]=await Promise.all([j('/api/lotes?status=aguardando&limit=500'),j('/api/saida?documentado=false&limit=200')]);
     $('cPend').textContent=pend.length;$('cEvasao').textContent=nao.length;$('badgeEvasao').textContent=nao.length||'';
     await LOADERS[view]();
@@ -453,9 +497,11 @@ document.addEventListener('click',async e=>{
 
 $('registrar').onclick=async()=>{
   const janela=Number($('janela').value)||15,msg=$('registrarMsg'),btn=$('registrar');
-  btn.disabled=true;msg.className='msg';msg.textContent='lendo tags…';
+  btn.disabled=true;msg.className='msg';msg.textContent=`lendo tags por ${janela}s…`;
   try{
-    const r=await j('/api/lotes/registrar?janela_segundos='+janela,{method:'POST'});
+    await j('/api/leitura/armar?segundos='+(janela+3),{method:'POST'});
+    await new Promise(r=>setTimeout(r,janela*1000));
+    const r=await j('/api/lotes/registrar?janela_segundos='+(janela+2),{method:'POST'});
     msg.className='msg ok';msg.textContent=`lote #${r.id} registrado: ${r.quantidade} tag(s) distinta(s).`;
     loteAtual={id:r.id,identificados:r.identificados,novos:r.novos};
     renderLoteResultado();
@@ -477,9 +523,9 @@ async function carregarTransferencias(){
   const rows=await j('/api/transferencias'+(qs?'?'+qs:''));
   $('transf').innerHTML=rows.map(t=>`<tr>
     <td>#${t.lote_id}</td><td>${dt(t.criado_em)}</td><td>${t.quantidade}</td>
-    <td>${esc(t.destino_nome)} ${pill(t.destino_tipo)}</td><td>${esc(t.observacao||'–')}</td>
+    <td>${esc(t.destino_nome)} ${pill(t.destino_tipo)}</td><td>${esc(t.usuario||'–')}</td><td>${esc(t.observacao||'–')}</td>
     <td class="epcs toggle" data-lote="${t.lote_id}">ver EPCs</td>
-  </tr>`).join('')||'<tr><td colspan=6>nenhuma transferência encontrada</td></tr>';
+  </tr>`).join('')||'<tr><td colspan=7>nenhuma transferência encontrada</td></tr>';
 }
 document.addEventListener('click',async e=>{
   const c=e.target.closest('td.epcs');if(!c)return;
@@ -557,9 +603,9 @@ $('iniciarConf').onclick=async()=>{
 };
 async function carregarConferencias(){
   const rows=await j('/api/conferencias');
-  $('confLista').innerHTML=rows.map(c=>`<tr><td>${dt(c.iniciada_em)}</td><td>${esc(c.filtros_desc)}</td><td>${c.esperados}</td>
+  $('confLista').innerHTML=rows.map(c=>`<tr><td>${dt(c.iniciada_em)}</td><td>${esc(c.usuario||'–')}</td><td>${esc(c.filtros_desc)}</td><td>${c.esperados}</td>
     <td>${c.status==='andamento'?'<span class="pill alerta">em andamento</span>':'<span class="pill ok">finalizada</span>'}</td>
-    <td><button class="verConf" data-id="${c.id}">ver</button></td></tr>`).join('')||'<tr><td colspan=5>nenhuma conferência realizada</td></tr>';
+    <td><button class="verConf" data-id="${c.id}">ver</button></td></tr>`).join('')||'<tr><td colspan=6>nenhuma conferência realizada</td></tr>';
   if(!confId&&rows.length&&rows[0].status==='andamento')confId=rows[0].id;
   if(confId)await carregarConfDetalhe();else $('confDetalhe').hidden=true;
 }
@@ -569,7 +615,7 @@ async function carregarConfDetalhe(){
   $('confTitulo').textContent=`Conferência #${c.id} — ${c.status==='andamento'?'em andamento':'finalizada'}`;
   $('cfEsp').textContent=c.esperados;$('cfConf').textContent=c.conferidos;$('cfNao').textContent=c.nao_conferidos;
   $('cfPct').textContent=c.percentual+'%';$('cfDur').textContent=c.duracao_min;
-  $('cfInfo').textContent=`Iniciada ${dt(c.iniciada_em)}${c.finalizada_em?' · finalizada '+dt(c.finalizada_em):''} · filtros: ${c.filtros_desc}`;
+  $('cfInfo').textContent=`Por ${c.usuario||'–'} · iniciada ${dt(c.iniciada_em)}${c.finalizada_em?' · finalizada '+dt(c.finalizada_em):''} · filtros: ${c.filtros_desc}`;
   $('confFinalizar').hidden=c.status!=='andamento';
   $('cfItens').innerHTML=c.itens.map(i=>`<tr><td>${i.conferido_em?'<span class="pill ok">✓ conferido</span>':'<span class="pill alerta">não conferido</span>'}</td>
     <td class="epc">${esc(i.epc)}</td><td>${esc(i.tipo)}</td><td>${i.conferido_em?dt(i.conferido_em):'–'}</td></tr>`).join('')||'<tr><td colspan=4>nenhum item</td></tr>';
@@ -581,6 +627,47 @@ $('confFinalizar').onclick=async()=>{
   if(!confId||!confirm('Finalizar a conferência? Os itens não lidos até agora ficam como não conferidos.'))return;
   try{await j('/api/conferencias/'+confId+'/finalizar',{method:'POST'});await carregarConferencias()}catch(e){alert(e.message)}
 };
+let eu=null;
+async function carregarMe(){
+  try{eu=await j('/api/me')}catch(e){return}
+  $('usuarioBox').textContent=`${eu.nome||eu.usuario} · ${eu.papel}`;
+  $('navUsuarios').hidden=eu.papel!=='admin';
+}
+$('sair').onclick=async()=>{try{await fetch('/api/logout',{method:'POST'})}catch(e){}location.href='/login'};
+async function carregarUsuarios(){
+  const rows=await j('/api/usuarios');
+  $('usuarios').innerHTML=rows.map(u=>`<tr><td>${esc(u.usuario)}</td><td>${esc(u.nome||'–')}</td>
+    <td><select class="usPapelSel" data-id="${u.id}">${['leitura','operador','admin'].map(p=>`<option ${p===u.papel?'selected':''}>${p}</option>`).join('')}</select></td>
+    <td>${u.tem_senha?'<span class="pill ok">definida</span>':'<span class="pill alerta">sem senha</span>'}</td>
+    <td>${u.ativo?'ativo':'inativo'}</td>
+    <td><button class="usSenhaBtn" data-id="${u.id}">definir senha</button> <button class="usAtivoBtn" data-id="${u.id}" data-ativo="${u.ativo}">${u.ativo?'desativar':'reativar'}</button></td></tr>`).join('')||'<tr><td colspan=6>nenhum usuário</td></tr>';
+}
+const patchUs=(id,b)=>j('/api/usuarios/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+document.addEventListener('change',async e=>{const s=e.target.closest('.usPapelSel');if(!s)return;try{await patchUs(s.dataset.id,{papel:s.value})}catch(x){alert(x.message);carregarUsuarios()}});
+document.addEventListener('click',async e=>{
+  const sb=e.target.closest('.usSenhaBtn'),ab=e.target.closest('.usAtivoBtn');
+  try{
+    if(sb){const n=prompt('Nova senha (mínimo 8 caracteres):');if(n)await patchUs(sb.dataset.id,{senha:n});await carregarUsuarios()}
+    if(ab){await patchUs(ab.dataset.id,{ativo:ab.dataset.ativo!=='1'});await carregarUsuarios()}
+  }catch(x){alert(x.message)}
+});
+$('usSalvar').onclick=async()=>{
+  const msg=$('usMsg'),usuario=$('usLogin').value.trim();
+  if(!usuario){msg.className='msg bad';msg.textContent='informe o login';return}
+  try{await j('/api/usuarios',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({usuario,nome:$('usNome').value.trim()||null,papel:$('usPapel').value,senha:$('usSenha').value||null})});
+    msg.className='msg ok';msg.textContent='usuário cadastrado';['usLogin','usNome','usSenha'].forEach(i=>$(i).value='');await carregarUsuarios()}
+  catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
+async function carregarHoras(){
+  const r=await j('/api/leituras-hora');
+  $('horas').innerHTML=r.map(h=>`<tr><td>${new Date(h.hora*1000).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'})}</td><td>${h.leituras}</td><td>${h.tags}</td></tr>`).join('')||'<tr><td colspan=3>sem dados ainda (o resumo é gerado a cada minuto)</td></tr>';
+}
+async function carregarSessoes(){
+  const r=await j('/api/sessoes?limit=20');
+  $('sessaoEstado').textContent=r.auto?`ligadas (silêncio de ${r.ocioso_segundos}s encerra a sessão)`:'desligadas — ative com SESSAO_AUTO=1';
+  $('sessoes').innerHTML=r.sessoes.map(x=>`<tr><td>${dt(x.inicio)}</td><td>${x.fim?dt(x.fim):'–'}</td><td>${x.tags}</td><td>${x.lote_id?'#'+x.lote_id:'–'}</td>
+    <td>${x.status==='aberta'?'<span class="pill alerta">aberta</span>':'<span class="pill ok">encerrada</span>'}</td></tr>`).join('')||'<tr><td colspan=5>nenhuma sessão registrada</td></tr>';
+}
 async function carregarAntenas(){
   await carregarDestinos();
   $('anDestino').innerHTML='<option value="">ambiente…</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
@@ -674,7 +761,7 @@ $('cadastrarItem').onclick=async()=>{
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
 
-rota();setInterval(tick,3000);
+carregarMe();rota();setInterval(tick,3000);
 </script>
 </body>
 </html>
