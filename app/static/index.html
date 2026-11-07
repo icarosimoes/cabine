@@ -16,12 +16,24 @@ h1{font-size:18px;margin:0 0 12px;display:flex;align-items:center;gap:10px}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:10px 12px}
 .card b{display:block;font-size:22px}.card span{color:var(--mut);font-size:12px}
 section{background:var(--card);border:1px solid var(--bd);border-radius:8px;margin-bottom:16px;overflow:hidden}
-section h2{font-size:14px;margin:0;padding:10px 12px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;gap:8px}
+section h2{font-size:14px;margin:0;padding:10px 12px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;gap:8px;align-items:center}
 .scroll{overflow-x:auto;max-height:380px;overflow-y:auto}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 12px;border-bottom:1px solid var(--bd);white-space:nowrap}
 th{color:var(--mut);font-weight:500;font-size:12px;position:sticky;top:0;background:var(--card)}
 td.epc{font-family:ui-monospace,monospace;cursor:pointer;color:var(--acc)}
-select,button{font:inherit;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:3px 8px}
+select,button,input{font:inherit;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:3px 8px}
+button{cursor:pointer}
+button.acc{background:var(--acc);color:#fff;border-color:var(--acc)}
+button.acc:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 12px}
+.mut{color:var(--mut);font-size:12px}
+.pill{font-size:11px;padding:1px 7px;border-radius:999px;background:var(--bd)}
+.pill.setor{color:var(--acc)}.pill.lavanderia{color:var(--bad)}
+.msg{padding:0 12px 10px;font-size:13px}
+.msg.ok{color:var(--ok)}.msg.bad{color:var(--bad)}
+.epcs{font-family:ui-monospace,monospace;font-size:11px;color:var(--mut);max-width:320px;overflow:hidden;text-overflow:ellipsis}
+.epcs.open{white-space:normal;max-width:none;overflow:visible;text-overflow:unset;cursor:default}
+td.toggle{cursor:pointer}
 </style>
 </head>
 <body>
@@ -34,6 +46,35 @@ select,button{font:inherit;background:var(--card);color:var(--fg);border:1px sol
   <div class="card"><b id="c4">–</b><span>tags distintas (24h)</span></div>
   <div class="card"><b id="c5">–</b><span>eventos guardados</span></div>
 </div>
+
+<section>
+  <h2><span>Registrar leitura da cabine</span></h2>
+  <div class="row">
+    <label class="mut">janela (s) <input id="janela" type="number" min="1" max="600" value="15" style="width:60px"></label>
+    <button class="acc" id="registrar">Registrar leitura</button>
+    <span class="mut">considera as tags distintas lidas nos últimos N segundos antes do clique</span>
+  </div>
+  <div id="registrarMsg" class="msg"></div>
+</section>
+
+<section>
+  <h2><span>Lotes aguardando transferência <span id="pendCount" class="mut"></span></span></h2>
+  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th></th></tr></thead><tbody id="pendentes"></tbody></table></div>
+</section>
+
+<section>
+  <h2><span>Transferências (auditoria)</span></h2>
+  <div class="row">
+    <select id="fTipo"><option value="">todos os tipos</option><option value="setor">setor</option><option value="lavanderia">lavanderia</option></select>
+    <select id="fDestino"><option value="">todos os destinos</option></select>
+    <label class="mut">de <input id="fDesde" type="date"></label>
+    <label class="mut">até <input id="fAte" type="date"></label>
+    <button id="fAplicar">filtrar</button>
+    <button id="fLimpar">limpar</button>
+  </div>
+  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th>EPCs</th></tr></thead><tbody id="transf"></tbody></table></div>
+</section>
+
 <section>
   <h2><span>Tags <span id="filtro" style="color:var(--mut)"></span></span>
     <span><select id="hours"><option value="1">1h</option><option value="24" selected>24h</option><option value="168">7 dias</option></select></span></h2>
@@ -43,13 +84,31 @@ select,button{font:inherit;background:var(--card);color:var(--fg);border:1px sol
   <h2><span>Eventos ao vivo</span><button id="limpar" hidden>limpar filtro</button></h2>
   <div class="scroll"><table><thead><tr><th>Hora</th><th>Tipo</th><th>EPC</th><th>Antena</th><th>RSSI</th></tr></thead><tbody id="evs"></tbody></table></div>
 </section>
+
+<section>
+  <h2><span>Destinos cadastrados</span></h2>
+  <div class="row">
+    <input id="novoNome" type="text" placeholder="nome do setor ou lavanderia" style="flex:1;min-width:180px">
+    <select id="novoTipo"><option value="setor">setor</option><option value="lavanderia">lavanderia</option></select>
+    <button class="acc" id="novoDestino">Cadastrar</button>
+  </div>
+  <div id="destinoMsg" class="msg"></div>
+  <div class="scroll"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Status</th><th></th></tr></thead><tbody id="destinos"></tbody></table></div>
+</section>
+
 </main>
 <script>
-const $=id=>document.getElementById(id);let epc=null;
+const $=id=>document.getElementById(id);let epc=null,destinosCache=[];
 const hm=t=>t?new Date(t*1000).toLocaleTimeString('pt-BR'):'–';
 const dt=t=>t?new Date(t*1000).toLocaleString('pt-BR'):'–';
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const j=u=>fetch(u).then(r=>r.json());
+async function j(u,opts){
+  const r=await fetch(u,opts);
+  if(!r.ok){let m;try{m=(await r.json()).detail}catch(e){m=r.statusText}throw new Error(m||('erro '+r.status))}
+  return r.status===204?null:r.json();
+}
+const pill=d=>`<span class="pill ${d}">${d}</span>`;
+
 async function tick(){
   try{
     const s=await j('/api/summary');
@@ -62,10 +121,104 @@ async function tick(){
     const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
     $('evs').innerHTML=evs.map(e=>`<tr><td>${hm(e.received_at)}</td><td>${esc(e.event_type)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>';
   }catch(e){$('status').textContent='erro ao atualizar';$('dot').className='dot bad'}
+  await Promise.all([carregarPendentes(),carregarTransferencias()]);
 }
 document.addEventListener('click',e=>{const t=e.target.closest('td.epc');if(t&&t.dataset.e){epc=t.dataset.e;$('filtro').textContent='· filtro: '+epc;$('limpar').hidden=false;tick()}});
 $('limpar').onclick=()=>{epc=null;$('filtro').textContent='';$('limpar').hidden=true;tick()};
-$('hours').onchange=tick;tick();setInterval(tick,3000);
+$('hours').onchange=tick;
+
+async function carregarDestinos(){
+  destinosCache=await j('/api/destinos');
+  const opts=destinosCache.filter(d=>d.ativo).map(d=>`<option value="${d.id}">${esc(d.nome)} (${d.tipo})</option>`).join('');
+  document.querySelectorAll('select.destinoSel').forEach(sel=>{const cur=sel.value;sel.innerHTML='<option value="">selecione o destino…</option>'+opts;if(cur)sel.value=cur});
+  $('fDestino').innerHTML='<option value="">todos os destinos</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
+  $('destinos').innerHTML=destinosCache.map(d=>`<tr><td>${esc(d.nome)}</td><td>${pill(d.tipo)}</td><td>${d.ativo?'ativo':'inativo'}</td>
+    <td><button data-id="${d.id}" data-ativo="${d.ativo}" class="toggleDestino">${d.ativo?'desativar':'reativar'}</button></td></tr>`).join('')||'<tr><td colspan=4>nenhum destino cadastrado</td></tr>';
+}
+$('novoDestino').onclick=async()=>{
+  const nome=$('novoNome').value.trim(),tipo=$('novoTipo').value,msg=$('destinoMsg');
+  if(!nome){msg.className='msg bad';msg.textContent='informe o nome do destino';return}
+  try{await j('/api/destinos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome,tipo})});
+    $('novoNome').value='';msg.className='msg ok';msg.textContent='destino cadastrado';await carregarDestinos()}
+  catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('.toggleDestino');if(!b)return;
+  await j('/api/destinos/'+b.dataset.id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({ativo:b.dataset.ativo!=='1'})});
+  await carregarDestinos();
+});
+
+async function carregarPendentes(){
+  const antes={};
+  document.querySelectorAll('select.destinoSel').forEach(s=>antes[s.dataset.lote]={destino:s.value,obs:document.querySelector(`input.obsLote[data-lote="${s.dataset.lote}"]`)?.value||''});
+  const lotes=await j('/api/lotes?status=aguardando&limit=100');
+  $('pendCount').textContent=lotes.length?('· '+lotes.length):'';
+  $('pendentes').innerHTML=lotes.map(l=>`<tr>
+    <td>#${l.id}</td><td>${dt(l.criado_em)}</td><td>${l.quantidade}</td>
+    <td><select class="destinoSel" data-lote="${l.id}"></select></td>
+    <td><input type="text" class="obsLote" data-lote="${l.id}" placeholder="observação" style="width:140px"></td>
+    <td><button class="acc transferirBtn" data-lote="${l.id}">Transferir</button></td>
+  </tr>`).join('')||'<tr><td colspan=6>nenhum lote aguardando transferência</td></tr>';
+  await carregarDestinos();
+  Object.entries(antes).forEach(([loteId,v])=>{
+    const sel=document.querySelector(`select.destinoSel[data-lote="${loteId}"]`);
+    const obs=document.querySelector(`input.obsLote[data-lote="${loteId}"]`);
+    if(sel&&v.destino)sel.value=v.destino;
+    if(obs&&v.obs)obs.value=v.obs;
+  });
+}
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('.transferirBtn');if(!b)return;
+  const loteId=b.dataset.lote;
+  const sel=document.querySelector(`select.destinoSel[data-lote="${loteId}"]`);
+  const obs=document.querySelector(`input.obsLote[data-lote="${loteId}"]`).value.trim();
+  if(!sel.value){alert('selecione um destino');return}
+  b.disabled=true;
+  try{
+    await j('/api/lotes/'+loteId+'/transferir',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({destino_id:Number(sel.value),observacao:obs||null})});
+    await Promise.all([carregarPendentes(),carregarTransferencias()]);
+  }catch(err){alert(err.message);b.disabled=false}
+});
+
+$('registrar').onclick=async()=>{
+  const janela=Number($('janela').value)||15,msg=$('registrarMsg'),btn=$('registrar');
+  btn.disabled=true;msg.className='msg';msg.textContent='lendo tags…';
+  try{
+    const r=await j('/api/lotes/registrar?janela_segundos='+janela,{method:'POST'});
+    msg.className='msg ok';msg.textContent=`lote #${r.id} registrado: ${r.quantidade} tag(s) distinta(s).`;
+    await carregarPendentes();
+  }catch(e){msg.className='msg bad';msg.textContent=e.message}
+  btn.disabled=false;
+};
+
+function montaFiltroTransf(){
+  const p=new URLSearchParams();
+  if($('fTipo').value)p.set('tipo',$('fTipo').value);
+  if($('fDestino').value)p.set('destino_id',$('fDestino').value);
+  if($('fDesde').value)p.set('desde',Math.floor(new Date($('fDesde').value+'T00:00:00').getTime()/1000));
+  if($('fAte').value)p.set('ate',Math.floor(new Date($('fAte').value+'T23:59:59').getTime()/1000));
+  return p.toString();
+}
+async function carregarTransferencias(){
+  const qs=montaFiltroTransf();
+  const rows=await j('/api/transferencias'+(qs?'?'+qs:''));
+  $('transf').innerHTML=rows.map(t=>`<tr>
+    <td>#${t.lote_id}</td><td>${dt(t.criado_em)}</td><td>${t.quantidade}</td>
+    <td>${esc(t.destino_nome)} ${pill(t.destino_tipo)}</td><td>${esc(t.observacao||'–')}</td>
+    <td class="epcs toggle" data-lote="${t.lote_id}">ver EPCs</td>
+  </tr>`).join('')||'<tr><td colspan=6>nenhuma transferência encontrada</td></tr>';
+}
+document.addEventListener('click',async e=>{
+  const c=e.target.closest('td.epcs');if(!c)return;
+  if(c.classList.contains('open')){c.classList.remove('open');c.textContent='ver EPCs';return}
+  const lote=await j('/api/lotes/'+c.dataset.lote);
+  c.classList.add('open');c.textContent=lote.epcs.join(', ');
+});
+$('fAplicar').onclick=carregarTransferencias;
+$('fLimpar').onclick=()=>{$('fTipo').value='';$('fDestino').value='';$('fDesde').value='';$('fAte').value='';carregarTransferencias()};
+
+tick();setInterval(tick,3000);
 </script>
 </body>
 </html>

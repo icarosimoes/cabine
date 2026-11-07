@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from pydantic import BaseModel
 
 DB_PATH = os.environ.get("DB_PATH", "/data/impinj.db")
 WEBHOOK_USER, WEBHOOK_PASS = os.environ["WEBHOOK_USER"], os.environ["WEBHOOK_PASS"]
@@ -38,8 +39,39 @@ def init_db():
           raw TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS ix_ev_recv ON events(received_at);
         CREATE INDEX IF NOT EXISTS ix_ev_epc ON events(epc, received_at);
+
+        CREATE TABLE IF NOT EXISTS destinos(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tipo TEXT NOT NULL CHECK(tipo IN ('setor','lavanderia')),
+          nome TEXT NOT NULL UNIQUE,
+          ativo INTEGER NOT NULL DEFAULT 1,
+          criado_em REAL NOT NULL);
+
+        CREATE TABLE IF NOT EXISTS lotes(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          criado_em REAL NOT NULL,
+          janela_segundos INTEGER NOT NULL,
+          quantidade INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'aguardando' CHECK(status IN ('aguardando','transferido')));
+
+        CREATE TABLE IF NOT EXISTS lote_itens(
+          lote_id INTEGER NOT NULL REFERENCES lotes(id),
+          epc TEXT NOT NULL,
+          PRIMARY KEY(lote_id, epc));
+
+        CREATE TABLE IF NOT EXISTS transferencias(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          lote_id INTEGER NOT NULL UNIQUE REFERENCES lotes(id),
+          destino_id INTEGER NOT NULL REFERENCES destinos(id),
+          observacao TEXT,
+          criado_em REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS ix_transf_destino ON transferencias(destino_id);
+        CREATE INDEX IF NOT EXISTS ix_transf_criado ON transferencias(criado_em);
         """)
         con.commit()
+        if not con.execute("SELECT 1 FROM destinos").fetchone():
+            con.execute("INSERT INTO destinos(tipo,nome,ativo,criado_em) VALUES('setor','Governança',1,?)", (time.time(),))
+            con.commit()
 
 
 def auth(user, pw):
@@ -186,6 +218,153 @@ def events(limit: int = 100, epc: str | None = None, after_id: int = 0, raw: boo
     if epc:
         sql += " AND epc=?"; args.append(epc)
     sql += " ORDER BY id DESC LIMIT ?"; args.append(min(limit, 1000))
+    with closing(db()) as con:
+        return [dict(r) for r in con.execute(sql, args).fetchall()]
+
+
+class DestinoIn(BaseModel):
+    tipo: str
+    nome: str
+
+
+class DestinoPatch(BaseModel):
+    ativo: bool
+
+
+class TransferenciaIn(BaseModel):
+    destino_id: int
+    observacao: str | None = None
+
+
+@app.post("/api/lotes/registrar", dependencies=[Depends(ui_auth)])
+def registrar_lote(janela_segundos: int = 15):
+    janela_segundos = max(1, min(janela_segundos, 600))
+    now = time.time()
+    with closing(db()) as con:
+        epcs = [r["epc"] for r in con.execute(
+            "SELECT DISTINCT epc FROM events WHERE epc IS NOT NULL AND received_at>?",
+            (now - janela_segundos,)).fetchall()]
+        if not epcs:
+            raise HTTPException(400, f"nenhuma tag lida nos últimos {janela_segundos}s")
+        cur = con.execute(
+            "INSERT INTO lotes(criado_em,janela_segundos,quantidade,status) VALUES(?,?,?,'aguardando')",
+            (now, janela_segundos, len(epcs)))
+        lote_id = cur.lastrowid
+        con.executemany("INSERT INTO lote_itens(lote_id,epc) VALUES(?,?)", [(lote_id, e) for e in epcs])
+        con.commit()
+    return {"id": lote_id, "criado_em": now, "quantidade": len(epcs), "epcs": epcs, "status": "aguardando"}
+
+
+@app.get("/api/lotes", dependencies=[Depends(ui_auth)])
+def listar_lotes(status: str | None = None, limit: int = 100):
+    sql = "SELECT * FROM lotes"
+    args: list = []
+    if status:
+        sql += " WHERE status=?"; args.append(status)
+    sql += " ORDER BY id DESC LIMIT ?"; args.append(min(limit, 500))
+    with closing(db()) as con:
+        return [dict(r) for r in con.execute(sql, args).fetchall()]
+
+
+@app.get("/api/lotes/{lote_id}", dependencies=[Depends(ui_auth)])
+def detalhe_lote(lote_id: int):
+    with closing(db()) as con:
+        lote = con.execute("SELECT * FROM lotes WHERE id=?", (lote_id,)).fetchone()
+        if not lote:
+            raise HTTPException(404, "lote não encontrado")
+        epcs = [r["epc"] for r in con.execute("SELECT epc FROM lote_itens WHERE lote_id=?", (lote_id,)).fetchall()]
+        transf = con.execute(
+            """SELECT t.*, d.nome destino_nome, d.tipo destino_tipo FROM transferencias t
+               JOIN destinos d ON d.id=t.destino_id WHERE t.lote_id=?""", (lote_id,)).fetchone()
+    out = dict(lote)
+    out["epcs"] = epcs
+    out["transferencia"] = dict(transf) if transf else None
+    return out
+
+
+@app.post("/api/lotes/{lote_id}/transferir", dependencies=[Depends(ui_auth)])
+def transferir_lote(lote_id: int, payload: TransferenciaIn):
+    now = time.time()
+    with closing(db()) as con:
+        lote = con.execute("SELECT * FROM lotes WHERE id=?", (lote_id,)).fetchone()
+        if not lote:
+            raise HTTPException(404, "lote não encontrado")
+        if lote["status"] == "transferido":
+            raise HTTPException(409, "lote já foi transferido")
+        destino = con.execute("SELECT * FROM destinos WHERE id=? AND ativo=1", (payload.destino_id,)).fetchone()
+        if not destino:
+            raise HTTPException(400, "destino inválido ou inativo")
+        con.execute("INSERT INTO transferencias(lote_id,destino_id,observacao,criado_em) VALUES(?,?,?,?)",
+                    (lote_id, payload.destino_id, (payload.observacao or "").strip() or None, now))
+        con.execute("UPDATE lotes SET status='transferido' WHERE id=?", (lote_id,))
+        con.commit()
+    return {"ok": True, "lote_id": lote_id, "destino": destino["nome"], "criado_em": now}
+
+
+@app.get("/api/destinos", dependencies=[Depends(ui_auth)])
+def listar_destinos(tipo: str | None = None, ativo: bool | None = None):
+    sql = "SELECT * FROM destinos"
+    cond, args = [], []
+    if tipo:
+        cond.append("tipo=?"); args.append(tipo)
+    if ativo is not None:
+        cond.append("ativo=?"); args.append(1 if ativo else 0)
+    if cond:
+        sql += " WHERE " + " AND ".join(cond)
+    sql += " ORDER BY tipo, nome"
+    with closing(db()) as con:
+        return [dict(r) for r in con.execute(sql, args).fetchall()]
+
+
+@app.post("/api/destinos", dependencies=[Depends(ui_auth)])
+def criar_destino(payload: DestinoIn):
+    if payload.tipo not in ("setor", "lavanderia"):
+        raise HTTPException(400, "tipo deve ser 'setor' ou 'lavanderia'")
+    nome = payload.nome.strip()
+    if not nome:
+        raise HTTPException(400, "nome é obrigatório")
+    with closing(db()) as con:
+        try:
+            con.execute("INSERT INTO destinos(tipo,nome,ativo,criado_em) VALUES(?,?,1,?)",
+                        (payload.tipo, nome, time.time()))
+            con.commit()
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "já existe um destino com esse nome")
+        row = con.execute("SELECT * FROM destinos WHERE nome=?", (nome,)).fetchone()
+    return dict(row)
+
+
+@app.patch("/api/destinos/{destino_id}", dependencies=[Depends(ui_auth)])
+def atualizar_destino(destino_id: int, payload: DestinoPatch):
+    with closing(db()) as con:
+        con.execute("UPDATE destinos SET ativo=? WHERE id=?", (1 if payload.ativo else 0, destino_id))
+        con.commit()
+        row = con.execute("SELECT * FROM destinos WHERE id=?", (destino_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "destino não encontrado")
+    return dict(row)
+
+
+@app.get("/api/transferencias", dependencies=[Depends(ui_auth)])
+def listar_transferencias(destino_id: int | None = None, tipo: str | None = None,
+                           desde: float | None = None, ate: float | None = None, limit: int = 200):
+    sql = """SELECT t.id, t.lote_id, t.destino_id, d.nome destino_nome, d.tipo destino_tipo,
+                    t.observacao, t.criado_em, l.quantidade
+             FROM transferencias t
+             JOIN destinos d ON d.id=t.destino_id
+             JOIN lotes l ON l.id=t.lote_id"""
+    cond, args = [], []
+    if destino_id:
+        cond.append("t.destino_id=?"); args.append(destino_id)
+    if tipo:
+        cond.append("d.tipo=?"); args.append(tipo)
+    if desde:
+        cond.append("t.criado_em>=?"); args.append(desde)
+    if ate:
+        cond.append("t.criado_em<=?"); args.append(ate)
+    if cond:
+        sql += " WHERE " + " AND ".join(cond)
+    sql += " ORDER BY t.id DESC LIMIT ?"; args.append(min(limit, 1000))
     with closing(db()) as con:
         return [dict(r) for r in con.execute(sql, args).fetchall()]
 
