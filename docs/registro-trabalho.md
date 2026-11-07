@@ -23,4 +23,10 @@
   7 dias) estavam pela metade e baseadas em SQLite; ficaram em `git stash`
   (`wip-main-py-resumo-hora-csv`). Retomar sobre o codigo Postgres se ainda forem desejadas.
 - Producao tinha 20.937 eventos / 236 EPCs em SQLite (ver `infra/deploy.md` para a migracao).
+- **Deploy em producao (2026-11-07):** backup do SQLite em `/root/backup/impinj-20261107.db` e
+  `impinj-final-20261107.db` (+ copia do `.env`); `SAIDA_USER`/`SAIDA_PASS`/`POSTGRES_PASSWORD` adicionados ao
+  `.env` da VPS; rsync + build + `docker stack deploy`. 25.626 eventos migrados para o Postgres. O app
+  esperou ~10s o Postgres subir (retry funcionou); houve ~1-2 min de `/ingest` indisponivel durante a
+  troca (leitor tem retry). Verificado: `/health` 200, UI 200, sem auth 401, leitor gravando.
+  Volume SQLite antigo `impinj_impinj_data` mantido como backup.
 - **Aberto:** validar com material real a janela de leitura da cabine; sem suite de testes.
