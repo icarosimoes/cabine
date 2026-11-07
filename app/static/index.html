@@ -105,6 +105,7 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
   <div class="sidebar-footer">
     <div class="leitor"><span id="dot" class="dot"></span><span id="status">…</span></div>
     <a class="nav-item" href="#usuarios" data-nav="usuarios" id="navUsuarios" hidden>Usuários</a>
+    <a class="nav-item" href="#alertaswa" data-nav="alertaswa" id="navAlertasWa" hidden>Alertas WhatsApp</a>
     <div class="leitor" id="usuarioBox" style="color:var(--text-dim)"></div>
     <button class="nav-item" id="tema" type="button">Tema claro/escuro</button>
     <button class="nav-item" id="sair" type="button">Sair</button>
@@ -273,6 +274,28 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
   <div class="scroll"><table><thead><tr><th>Status</th><th>Tag RFID</th><th>Item</th><th>Conferido em</th></tr></thead><tbody id="cfItens"></tbody></table></div>
 </section>
 </div>
+<div class="view" data-view="alertaswa" hidden>
+<section>
+  <h2><span>Alertas por WhatsApp</span><span id="waEstado" class="mut"></span></h2>
+  <div class="mut" style="padding:0 16px 8px">Avisa por WhatsApp (Evolution API) quando o rádio para de enviar sinal ao webhook ou quando o <code>/ingest</code> começa a falhar, e quando volta ao normal.</div>
+  <div class="row"><label class="mut"><input id="waAtivo" type="checkbox"> alertas ativos</label></div>
+  <div class="row">
+    <label class="mut">URL da Evolution <input id="waUrl" type="text" placeholder="http://evolution-api:8080" style="width:260px"></label>
+    <label class="mut">Instância <input id="waInstance" type="text" style="width:160px"></label>
+    <label class="mut">API key <input id="waKey" type="password" autocomplete="new-password" placeholder="(deixe vazio para manter)" style="width:220px"></label>
+  </div>
+  <div class="row">
+    <label class="mut">Número(s) de destino <input id="waTo" type="text" placeholder="5511999999999, 5511888888888" style="width:320px"></label>
+  </div>
+  <div class="row">
+    <label class="mut">Sem sinal após (min) <input id="waSem" type="number" min="1" max="1440" style="width:70px"></label>
+    <label class="mut">Falhas no /ingest (10 min) <input id="waFalhas" type="number" min="1" max="1000" style="width:70px"></label>
+    <label class="mut">Repetir lembrete (min) <input id="waRep" type="number" min="5" max="10080" style="width:80px"></label>
+  </div>
+  <div class="row"><button class="acc" id="waSalvar">Salvar</button><button id="waTestar" type="button">Enviar mensagem de teste</button></div>
+  <div id="waMsg" class="msg"></div>
+</section>
+</div>
 <div class="view" data-view="usuarios" hidden>
 <section>
   <h2><span>Usuários</span></h2>
@@ -305,15 +328,22 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
 </div>
 <div class="view" data-view="antenas" hidden>
 <section>
-  <h2><span>Antenas cadastradas</span></h2>
+  <h2><span id="anTitulo">Antenas cadastradas</span></h2>
   <div class="row">
-    <input id="anNome" type="text" placeholder="nome (ex. impinj15f21c)" style="flex:1;min-width:180px">
-    <input id="anModelo" type="text" placeholder="modelo (ex. ImpinjR700)">
-    <select id="anDestino"></select>
-    <button class="acc" id="anSalvar">Salvar</button>
+    <label class="mut">Nome <input id="anNome" type="text" placeholder="ex. impinj15f21c" style="width:220px"></label>
+    <label class="mut">Descrição <input id="anDesc" type="text" placeholder="ex. RFID Rouparia" style="width:200px"></label>
+    <label class="mut">Modelo <select id="anModelo"><option value="">–</option><option>AcuraEdgeR30</option><option>ImpinjR700</option></select></label>
+    <label class="mut">Localização <select id="anDestino"></select></label>
+  </div>
+  <div class="row">
+    <label class="mut">Modo de operação <select id="anModo"><option value="automatico">Automático</option><option value="manual">Manual</option></select></label>
+    <label class="mut"><input id="anAlerta" type="checkbox" checked> Ativar alerta</label>
+    <label class="mut">Endereço IP <input id="anIp" type="text" placeholder="192.168.30.32" style="width:150px"></label>
+    <label class="mut">Porta de comunicação <input id="anPorta" type="number" min="1" max="65535" placeholder="8080" style="width:100px"></label>
+    <button class="acc" id="anSalvar">Salvar</button><button id="anCancelar" type="button" hidden>Cancelar edição</button>
   </div>
   <div id="antenaMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th>Nome</th><th>Modelo</th><th>Ambiente</th></tr></thead><tbody id="antenas"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Nome</th><th>Descrição</th><th>Modelo</th><th>Localização</th><th>Modo</th><th>Alerta</th><th>IP:porta</th><th></th></tr></thead><tbody id="antenas"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="acomodacoes" hidden>
@@ -345,7 +375,7 @@ async function j(u,opts){
 const itemTipo=t=>t?esc(t):'<span class="mut">não cadastrada</span>';
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
-const TITULOS={relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Painel',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
+const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Painel',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
   inventario:'Inventário',catalogo:'Catálogo de itens',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
 let view='painel';
 const LOADERS={
@@ -358,6 +388,7 @@ const LOADERS={
   conferencia:()=>carregarConferencias(),
   antenas:()=>carregarAntenas(),
   usuarios:()=>carregarUsuarios(),
+  alertaswa:()=>carregarAlertasWa(),
   acomodacoes:()=>carregarAcomodacoes(),
   catalogo:()=>carregarCatalogo(),
   destinos:()=>carregarDestinos(),
@@ -631,7 +662,7 @@ let eu=null;
 async function carregarMe(){
   try{eu=await j('/api/me')}catch(e){return}
   $('usuarioBox').textContent=`${eu.nome||eu.usuario} · ${eu.papel}`;
-  $('navUsuarios').hidden=eu.papel!=='admin';
+  $('navUsuarios').hidden=eu.papel!=='admin';$('navAlertasWa').hidden=eu.papel!=='admin';
 }
 $('sair').onclick=async()=>{try{await fetch('/api/logout',{method:'POST'})}catch(e){}location.href='/login'};
 async function carregarUsuarios(){
@@ -658,6 +689,29 @@ $('usSalvar').onclick=async()=>{
     msg.className='msg ok';msg.textContent='usuário cadastrado';['usLogin','usNome','usSenha'].forEach(i=>$(i).value='');await carregarUsuarios()}
   catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
+let waCarregado=false;
+async function carregarAlertasWa(){
+  if(waCarregado)return; // não sobrescreve o que está sendo digitado a cada 3s
+  const c=await j('/api/config/alertas');
+  $('waAtivo').checked=c.ativo;$('waUrl').value=c.wa_url;$('waInstance').value=c.wa_instance;$('waTo').value=c.wa_to;
+  $('waSem').value=c.sem_sinal_min;$('waFalhas').value=c.falhas;$('waRep').value=c.repetir_min;
+  $('waKey').placeholder=c.wa_apikey_definida?'•••••• (definida — deixe vazio para manter)':'cole a API key';
+  $('waEstado').textContent=c.alertas_abertos.length?'⚠ em alerta: '+c.alertas_abertos.join(', '):'sem alertas abertos';
+  waCarregado=true;
+}
+$('waSalvar').onclick=async()=>{
+  const m=$('waMsg');
+  try{await j('/api/config/alertas',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    ativo:$('waAtivo').checked,wa_url:$('waUrl').value,wa_instance:$('waInstance').value,wa_apikey:$('waKey').value,wa_to:$('waTo').value,
+    sem_sinal_min:Number($('waSem').value),falhas:Number($('waFalhas').value),repetir_min:Number($('waRep').value)})});
+    $('waKey').value='';waCarregado=false;await carregarAlertasWa();m.className='msg ok';m.textContent='configuração salva'}
+  catch(e){m.className='msg bad';m.textContent=e.message}
+};
+$('waTestar').onclick=async()=>{
+  const m=$('waMsg');m.className='msg';m.textContent='enviando…';
+  try{await j('/api/alertas/teste',{method:'POST'});m.className='msg ok';m.textContent='mensagem enviada — confira o WhatsApp'}
+  catch(e){m.className='msg bad';m.textContent=e.message}
+};
 async function carregarHoras(){
   const r=await j('/api/leituras-hora');
   $('horas').innerHTML=r.map(h=>`<tr><td>${new Date(h.hora*1000).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'})}</td><td>${h.leituras}</td><td>${h.tags}</td></tr>`).join('')||'<tr><td colspan=3>sem dados ainda (o resumo é gerado a cada minuto)</td></tr>';
@@ -668,17 +722,35 @@ async function carregarSessoes(){
   $('sessoes').innerHTML=r.sessoes.map(x=>`<tr><td>${dt(x.inicio)}</td><td>${x.fim?dt(x.fim):'–'}</td><td>${x.tags}</td><td>${x.lote_id?'#'+x.lote_id:'–'}</td>
     <td>${x.status==='aberta'?'<span class="pill alerta">aberta</span>':'<span class="pill ok">encerrada</span>'}</td></tr>`).join('')||'<tr><td colspan=5>nenhuma sessão registrada</td></tr>';
 }
+let antenasCache=[],antenaEdit=null;
 async function carregarAntenas(){
   await carregarDestinos();
-  $('anDestino').innerHTML='<option value="">ambiente…</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
-  const rows=await j('/api/antenas');
-  $('antenas').innerHTML=rows.map(a=>`<tr><td>${esc(a.nome)}</td><td>${esc(a.modelo||'–')}</td><td>${esc(a.destino_nome||'–')}</td></tr>`).join('')||'<tr><td colspan=3>nenhuma antena cadastrada</td></tr>';
+  if(antenaEdit===null)$('anDestino').innerHTML='<option value="">–</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
+  antenasCache=await j('/api/antenas');
+  $('antenas').innerHTML=antenasCache.map(a=>`<tr><td>${esc(a.nome)}</td><td>${esc(a.descricao||'–')}</td><td>${esc(a.modelo||'–')}</td><td>${esc(a.destino_nome||'–')}</td>
+    <td>${a.modo==='manual'?'Manual':'Automático'}</td><td>${a.alerta?'<span class="pill ok">sim</span>':'não'}</td><td>${a.ip?esc(a.ip)+(a.porta?':'+a.porta:''):'–'}</td>
+    <td><button data-edit="${a.id}">Editar</button></td></tr>`).join('')||'<tr><td colspan=8>nenhuma antena cadastrada</td></tr>';
 }
+function limparAntena(){
+  antenaEdit=null;['anNome','anDesc','anIp','anPorta'].forEach(i=>$(i).value='');$('anModelo').value='';$('anDestino').value='';
+  $('anModo').value='automatico';$('anAlerta').checked=true;$('anTitulo').textContent='Antenas cadastradas';$('anSalvar').textContent='Salvar';$('anCancelar').hidden=true;
+}
+$('antenas').addEventListener('click',e=>{
+  const b=e.target.closest('[data-edit]');if(!b)return;
+  const a=antenasCache.find(x=>x.id===Number(b.dataset.edit));if(!a)return;
+  antenaEdit=a.id;$('anNome').value=a.nome;$('anDesc').value=a.descricao||'';$('anModelo').value=a.modelo||'';$('anDestino').value=a.destino_id||'';
+  $('anModo').value=a.modo;$('anAlerta').checked=a.alerta;$('anIp').value=a.ip||'';$('anPorta').value=a.porta||'';
+  $('anTitulo').textContent='Editar antena: '+a.nome;$('anSalvar').textContent='Atualizar';$('anCancelar').hidden=false;
+  $('anNome').scrollIntoView({block:'center'});
+});
+$('anCancelar').onclick=limparAntena;
 $('anSalvar').onclick=async()=>{
   const msg=$('antenaMsg'),nome=$('anNome').value.trim();
   if(!nome){msg.className='msg bad';msg.textContent='informe o nome da antena';return}
-  try{await j('/api/antenas',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome,modelo:$('anModelo').value.trim()||null,destino_id:$('anDestino').value?Number($('anDestino').value):null})});
-    msg.className='msg ok';msg.textContent='antena salva';$('anNome').value='';$('anModelo').value='';await carregarAntenas()}
+  const corpo={nome,descricao:$('anDesc').value.trim()||null,modelo:$('anModelo').value||null,destino_id:$('anDestino').value?Number($('anDestino').value):null,
+    modo:$('anModo').value,alerta:$('anAlerta').checked,ip:$('anIp').value.trim()||null,porta:$('anPorta').value?Number($('anPorta').value):null};
+  try{await j(antenaEdit?'/api/antenas/'+antenaEdit:'/api/antenas',{method:antenaEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)});
+    msg.className='msg ok';msg.textContent=antenaEdit?'antena atualizada':'antena cadastrada';limparAntena();await carregarAntenas()}
   catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
 async function carregarAcomodacoes(){

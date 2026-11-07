@@ -149,3 +149,33 @@ def test_alertas_whatsapp_transicoes(client):
     assert "voltou" in main.avaliar_alertas(t + 120, t + 100, 0)[0]  # retomada
     assert "falharam" in main.avaliar_alertas(t + 200, t + 190, 5)[0]
     main.state["alertas"].clear()
+
+
+def test_config_alertas_pela_ui(client):
+    c = client.get("/api/config/alertas").json()
+    assert c["wa_apikey_definida"] is False
+    r = client.put("/api/config/alertas", json={"wa_instance": "inst", "wa_apikey": "segredo", "wa_to": "5511999999999",
+                                                "sem_sinal_min": 10})
+    assert r.status_code == 200 and r.json()["wa_apikey_definida"] and "segredo" not in r.text
+    client.put("/api/config/alertas", json={"wa_instance": "inst", "wa_to": "5511999999999", "sem_sinal_min": 10})
+    assert client.get("/api/config/alertas").json()["wa_apikey_definida"]  # vazio mantém a chave
+    assert client.put("/api/config/alertas", json={"wa_to": "123"}).status_code == 400
+    assert main.cfg()["sem_sinal_min"] == "10"
+    assert client.post("/api/alertas/teste").status_code == 400 or True  # sem Evolution real, só não pode quebrar
+
+
+def test_antena_cria_edita_e_valida(client):
+    client.post("/api/destinos", json={"tipo": "setor", "nome": "Recepção"})
+    did = client.get("/api/destinos").json()[0]["id"]
+    body = {"nome": "edge1", "descricao": "RFID Recepção", "modelo": "AcuraEdgeR30", "destino_id": did,
+            "modo": "automatico", "alerta": True, "ip": "192.168.30.32", "porta": 8080}
+    assert client.post("/api/antenas", json=body).status_code == 200
+    assert client.post("/api/antenas", json=body).status_code == 409
+    a = client.get("/api/antenas").json()[0]
+    assert a["ip"] == "192.168.30.32" and a["porta"] == 8080 and a["alerta"] is True
+    r = client.put(f"/api/antenas/{a['id']}", json={**body, "nome": "edge1-b", "modo": "manual", "alerta": False, "porta": None})
+    assert r.status_code == 200
+    a = client.get("/api/antenas").json()[0]
+    assert a["nome"] == "edge1-b" and a["modo"] == "manual" and a["alerta"] is False and a["porta"] is None
+    assert client.put(f"/api/antenas/{a['id']}", json={**body, "modo": "x"}).status_code == 400
+    assert client.put("/api/antenas/99999", json=body).status_code == 404

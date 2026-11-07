@@ -15,10 +15,10 @@ AMBIENTES = [  # nome, tipo, alerta (sino ligado no eTrace)
     ("Piscina", "setor", 1), ("Recepção", "setor", 0), ("Rouparia Geral", "setor", 1),
     ("Saída Serviço", "setor", 1), ("Secagem", "setor", 0),
 ]
-ANTENAS = [  # nome, modelo, ambiente
-    ("impinj15f21c", "ImpinjR700", "Rouparia Geral"),
-    ("edgeR3015f21c-recepcao", "AcuraEdgeR30", "Recepção"),
-    ("edgeR3015f21c-servico", "AcuraEdgeR30", "Saída Serviço"),
+ANTENAS = [  # nome, descricao, modelo, ambiente, modo, alerta, ip, porta (conforme eTrace)
+    ("impinj15f21c", "RFID Rouparia", "ImpinjR700", "Rouparia Geral", "manual", True, None, None),
+    ("edgeR3015f21c-recepcao", "RFID Recepção", "AcuraEdgeR30", "Recepção", "automatico", True, "192.168.30.32", 8080),
+    ("edgeR3015f21c-servico", "RFID Serviço", "AcuraEdgeR30", "Saída Serviço", "automatico", True, "192.168.30.104", 8080),
 ]
 ACOMODACOES = {  # nome: (UHs, [(tipo, qtd por UH, fluxo)])
     "Solteiro": (27, [("Capa edredom solteiro", 2, 1.5), ("Edredom Solteiro", 2, 1),
@@ -38,11 +38,14 @@ with psycopg.connect(os.environ["DATABASE_URL"]) as con:
         con.execute("""INSERT INTO destinos(tipo,nome,ativo,alerta,criado_em) VALUES(%s,%s,1,%s,%s)
                        ON CONFLICT(nome) DO UPDATE SET tipo=excluded.tipo, alerta=excluded.alerta, ativo=1""",
                     (tipo, nome, alerta, now))
-    for nome, modelo, amb in ANTENAS:
+    for nome, desc, modelo, amb, modo, alerta, ip, porta in ANTENAS:
         did = con.execute("SELECT id FROM destinos WHERE nome=%s", (amb,)).fetchone()[0]
-        con.execute("""INSERT INTO antenas(nome,modelo,destino_id,criado_em) VALUES(%s,%s,%s,%s)
-                       ON CONFLICT(nome) DO UPDATE SET modelo=excluded.modelo, destino_id=excluded.destino_id""",
-                    (nome, modelo, did, now))
+        con.execute("""INSERT INTO antenas(nome,descricao,modelo,destino_id,modo,alerta,ip,porta,criado_em)
+                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT(nome) DO UPDATE SET descricao=excluded.descricao, modelo=excluded.modelo,
+                         destino_id=excluded.destino_id, modo=excluded.modo, alerta=excluded.alerta,
+                         ip=excluded.ip, porta=excluded.porta""",
+                    (nome, desc, modelo, did, modo, alerta, ip, porta, now))
     for nome, (uhs, itens) in ACOMODACOES.items():
         aid = con.execute("""INSERT INTO acomodacoes(nome,uhs,criado_em) VALUES(%s,%s,%s)
                              ON CONFLICT(nome) DO UPDATE SET uhs=excluded.uhs RETURNING id""", (nome, uhs, now)).fetchone()[0]

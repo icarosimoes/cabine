@@ -75,4 +75,7 @@
 
 - Codigo pronto (`avaliar_alertas`/`checar_alertas`, `POST /api/alertas/teste`, testes). **Aberto:** configurar
   instancia/chave/numero da Evolution (`evo.solidsd.com.br`, stack `evolution-api` ja existe na VPS) e deploy.
+- Configuracao do alerta pela UI (tela Alertas WhatsApp, tabela `config`) e **Antenas com edicao** e campos do eTrace
+  (descricao, modelo, localizacao, modo automatico/manual, alerta, IP, porta; `PUT /api/antenas/{id}`). Seed das 3 antenas
+  atualizado com IPs 192.168.30.32 / .104 porta 8080. Aberto: deploy.
 

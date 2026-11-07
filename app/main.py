@@ -143,6 +143,8 @@ def init_db():
           hora BIGINT NOT NULL, epc TEXT NOT NULL, leituras INTEGER NOT NULL, melhor_rssi DOUBLE PRECISION,
           PRIMARY KEY(hora, epc))""")
         con.execute("""
+        CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY, valor TEXT NOT NULL)""")
+        con.execute("""
         CREATE TABLE IF NOT EXISTS sessoes(
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           inicio DOUBLE PRECISION NOT NULL, fim DOUBLE PRECISION,
@@ -174,6 +176,9 @@ def init_db():
           modelo TEXT,
           destino_id INTEGER REFERENCES destinos(id),
           criado_em DOUBLE PRECISION NOT NULL)""")
+        for col in ("descricao TEXT", "modo TEXT NOT NULL DEFAULT 'automatico'", "alerta BOOLEAN NOT NULL DEFAULT TRUE",
+                    "ip TEXT", "porta INTEGER"):
+            con.execute(f"ALTER TABLE antenas ADD COLUMN IF NOT EXISTS {col}")
 
         con.execute("""
         CREATE TABLE IF NOT EXISTS acomodacoes(
@@ -358,37 +363,61 @@ def gravando() -> bool:
     return state["conf_ativa"]
 
 
-def enviar_whatsapp(texto: str) -> bool:
-    if not (WA_KEY and WA_INSTANCE and WA_TO):
-        return False
-    ok = True
-    for numero in WA_TO:
+CFG_PADRAO = {"wa_url": WA_URL, "wa_instance": WA_INSTANCE, "wa_apikey": WA_KEY, "wa_to": ",".join(WA_TO),
+              "ativo": "1", "sem_sinal_min": str(ALERTA_SEM_SINAL_MIN), "falhas": str(ALERTA_FALHAS),
+              "repetir_min": str(ALERTA_REPETIR_MIN)}
+
+
+def cfg() -> dict:
+    """Configuração do alerta: o que foi salvo na tela (tabela config) vale mais que o ambiente."""
+    c = dict(CFG_PADRAO)
+    try:
+        with closing(db()) as con:
+            c.update({r["chave"]: r["valor"] for r in con.execute("SELECT chave,valor FROM config").fetchall()})
+    except Exception as e:  # noqa: BLE001
+        print("config indisponível:", e)
+    return c
+
+
+def enviar_whatsapp(texto: str, c: dict | None = None) -> str | None:
+    """Devolve None se enviou; senão a mensagem de erro."""
+    c = c or cfg()
+    destinos = [n for n in (x.strip() for x in c["wa_to"].split(",")) if n]
+    if not (c["wa_apikey"] and c["wa_instance"] and destinos):
+        return "WhatsApp não configurado (instância, chave e número)"
+    erro = None
+    for numero in destinos:
         req = urllib.request.Request(
-            f"{WA_URL}/message/sendText/{WA_INSTANCE}", method="POST",
-            data=json.dumps({"number": "".join(c for c in numero if c.isdigit()), "text": texto}).encode(),
-            headers={"apikey": WA_KEY, "Content-Type": "application/json"})
+            f"{c['wa_url'].rstrip('/')}/message/sendText/{c['wa_instance']}", method="POST",
+            data=json.dumps({"number": "".join(ch for ch in numero if ch.isdigit()), "text": texto}).encode(),
+            headers={"apikey": c["wa_apikey"], "Content-Type": "application/json"})
         try:
             urllib.request.urlopen(req, timeout=15).read()
+        except urllib.error.HTTPError as e:
+            erro = f"Evolution respondeu HTTP {e.code} (confira instância, chave e número)"
         except Exception as e:  # noqa: BLE001
-            print("whatsapp falhou:", e)
-            ok = False
-    return ok
+            erro = f"falha ao falar com a Evolution: {e}"
+    if erro:
+        print("whatsapp falhou:", erro)
+    return erro
 
 
-def avaliar_alertas(agora: float, ultimo_sinal, falhas: int) -> list[str]:
+def avaliar_alertas(agora: float, ultimo_sinal, falhas: int, c: dict | None = None) -> list[str]:
     """Máquina de estados: devolve as mensagens a enviar (alerta na transição, lembrete a cada ALERTA_REPETIR_MIN, retomada)."""
+    c = c or cfg()
+    sem_min, max_falhas, repetir = int(c["sem_sinal_min"]), int(c["falhas"]), int(c["repetir_min"])
     msgs = []
     base = ultimo_sinal or INICIO
     sem_sinal = (agora - base) / 60
     condicoes = {
-        "sem_sinal": (sem_sinal >= ALERTA_SEM_SINAL_MIN,
+        "sem_sinal": (sem_sinal >= sem_min,
                       f"⚠️ Cabine RFID: o rádio está sem enviar sinal ao webhook há {sem_sinal:.0f} min."),
-        "falhas": (falhas >= ALERTA_FALHAS,
+        "falhas": (falhas >= max_falhas,
                    f"⚠️ Cabine RFID: {falhas} requisições do rádio ao /ingest falharam nos últimos 10 min (credencial ou JSON inválido?)."),
     }
     for nome, (ativo, texto) in condicoes.items():
         est = state["alertas"].get(nome)
-        if ativo and (est is None or agora - est >= ALERTA_REPETIR_MIN * 60):
+        if ativo and (est is None or agora - est >= repetir * 60):
             state["alertas"][nome] = agora
             msgs.append(texto)
         elif not ativo and est is not None:
@@ -403,8 +432,11 @@ def checar_alertas():
     with closing(db()) as con:
         last = con.execute("SELECT MAX(received_at) m FROM events").fetchone()["m"]
     ultimo = max(x for x in (last, state["ultimo_sinal"], 0) if x is not None) or None
-    for m in avaliar_alertas(agora, ultimo, len(state["falhas_ingest"])):
-        enviar_whatsapp(m)
+    c = cfg()
+    if c["ativo"] != "1":
+        return
+    for m in avaliar_alertas(agora, ultimo, len(state["falhas_ingest"]), c):
+        enviar_whatsapp(m, c)
 
 
 def push_kuma():
@@ -568,12 +600,51 @@ async def conta_falhas_ingest(request: Request, call_next):
     return resp
 
 
+class AlertaCfg(BaseModel):
+    wa_url: str = ""
+    wa_instance: str = ""
+    wa_apikey: str = ""  # vazio = manter a atual
+    wa_to: str = ""
+    ativo: bool = True
+    sem_sinal_min: int = 30
+    falhas: int = 5
+    repetir_min: int = 120
+
+
+@app.get("/api/config/alertas", dependencies=[Depends(admin_auth)])
+def ler_config_alertas():
+    c = cfg()
+    return {"wa_url": c["wa_url"], "wa_instance": c["wa_instance"], "wa_apikey_definida": bool(c["wa_apikey"]),
+            "wa_to": c["wa_to"], "ativo": c["ativo"] == "1", "sem_sinal_min": int(c["sem_sinal_min"]),
+            "falhas": int(c["falhas"]), "repetir_min": int(c["repetir_min"]),
+            "alertas_abertos": sorted(state["alertas"])}
+
+
+@app.put("/api/config/alertas", dependencies=[Depends(admin_auth)])
+def salvar_config_alertas(b: AlertaCfg):
+    if not (1 <= b.sem_sinal_min <= 1440 and 1 <= b.falhas <= 1000 and 5 <= b.repetir_min <= 10080):
+        raise HTTPException(400, "limites inválidos (sem sinal 1–1440 min, falhas 1–1000, repetir 5–10080 min)")
+    for n in (x.strip() for x in b.wa_to.split(",") if x.strip()):
+        if not 10 <= len("".join(ch for ch in n if ch.isdigit())) <= 15:
+            raise HTTPException(400, f"número inválido: {n} (use DDI+DDD+número)")
+    valores = {"wa_url": b.wa_url.strip() or CFG_PADRAO["wa_url"], "wa_instance": b.wa_instance.strip(),
+               "wa_to": ",".join(x.strip() for x in b.wa_to.split(",") if x.strip()), "ativo": "1" if b.ativo else "0",
+               "sem_sinal_min": str(b.sem_sinal_min), "falhas": str(b.falhas), "repetir_min": str(b.repetir_min)}
+    if b.wa_apikey.strip():
+        valores["wa_apikey"] = b.wa_apikey.strip()
+    with closing(db()) as con:
+        for k, v in valores.items():
+            con.execute("INSERT INTO config(chave,valor) VALUES(%s,%s) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor", (k, v))
+        con.commit()
+    return ler_config_alertas()
+
+
 @app.post("/api/alertas/teste", dependencies=[Depends(admin_auth)])
 def testar_alerta():
-    ok = enviar_whatsapp("✅ Cabine RFID: mensagem de teste do alerta por WhatsApp.")
-    if not ok:
-        raise HTTPException(400, "WhatsApp não configurado (WHATSAPP_APIKEY/INSTANCE/TO) ou envio falhou")
-    return {"ok": True, "destinos": len(WA_TO)}
+    erro = enviar_whatsapp("✅ Cabine RFID: mensagem de teste do alerta por WhatsApp.")
+    if erro:
+        raise HTTPException(400, erro)
+    return {"ok": True}
 
 
 @app.get("/health")
@@ -974,28 +1045,61 @@ def listar_saidas(documentado: bool | None = None, destino_id: int | None = None
 
 class AntenaIn(BaseModel):
     nome: str
+    descricao: str | None = None
     modelo: str | None = None
-    destino_id: int | None = None
+    destino_id: int | None = None  # "Localização" no eTrace
+    modo: str = "automatico"  # automatico | manual
+    alerta: bool = True
+    ip: str | None = None
+    porta: int | None = None
+
+
+def _valida_antena(con, p: AntenaIn) -> dict:
+    nome = p.nome.strip()
+    if not nome:
+        raise HTTPException(400, "nome é obrigatório")
+    if p.modo not in ("automatico", "manual"):
+        raise HTTPException(400, "modo deve ser automatico ou manual")
+    if p.porta is not None and not 1 <= p.porta <= 65535:
+        raise HTTPException(400, "porta inválida (1–65535)")
+    if p.destino_id and not con.execute("SELECT 1 FROM destinos WHERE id=%s", (p.destino_id,)).fetchone():
+        raise HTTPException(400, "localização inválida")
+    return {"nome": nome, "descricao": (p.descricao or "").strip() or None, "modelo": (p.modelo or "").strip() or None,
+            "destino_id": p.destino_id, "modo": p.modo, "alerta": p.alerta, "ip": (p.ip or "").strip() or None,
+            "porta": p.porta}
 
 
 @app.get("/api/antenas", dependencies=[Depends(ui_auth)])
 def listar_antenas():
     with closing(db()) as con:
-        return con.execute("""SELECT a.id, a.nome, a.modelo, a.destino_id, d.nome destino_nome
+        return con.execute("""SELECT a.id, a.nome, a.descricao, a.modelo, a.destino_id, d.nome destino_nome,
+                                     a.modo, a.alerta, a.ip, a.porta
                               FROM antenas a LEFT JOIN destinos d ON d.id=a.destino_id ORDER BY a.nome""").fetchall()
 
 
 @app.post("/api/antenas", dependencies=[Depends(admin_auth)])
 def salvar_antena(payload: AntenaIn):
-    nome = payload.nome.strip()
-    if not nome:
-        raise HTTPException(400, "nome é obrigatório")
     with closing(db()) as con:
-        if payload.destino_id and not con.execute("SELECT 1 FROM destinos WHERE id=%s", (payload.destino_id,)).fetchone():
-            raise HTTPException(400, "destino inválido")
-        con.execute("""INSERT INTO antenas(nome,modelo,destino_id,criado_em) VALUES(%s,%s,%s,%s)
-                       ON CONFLICT(nome) DO UPDATE SET modelo=excluded.modelo, destino_id=excluded.destino_id""",
-                    (nome, payload.modelo, payload.destino_id, time.time()))
+        v = _valida_antena(con, payload)
+        if con.execute("SELECT 1 FROM antenas WHERE nome=%s", (v["nome"],)).fetchone():
+            raise HTTPException(409, "já existe antena com esse nome (use Editar)")
+        con.execute("""INSERT INTO antenas(nome,descricao,modelo,destino_id,modo,alerta,ip,porta,criado_em)
+                       VALUES(%(nome)s,%(descricao)s,%(modelo)s,%(destino_id)s,%(modo)s,%(alerta)s,%(ip)s,%(porta)s,%(t)s)""",
+                    {**v, "t": time.time()})
+        con.commit()
+    return {"ok": True}
+
+
+@app.put("/api/antenas/{antena_id}", dependencies=[Depends(admin_auth)])
+def editar_antena(antena_id: int, payload: AntenaIn):
+    with closing(db()) as con:
+        if not con.execute("SELECT 1 FROM antenas WHERE id=%s", (antena_id,)).fetchone():
+            raise HTTPException(404, "antena não encontrada")
+        v = _valida_antena(con, payload)
+        if con.execute("SELECT 1 FROM antenas WHERE nome=%s AND id<>%s", (v["nome"], antena_id)).fetchone():
+            raise HTTPException(409, "já existe outra antena com esse nome")
+        con.execute("""UPDATE antenas SET nome=%(nome)s, descricao=%(descricao)s, modelo=%(modelo)s, destino_id=%(destino_id)s,
+                       modo=%(modo)s, alerta=%(alerta)s, ip=%(ip)s, porta=%(porta)s WHERE id=%(id)s""", {**v, "id": antena_id})
         con.commit()
     return {"ok": True}
 
