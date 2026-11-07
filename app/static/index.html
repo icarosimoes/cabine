@@ -84,6 +84,7 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
     <a class="nav-item" href="#painel" data-nav="painel">Painel</a>
     <div class="nav-section">Operação</div>
     <a class="nav-item" href="#leitura" data-nav="leitura">Leitura da cabine</a>
+    <a class="nav-item" href="#conferencia" data-nav="conferencia">Conferência de estoque</a>
     <a class="nav-item" href="#transferencias" data-nav="transferencias">Transferências</a>
     <div class="nav-section">Controle</div>
     <a class="nav-item" href="#evasao" data-nav="evasao">Alertas de evasão <span class="badge" id="badgeEvasao"></span></a>
@@ -179,12 +180,10 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
     <select id="invComposicao" class="mut"></select>
     <select id="invCor" class="mut"></select>
   </div>
+  <div class="row" style="justify-content:flex-end;padding-bottom:0"><button class="acc" id="iniciarConf">Iniciar conferência de inventário</button></div>
+  <div id="confMsg" class="msg"></div>
   <div class="row" style="padding-top:0"><b id="invResumo">Resumo — carregando…</b></div>
-  <div class="scroll"><table><thead><tr><th>Tipo</th><th>Quantidade</th></tr></thead><tbody id="invTabela"></tbody></table></div>
-</section>
-<section>
-  <h2><span>Enxoval esperado × atual <span class="mut">(UHs × qtd por UH × fluxo, itens "Em uso")</span></span></h2>
-  <div class="scroll"><table><thead><tr><th>Tipo</th><th>Esperado</th><th>Atual</th><th>Diferença</th></tr></thead><tbody id="invEsperado"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Tipo</th><th>Quantidade</th><th>Esperado</th><th>Diferença</th></tr></thead><tbody id="invTabela"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="catalogo" hidden>
@@ -245,6 +244,24 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
   <div class="scroll"><table><thead><tr><th>Hora</th><th>EPC</th><th>Item</th><th>Antena</th><th>RSSI</th></tr></thead><tbody id="evs"></tbody></table></div>
 </section>
 </div>
+<div class="view" data-view="conferencia" hidden>
+<section>
+  <h2><span>Conferências de estoque</span></h2>
+  <div class="mut" style="padding:10px 16px 0">Para iniciar uma conferência, use o botão em Inventário (respeita os filtros escolhidos). Conferido = tag lida pelo leitor depois do início.</div>
+  <div class="scroll"><table><thead><tr><th>Início</th><th>Filtros aplicados</th><th>Esperados</th><th>Status</th><th></th></tr></thead><tbody id="confLista"></tbody></table></div>
+</section>
+<section id="confDetalhe" hidden>
+  <h2><span id="confTitulo">Detalhes da conferência</span><span><button id="confFinalizar" class="acc">Finalizar conferência</button> <button id="confFechar">fechar</button></span></h2>
+  <div class="cards" style="padding:16px 16px 0">
+    <div class="card"><b id="cfEsp">–</b><span>itens esperados</span></div>
+    <div class="card"><b id="cfConf" style="color:var(--green)">–</b><span>itens conferidos</span></div>
+    <div class="card"><b id="cfNao" style="color:var(--red)">–</b><span>não conferidos</span></div>
+    <div class="card"><b id="cfPct" style="color:var(--teal)">–</b><span>percentual · <span id="cfDur">–</span> min</span></div>
+  </div>
+  <div class="row"><span class="mut" id="cfInfo"></span><label class="mut"><input type="checkbox" id="cfSoNao"> exibir só não conferidos</label></div>
+  <div class="scroll"><table><thead><tr><th>Status</th><th>Tag RFID</th><th>Item</th><th>Conferido em</th></tr></thead><tbody id="cfItens"></tbody></table></div>
+</section>
+</div>
 <div class="view" data-view="antenas" hidden>
 <section>
   <h2><span>Antenas cadastradas</span></h2>
@@ -286,7 +303,7 @@ async function j(u,opts){
 const itemTipo=t=>t?esc(t):'<span class="mut">não cadastrada</span>';
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
-const TITULOS={antenas:'Antenas',acomodacoes:'Acomodações',painel:'Painel',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
+const TITULOS={conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Painel',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
   inventario:'Inventário',catalogo:'Catálogo de itens',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
 let view='painel';
 const LOADERS={
@@ -294,7 +311,8 @@ const LOADERS={
   leitura:()=>carregarPendentes(),
   transferencias:async()=>{await carregarDestinos();await carregarTransferencias()},
   evasao:async()=>{await carregarDestinos();await carregarEvasoes()},
-  inventario:async()=>{await carregarOpcoesInventario();await carregarInventario();await carregarEsperado()},
+  inventario:async()=>{await carregarOpcoesInventario();await carregarInventario()},
+  conferencia:()=>carregarConferencias(),
   antenas:()=>carregarAntenas(),
   acomodacoes:()=>carregarAcomodacoes(),
   catalogo:()=>carregarCatalogo(),
@@ -497,6 +515,7 @@ $('evLimpar').onclick=()=>{$('evDestino').value='';$('evDocumentado').value='';$
 const INV_FILTROS=[['invLocal','localizacoes','localizacao'],['invEstado','estados','estado'],['invTipo','tipos','tipo'],
   ['invFabricante','fabricantes','fabricante'],['invTamanho','tamanhos','tamanho'],['invComposicao','composicoes','composicao'],['invCor','cores','cor']];
 const INV_ROTULOS={invLocal:'Localização',invEstado:'Estado',invTipo:'Tipo de Item',invFabricante:'Fabricante',invTamanho:'Tamanho',invComposicao:'Composição',invCor:'Cor'};
+let invInit=false;
 async function carregarOpcoesInventario(){
   const op=await j('/api/itens/opcoes');
   INV_FILTROS.forEach(([id,chave])=>{
@@ -504,6 +523,7 @@ async function carregarOpcoesInventario(){
     sel.innerHTML=`<option value="">${INV_ROTULOS[id]}: todos</option>`+op[chave].map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
     if(cur)sel.value=cur;
   });
+  if(!invInit){invInit=true;if([...$('invEstado').options].some(o=>o.value==='Em uso'))$('invEstado').value='Em uso'}
 }
 function montaFiltroInventario(){
   const p=new URLSearchParams();
@@ -512,17 +532,55 @@ function montaFiltroInventario(){
 }
 async function carregarInventario(){
   const qs=montaFiltroInventario();
-  const r=await j('/api/inventario'+(qs?'?'+qs:''));
+  const estado=$('invEstado').value;
+  const soEstado=INV_FILTROS.filter(([id])=>$(id).value&&id!=='invEstado').length===0&&estado;
+  const [r,esp]=await Promise.all([j('/api/inventario'+(qs?'?'+qs:'')),soEstado?j('/api/enxoval/esperado?estado='+encodeURIComponent(estado)):Promise.resolve(null)]);
   const ativos=INV_FILTROS.filter(([id])=>$(id).value).map(([id])=>`${INV_ROTULOS[id].toLowerCase()} "${$(id).value}"`);
-  $('invResumo').textContent=`Resumo — ${r.total} item(ns)`+(ativos.length?' com '+ativos.join(', '):' cadastrados');
-  $('invTabela').innerHTML=r.resumo.map(x=>`<tr><td>${esc(x.tipo)}</td><td>${x.quantidade}</td></tr>`).join('')||'<tr><td colspan=2>nenhum item encontrado</td></tr>';
+  $('invResumo').textContent=`Resumo - ${r.total} itens`+(ativos.length?' com '+ativos.join(', '):' cadastrados');
+  const mapa=new Map(r.resumo.map(x=>[x.tipo,{atual:x.quantidade,esperado:0}]));
+  if(esp)esp.linhas.forEach(l=>{const o=mapa.get(l.tipo)||{atual:0,esperado:0};o.esperado=l.esperado;mapa.set(l.tipo,o)});
+  const linhas=[...mapa].sort((a,b)=>a[0].localeCompare(b[0],'pt-BR'));
+  const dif=(a,e)=>{const d=Math.round((a-e)*10)/10;return `<span style="color:${d<0?'var(--red)':'var(--green)'}">${d>0?'+':''}${d}</span>`};
+  const cel=(a,e)=>esp&&e?`<td>${e}</td><td>${dif(a,e)}</td>`:'<td class="mut">–</td><td class="mut">–</td>';
+  const totA=linhas.reduce((n,[,v])=>n+v.atual,0),totE=Math.round(linhas.reduce((n,[,v])=>n+v.esperado,0)*10)/10;
+  $('invTabela').innerHTML=linhas.map(([t,v])=>`<tr><td>${esc(t)}</td><td>${v.atual}</td>${cel(v.atual,v.esperado)}</tr>`).join('')
+    +(linhas.length?`<tr style="font-weight:700"><td>Total</td><td>${totA}</td>${cel(totA,totE)}</tr>`:'<tr><td colspan=4>nenhum item encontrado</td></tr>');
 }
 INV_FILTROS.forEach(([id])=>{$(id).onchange=carregarInventario});
-async function carregarEsperado(){
-  const r=await j('/api/enxoval/esperado');
-  $('invEsperado').innerHTML=r.linhas.map(l=>`<tr><td>${esc(l.tipo)}</td><td>${l.esperado||'–'}</td><td>${l.atual}</td>
-    <td style="color:${l.esperado&&l.diferenca<0?'var(--red)':'var(--green)'}">${l.esperado?(l.diferenca>0?'+':'')+l.diferenca:'–'}</td></tr>`).join('')||'<tr><td colspan=4>sem par de enxoval cadastrado (Acomodações)</td></tr>';
+let confId=null;
+$('iniciarConf').onclick=async()=>{
+  const f={};INV_FILTROS.forEach(([id,,param])=>{if($(id).value)f[param]=$(id).value});
+  const msg=$('confMsg');msg.className='msg';msg.textContent='criando conferência…';
+  try{const r=await j('/api/conferencias',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filtros:f})});
+    confId=r.id;location.hash='#conferencia';msg.textContent=''}
+  catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
+async function carregarConferencias(){
+  const rows=await j('/api/conferencias');
+  $('confLista').innerHTML=rows.map(c=>`<tr><td>${dt(c.iniciada_em)}</td><td>${esc(c.filtros_desc)}</td><td>${c.esperados}</td>
+    <td>${c.status==='andamento'?'<span class="pill alerta">em andamento</span>':'<span class="pill ok">finalizada</span>'}</td>
+    <td><button class="verConf" data-id="${c.id}">ver</button></td></tr>`).join('')||'<tr><td colspan=5>nenhuma conferência realizada</td></tr>';
+  if(!confId&&rows.length&&rows[0].status==='andamento')confId=rows[0].id;
+  if(confId)await carregarConfDetalhe();else $('confDetalhe').hidden=true;
 }
+async function carregarConfDetalhe(){
+  const c=await j('/api/conferencias/'+confId+($('cfSoNao').checked?'?somente=nao_conferidos':''));
+  $('confDetalhe').hidden=false;
+  $('confTitulo').textContent=`Conferência #${c.id} — ${c.status==='andamento'?'em andamento':'finalizada'}`;
+  $('cfEsp').textContent=c.esperados;$('cfConf').textContent=c.conferidos;$('cfNao').textContent=c.nao_conferidos;
+  $('cfPct').textContent=c.percentual+'%';$('cfDur').textContent=c.duracao_min;
+  $('cfInfo').textContent=`Iniciada ${dt(c.iniciada_em)}${c.finalizada_em?' · finalizada '+dt(c.finalizada_em):''} · filtros: ${c.filtros_desc}`;
+  $('confFinalizar').hidden=c.status!=='andamento';
+  $('cfItens').innerHTML=c.itens.map(i=>`<tr><td>${i.conferido_em?'<span class="pill ok">✓ conferido</span>':'<span class="pill alerta">não conferido</span>'}</td>
+    <td class="epc">${esc(i.epc)}</td><td>${esc(i.tipo)}</td><td>${i.conferido_em?dt(i.conferido_em):'–'}</td></tr>`).join('')||'<tr><td colspan=4>nenhum item</td></tr>';
+}
+document.addEventListener('click',async e=>{const b=e.target.closest('.verConf');if(!b)return;confId=Number(b.dataset.id);await carregarConfDetalhe();$('confDetalhe').scrollIntoView()});
+$('cfSoNao').onchange=()=>confId&&carregarConfDetalhe();
+$('confFechar').onclick=()=>{confId=null;$('confDetalhe').hidden=true};
+$('confFinalizar').onclick=async()=>{
+  if(!confId||!confirm('Finalizar a conferência? Os itens não lidos até agora ficam como não conferidos.'))return;
+  try{await j('/api/conferencias/'+confId+'/finalizar',{method:'POST'});await carregarConferencias()}catch(e){alert(e.message)}
+};
 async function carregarAntenas(){
   await carregarDestinos();
   $('anDestino').innerHTML='<option value="">ambiente…</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');

@@ -115,6 +115,23 @@ def init_db():
         con.execute("ALTER TABLE destinos ADD COLUMN IF NOT EXISTS alerta INTEGER NOT NULL DEFAULT 0")
 
         con.execute("""
+        CREATE TABLE IF NOT EXISTS conferencias(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          filtros_desc TEXT NOT NULL,
+          iniciada_em DOUBLE PRECISION NOT NULL,
+          finalizada_em DOUBLE PRECISION,
+          status TEXT NOT NULL DEFAULT 'andamento' CHECK(status IN ('andamento','finalizada')),
+          esperados INTEGER NOT NULL,
+          conferidos INTEGER)""")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS conferencia_itens(
+          conferencia_id INTEGER NOT NULL REFERENCES conferencias(id) ON DELETE CASCADE,
+          epc TEXT NOT NULL,
+          tipo TEXT NOT NULL,
+          conferido_em DOUBLE PRECISION,
+          PRIMARY KEY(conferencia_id, epc))""")
+
+        con.execute("""
         CREATE TABLE IF NOT EXISTS antenas(
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           nome TEXT NOT NULL UNIQUE,
@@ -763,6 +780,98 @@ def enxoval_esperado(estado: str = "Em uso"):
     linhas = [{"tipo": t, "esperado": round(esperado.get(t, 0), 1), "atual": atual.get(t, 0),
                "diferenca": round(atual.get(t, 0) - esperado.get(t, 0), 1)} for t in tipos]
     return {"estado": estado, "linhas": linhas}
+
+
+FILTRO_CAMPOS = ("localizacao", "estado", "tipo", "fabricante", "tamanho", "composicao", "cor")
+
+
+def filtro_sql(f: dict):
+    cond, args = [], []
+    for c in FILTRO_CAMPOS:  # nomes de coluna vêm só desta lista fixa
+        if f.get(c):
+            cond.append(f"v.{c}=%s"); args.append(f[c])
+    return ((" WHERE " + " AND ".join(cond)) if cond else ""), args
+
+
+class ConferenciaIn(BaseModel):
+    filtros: dict[str, str] = {}
+
+
+def _stats(itens, iniciada, finalizada, agora):
+    conf = sum(1 for i in itens if i["conferido_em"])
+    total = len(itens)
+    return {"esperados": total, "conferidos": conf, "nao_conferidos": total - conf,
+            "percentual": round(100 * conf / total) if total else 0,
+            "duracao_min": round(((finalizada or agora) - iniciada) / 60)}
+
+
+@app.post("/api/conferencias", dependencies=[Depends(ui_auth)])
+def iniciar_conferencia(payload: ConferenciaIn):
+    filtros = {k: v for k, v in payload.filtros.items() if k in FILTRO_CAMPOS and v}
+    where, args = filtro_sql(filtros)
+    now = time.time()
+    with closing(db()) as con:
+        if con.execute("SELECT 1 FROM conferencias WHERE status='andamento'").fetchone():
+            raise HTTPException(409, "já existe uma conferência em andamento; finalize-a antes")
+        itens = con.execute(f"SELECT v.epc, v.tipo FROM ({ITENS_VIEW_SQL}) v{where}", args).fetchall()
+        if not itens:
+            raise HTTPException(400, "nenhum item cadastrado com esses filtros")
+        desc = ", ".join(f'{k} "{v}"' for k, v in filtros.items()) or "sem filtros"
+        cid = con.execute("""INSERT INTO conferencias(filtros_desc,iniciada_em,status,esperados)
+                             VALUES(%s,%s,'andamento',%s) RETURNING id""", (desc, now, len(itens))).fetchone()["id"]
+        with con.cursor() as cur:
+            cur.executemany("INSERT INTO conferencia_itens(conferencia_id,epc,tipo) VALUES(%s,%s,%s)",
+                            [(cid, i["epc"], i["tipo"]) for i in itens])
+        con.commit()
+    return {"id": cid, "esperados": len(itens), "filtros_desc": desc}
+
+
+@app.get("/api/conferencias", dependencies=[Depends(ui_auth)])
+def listar_conferencias():
+    with closing(db()) as con:
+        return con.execute("SELECT * FROM conferencias ORDER BY id DESC LIMIT 100").fetchall()
+
+
+@app.get("/api/conferencias/{cid}", dependencies=[Depends(ui_auth)])
+def detalhe_conferencia(cid: int, somente: str | None = None, limit: int = 5000):
+    now = time.time()
+    with closing(db()) as con:
+        c = con.execute("SELECT * FROM conferencias WHERE id=%s", (cid,)).fetchone()
+        if not c:
+            raise HTTPException(404, "conferência não encontrada")
+        if c["status"] == "andamento":  # conferido = visto pelo leitor desde o início
+            itens = con.execute("""SELECT ci.epc, ci.tipo, e.m AS conferido_em FROM conferencia_itens ci
+                LEFT JOIN (SELECT epc, MIN(received_at) m FROM events WHERE received_at>=%s GROUP BY epc) e ON e.epc=ci.epc
+                WHERE ci.conferencia_id=%s ORDER BY ci.tipo, ci.epc""", (c["iniciada_em"], cid)).fetchall()
+        else:
+            itens = con.execute("""SELECT epc, tipo, conferido_em FROM conferencia_itens
+                                   WHERE conferencia_id=%s ORDER BY tipo, epc""", (cid,)).fetchall()
+    stats = _stats(itens, c["iniciada_em"], c["finalizada_em"], now)
+    if somente == "nao_conferidos":
+        itens = [i for i in itens if not i["conferido_em"]]
+    elif somente == "conferidos":
+        itens = [i for i in itens if i["conferido_em"]]
+    return {**c, **stats, "itens": itens[:min(limit, 10000)]}
+
+
+@app.post("/api/conferencias/{cid}/finalizar", dependencies=[Depends(ui_auth)])
+def finalizar_conferencia(cid: int):
+    now = time.time()
+    with closing(db()) as con:
+        c = con.execute("SELECT * FROM conferencias WHERE id=%s", (cid,)).fetchone()
+        if not c:
+            raise HTTPException(404, "conferência não encontrada")
+        if c["status"] == "finalizada":
+            raise HTTPException(409, "conferência já finalizada")
+        con.execute("""UPDATE conferencia_itens ci SET conferido_em=e.m
+                       FROM (SELECT epc, MIN(received_at) m FROM events WHERE received_at>=%s GROUP BY epc) e
+                       WHERE ci.conferencia_id=%s AND e.epc=ci.epc""", (c["iniciada_em"], cid))
+        conf = con.execute("SELECT COUNT(*) n FROM conferencia_itens WHERE conferencia_id=%s AND conferido_em IS NOT NULL",
+                           (cid,)).fetchone()["n"]
+        con.execute("UPDATE conferencias SET status='finalizada', finalizada_em=%s, conferidos=%s WHERE id=%s",
+                    (now, conf, cid))
+        con.commit()
+    return {"ok": True, "id": cid, "esperados": c["esperados"], "conferidos": conf}
 
 @app.get("/", dependencies=[Depends(ui_auth)])
 def index():

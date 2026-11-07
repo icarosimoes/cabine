@@ -40,6 +40,12 @@ Data de referencia: 2026-11-07.
 - **Alerta por ambiente**: ligado onde a peca nao deveria cruzar antena de controle (Apartamentos, Rouparia
   Geral...); desligado em Lavanderia, Relavar, Recepcao, Secagem. Ainda nao dispara nada: so e cadastro.
 
+- **Inventario no modelo do eTrace**: filtro de estado padrao "Em uso", resumo com total, colunas Esperado e
+  Diferenca (so quando o unico filtro e o estado) e botao "Iniciar conferencia de inventario".
+- **Conferencia de estoque**: ao iniciar, guarda o snapshot dos EPCs que casam com os filtros (so uma em
+  andamento por vez). "Conferido" = tag lida pelo leitor depois do inicio (calculado ao vivo a partir de
+  `events`); ao finalizar, grava `conferido_em` por item. Nao ha usuario ainda (depende do login com papeis).
+
 ## Convencoes
 
 - Textos de UI em pt-BR; tabelas/rotas de dominio em pt-BR; termos do leitor/evento em ingles (Impinj).

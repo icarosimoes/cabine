@@ -53,3 +53,10 @@
   Governanca), 3 antenas, 3 acomodacoes, 20 itens de enxoval. `/health` ok, leitor gravando, `esperado` responde.
 - **Aberto:** o CSV nao traz estado, entao o "atual" do Cabine (3.619 Em uso) fica acima do eTrace (3.232 Em uso):
   ~387 itens estao em outros estados la (manutencao/vendido). Ajustar os estados para o esperado x atual bater.
+
+### Inventario no padrao eTrace + Conferencia de estoque (2026-11-07)
+
+- Inventario: estado padrao "Em uso", resumo com total, Esperado/Diferenca na mesma tabela, botao
+  "Iniciar conferencia de inventario". Nova tela Conferencia de estoque (lista, detalhe com esperados/
+  conferidos/nao conferidos/%/duracao, filtro "so nao conferidos", finalizar). Testado local (3 de 9 = 33%).
+- **Aberto:** deploy em producao (aguardando autorizacao).

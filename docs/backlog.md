@@ -18,7 +18,7 @@
 
 ## Aprendido com o eTrace (nao feito ainda)
 
-- **Conferencia de estoque** (esperados x conferidos x nao conferidos, % e duracao, por usuario): maior lacuna.
+- Conferencia de estoque: feita (2026-11-07); falta registrar o usuario e exportar/imprimir o resultado.
 - **Usuario em cada movimentacao** e impressao de movimentacoes (precisa de login com usuarios).
 - **Leitor manual** (colar/ler tags avulsas e confirmar).
 - **Monitor de antenas de controle ao vivo** (intervalo, som, pausa, relatorio) e uso do `alerta` do ambiente
