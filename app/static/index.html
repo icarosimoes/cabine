@@ -29,6 +29,7 @@ button.acc:disabled{opacity:.5;cursor:default}
 .mut{color:var(--mut);font-size:12px}
 .pill{font-size:11px;padding:1px 7px;border-radius:999px;background:var(--bd)}
 .pill.setor{color:var(--acc)}.pill.lavanderia{color:var(--bad)}
+.pill.alerta{color:var(--bad);font-weight:600}.pill.ok{color:var(--ok)}
 .msg{padding:0 12px 10px;font-size:13px}
 .msg.ok{color:var(--ok)}.msg.bad{color:var(--bad)}
 .epcs{font-family:ui-monospace,monospace;font-size:11px;color:var(--mut);max-width:320px;overflow:hidden;text-overflow:ellipsis}
@@ -116,6 +117,19 @@ td.toggle{cursor:pointer}
 </section>
 
 <section>
+  <h2><span>Alertas de evasão <span id="evasaoCount" class="mut"></span></span></h2>
+  <div class="row">
+    <select id="evDestino"><option value="">todos os destinos</option></select>
+    <select id="evDocumentado"><option value="">todos</option><option value="false">só não documentados</option><option value="true">só documentados</option></select>
+    <label class="mut">de <input id="evDesde" type="date"></label>
+    <label class="mut">até <input id="evAte" type="date"></label>
+    <button id="evAplicar">filtrar</button>
+    <button id="evLimpar">limpar</button>
+  </div>
+  <div class="scroll"><table><thead><tr><th>Data</th><th>EPC</th><th>Destino</th><th>Status</th></tr></thead><tbody id="evasoes"></tbody></table></div>
+</section>
+
+<section>
   <h2><span>Tags <span id="filtro" style="color:var(--mut)"></span></span>
     <span><select id="hours"><option value="1">1h</option><option value="24" selected>24h</option><option value="168">7 dias</option></select></span></h2>
   <div class="scroll"><table><thead><tr><th>EPC</th><th>Leituras</th><th>Última</th><th>Antenas</th><th>Melhor RSSI</th></tr></thead><tbody id="tags"></tbody></table></div>
@@ -173,7 +187,7 @@ async function tick(){
     const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
     $('evs').innerHTML=evs.map(e=>`<tr><td>${hm(e.received_at)}</td><td>${esc(e.event_type)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>';
   }catch(e){$('status').textContent='erro ao atualizar';$('dot').className='dot bad'}
-  await Promise.all([carregarPendentes(),carregarTransferencias(),carregarOpcoesInventario(),carregarInventario(),carregarCatalogo()]);
+  await Promise.all([carregarPendentes(),carregarTransferencias(),carregarOpcoesInventario(),carregarInventario(),carregarCatalogo(),carregarEvasoes()]);
 }
 document.addEventListener('click',e=>{const t=e.target.closest('td.epc');if(t&&t.dataset.e){epc=t.dataset.e;$('filtro').textContent='· filtro: '+epc;$('limpar').hidden=false;tick()}});
 $('limpar').onclick=()=>{epc=null;$('filtro').textContent='';$('limpar').hidden=true;tick()};
@@ -307,6 +321,28 @@ document.addEventListener('click',async e=>{
 });
 $('fAplicar').onclick=carregarTransferencias;
 $('fLimpar').onclick=()=>{$('fTipo').value='';$('fDestino').value='';$('fDesde').value='';$('fAte').value='';carregarTransferencias()};
+
+function montaFiltroEvasao(){
+  const p=new URLSearchParams();
+  if($('evDestino').value)p.set('destino_id',$('evDestino').value);
+  if($('evDocumentado').value)p.set('documentado',$('evDocumentado').value);
+  if($('evDesde').value)p.set('desde',Math.floor(new Date($('evDesde').value+'T00:00:00').getTime()/1000));
+  if($('evAte').value)p.set('ate',Math.floor(new Date($('evAte').value+'T23:59:59').getTime()/1000));
+  return p.toString();
+}
+async function carregarEvasoes(){
+  $('evDestino').innerHTML='<option value="">todos os destinos</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
+  const qs=montaFiltroEvasao();
+  const rows=await j('/api/saida'+(qs?'?'+qs:''));
+  const alertas=rows.filter(r=>!r.documentado).length;
+  $('evasaoCount').textContent=alertas?('· '+alertas+' não documentado(s)'):'';
+  $('evasoes').innerHTML=rows.map(s=>`<tr>
+    <td>${dt(s.detectado_em)}</td><td class="epc">${esc(s.epc)}</td><td>${esc(s.destino_nome)}</td>
+    <td>${s.documentado?pill('ok')+' documentado':pill('alerta')+' NÃO DOCUMENTADO'}</td>
+  </tr>`).join('')||'<tr><td colspan=4>nenhum evento de saída registrado</td></tr>';
+}
+$('evAplicar').onclick=carregarEvasoes;
+$('evLimpar').onclick=()=>{$('evDestino').value='';$('evDocumentado').value='';$('evDesde').value='';$('evAte').value='';carregarEvasoes()};
 
 const INV_FILTROS=[['invLocal','localizacoes','localizacao'],['invEstado','estados','estado'],['invTipo','tipos','tipo'],
   ['invFabricante','fabricantes','fabricante'],['invTamanho','tamanhos','tamanho'],['invComposicao','composicoes','composicao'],['invCor','cores','cor']];

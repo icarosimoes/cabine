@@ -16,8 +16,9 @@ cd /opt/impinj && docker build -t impinj-rfid:local .
 bash -c 'set -a; . ./.env; set +a; docker stack deploy -c impinj-stack.yml impinj'
 ```
 
-`.env` só na VPS (chmod 600): `WEBHOOK_USER`, `WEBHOOK_PASS`, `UI_USER`, `UI_PASS`, `POSTGRES_PASSWORD`,
-`KUMA_PUSH_URL` (opcional), `STALE_MINUTES` (padrão 30), `RETENTION_DAYS` (padrão 30).
+`.env` só na VPS (chmod 600): `WEBHOOK_USER`, `WEBHOOK_PASS`, `UI_USER`, `UI_PASS`, `SAIDA_USER`,
+`SAIDA_PASS`, `POSTGRES_PASSWORD`, `KUMA_PUSH_URL` (opcional), `STALE_MINUTES` (padrão 30),
+`RETENTION_DAYS` (padrão 30), `SAIDA_JANELA_MINUTOS` (padrão 60).
 DNS: `cabine.solidsd.com.br` → `95.111.250.4` no Cloudflare.
 
 ### Banco de dados (PostgreSQL)
@@ -129,10 +130,39 @@ BASE_URL=http://localhost:8000 UI_USER=... UI_PASS=... WEBHOOK_USER=... WEBHOOK_
 | `POST` | `/api/estados` | Body `{nome, descricao?, comportamento: "ativo"\|"inativo"}`. 409 se nome já existe. |
 | `PATCH` | `/api/itens/{epc}/estado` | Body `{estado_id}`. Define o estado de um item do catálogo. 404 se item não cadastrado, 400 se estado inválido. |
 
+## Controle de evasão (saídas não documentadas)
+
+Leitores RFID fixos nas saídas do prédio (fisicamente separados da cabine, ligados na rede local
+`192.168.30.x`) detectam qualquer EPC passando por ali. Toda detecção é cruzada com o histórico de
+`transferencias`: se a EPC tiver sido transferida pro mesmo destino (ex. "Saída Serviço") dentro da
+janela de `SAIDA_JANELA_MINUTOS` (padrão 60min), a saída é `documentado`; senão, é um alerta de
+possível evasão não documentada.
+
+- **`bridge-saida/`**: programa em Go que roda localmente, na mesma rede dos leitores (a VPS não
+  alcança `192.168.30.x`), e manda cada detecção pro Cabine via `POST /api/saida`. **O protocolo do
+  leitor físico (ex. Acura EdgeR30) ainda não é conhecido** — não implementei um parser especulativo;
+  o programa hoje só conecta, loga os bytes crus recebidos (serve de ferramenta de captura) e nunca
+  chama a API enquanto não houver uma captura real pra basear o parsing. Ver `bridge-saida/README.md`.
+- **Credencial própria** (`SAIDA_USER`/`SAIDA_PASS`), separada de `UI_USER` e `WEBHOOK_USER` — se a
+  máquina local da ponte for comprometida, não dá acesso ao painel nem ao ingest do leitor da cabine.
+- Tela "Alertas de evasão": lista `eventos_saida` (toda detecção, documentada ou não), filtrável por
+  destino/período/status, com o não-documentado destacado em vermelho.
+
+### API da ponte de saída
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `POST` | `/api/saida` | Body `{epc, destino_id}`. Basic auth `SAIDA_USER`/`SAIDA_PASS`. Cruza com `transferencias` e grava em `eventos_saida`. |
+| `GET` | `/api/saida?documentado=&destino_id=&desde=&ate=&limit=` | Lista eventos de saída (basic auth `UI_USER`/`UI_PASS`). |
+
 ## Limitações e riscos conhecidos
 
 - O leitor só envia evento quando lê tag, não há heartbeat. O Kuma avisa "sem eventos há mais de
   `STALE_MINUTES`", o que pode ser só ausência de movimento.
+- **`bridge-saida/` não lê o leitor físico de saída ainda.** O protocolo do leitor (Acura EdgeR30 na
+  porta 8080, visto nos prints de referência) é desconhecido; o programa só loga bytes crus pra servir
+  de captura. `/api/saida` e a tela de alertas funcionam e foram testados, mas ninguém chama eles de
+  verdade até o parser ser escrito a partir de uma captura real de tráfego.
 - **A janela de "Registrar leitura" (padrão 15s) não foi validada com o leitor físico.** Ela assume
   que tags paradas na cabine continuam sendo relidas nesse intervalo. Se isso não acontecer (ou se a
   antena capturar tags de fora da cabine), a quantidade do lote sai errada. Testar com material real

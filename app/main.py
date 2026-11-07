@@ -13,9 +13,11 @@ from pydantic import BaseModel
 DATABASE_URL = os.environ["DATABASE_URL"]
 WEBHOOK_USER, WEBHOOK_PASS = os.environ["WEBHOOK_USER"], os.environ["WEBHOOK_PASS"]
 UI_USER, UI_PASS = os.environ["UI_USER"], os.environ["UI_PASS"]
+SAIDA_USER, SAIDA_PASS = os.environ["SAIDA_USER"], os.environ["SAIDA_PASS"]
 KUMA_PUSH_URL = os.environ.get("KUMA_PUSH_URL", "")
 STALE_MINUTES = int(os.environ.get("STALE_MINUTES", "30"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
+SAIDA_JANELA_MINUTOS = int(os.environ.get("SAIDA_JANELA_MINUTOS", "60"))
 STATIC = Path(__file__).parent / "static"
 security = HTTPBasic()
 
@@ -99,6 +101,17 @@ def init_db():
           estado_id INTEGER NOT NULL REFERENCES estados_inventario(id),
           criado_em DOUBLE PRECISION NOT NULL, atualizado_em DOUBLE PRECISION NOT NULL)""")
         con.execute("CREATE INDEX IF NOT EXISTS ix_itens_tipo ON itens(tipo)")
+
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS eventos_saida(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          epc TEXT NOT NULL,
+          destino_id INTEGER NOT NULL REFERENCES destinos(id),
+          detectado_em DOUBLE PRECISION NOT NULL,
+          documentado INTEGER NOT NULL,
+          transferencia_id INTEGER REFERENCES transferencias(id))""")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_saida_epc ON eventos_saida(epc, detectado_em)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_saida_destino ON eventos_saida(destino_id, detectado_em)")
         con.commit()
 
         if not con.execute("SELECT 1 FROM estados_inventario").fetchone():
@@ -126,6 +139,7 @@ def auth(user, pw):
 
 
 webhook_auth, ui_auth = auth(WEBHOOK_USER, WEBHOOK_PASS), auth(UI_USER, UI_PASS)
+saida_auth = auth(SAIDA_USER, SAIDA_PASS)
 
 
 def first(d: dict, *keys):
@@ -551,6 +565,54 @@ def inventario(localizacao: str | None = None, estado: str | None = None, tipo: 
             args).fetchall()
         total = list(con.execute(f"SELECT COUNT(*) FROM ({ITENS_VIEW_SQL}) v{where}", args).fetchone().values())[0]
     return {"total": total, "resumo": resumo}
+
+
+class SaidaIn(BaseModel):
+    epc: str
+    destino_id: int
+
+
+@app.post("/api/saida", dependencies=[Depends(saida_auth)])
+def registrar_saida(payload: SaidaIn):
+    now = time.time()
+    with closing(db()) as con:
+        destino = con.execute("SELECT * FROM destinos WHERE id=%s", (payload.destino_id,)).fetchone()
+        if not destino:
+            raise HTTPException(400, "destino inválido")
+        match = con.execute("""
+            SELECT t.id FROM transferencias t
+            JOIN lote_itens li ON li.lote_id = t.lote_id
+            WHERE li.epc=%s AND t.destino_id=%s AND t.criado_em>=%s
+            ORDER BY t.criado_em DESC LIMIT 1""",
+            (payload.epc, payload.destino_id, now - SAIDA_JANELA_MINUTOS * 60)).fetchone()
+        documentado = match is not None
+        con.execute("""INSERT INTO eventos_saida(epc,destino_id,detectado_em,documentado,transferencia_id)
+                        VALUES(%s,%s,%s,%s,%s)""",
+                    (payload.epc, payload.destino_id, now, 1 if documentado else 0,
+                     match["id"] if match else None))
+        con.commit()
+    return {"epc": payload.epc, "destino": destino["nome"], "documentado": documentado, "detectado_em": now}
+
+
+@app.get("/api/saida", dependencies=[Depends(ui_auth)])
+def listar_saidas(documentado: bool | None = None, destino_id: int | None = None,
+                   desde: float | None = None, ate: float | None = None, limit: int = 200):
+    sql = """SELECT s.id, s.epc, s.destino_id, d.nome destino_nome, s.detectado_em, s.documentado, s.transferencia_id
+             FROM eventos_saida s JOIN destinos d ON d.id=s.destino_id"""
+    cond, args = [], []
+    if documentado is not None:
+        cond.append("s.documentado=%s"); args.append(1 if documentado else 0)
+    if destino_id:
+        cond.append("s.destino_id=%s"); args.append(destino_id)
+    if desde:
+        cond.append("s.detectado_em>=%s"); args.append(desde)
+    if ate:
+        cond.append("s.detectado_em<=%s"); args.append(ate)
+    if cond:
+        sql += " WHERE " + " AND ".join(cond)
+    sql += " ORDER BY s.id DESC LIMIT %s"; args.append(min(limit, 1000))
+    with closing(db()) as con:
+        return con.execute(sql, args).fetchall()
 
 
 @app.get("/", dependencies=[Depends(ui_auth)])
