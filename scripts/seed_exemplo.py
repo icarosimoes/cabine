@@ -35,8 +35,17 @@ ITENS = [
     dict(epc="EX-TOALHAPRAIA-01", tipo="Toalha Praia Lelis"),
 ]
 
-# Localizações (setores) vistas como "Última localização" nos prints de Antenas de Controle.
-DESTINOS = [("setor", "Apartamentos"), ("setor", "Rouparia Geral"), ("setor", "Piscina")]
+# "Ambientes" vistos no print de Configurações do eTrace. Só entram aqui os que cabem limpo no
+# binário setor/lavanderia deste sistema. "Descarte Inventário" e "Enxoval Danificado" ficam de
+# fora de propósito: lá no eTrace são "Estados de Inventário", um conceito à parte de localização
+# (uma peça pode estar em Descarte Inventário sem isso ser "lavanderia" nem "em uso"); forçar os
+# dois aqui faria o sistema rotular item danificado/baixado como "Em uso", o que é pior que não ter
+# o dado. Ver conversa do projeto sobre separar "estado" de "localização" antes de adicionar esses.
+DESTINOS = [
+    ("setor", "Apartamentos"), ("setor", "Rouparia Geral"), ("setor", "Piscina"),
+    ("setor", "Almoxarifado"), ("setor", "Recepção"), ("setor", "Saída Serviço"),
+    ("lavanderia", "Lavanderia"), ("lavanderia", "Lavanderia Relavar"), ("lavanderia", "Secagem"),
+]
 
 # Dois grupos lidos e transferidos, pra Inventário/Movimentações mostrarem estados variados;
 # o restante dos ITENS fica "Sem leitura" de propósito (mistura realista).
