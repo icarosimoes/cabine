@@ -25,6 +25,11 @@
 - [x] Agente 0.1.4: tray so abre http(s) vindo do `state.json`. [ ] Ainda: tirar escrita de Users em `state.json`/pasta publica (risco de link no tmp do servico).
 - [x] Container sem root (uid 10001). [ ] `govulncheck` no agente; assinatura do instalador; restringir `wa_url` a https/publico.
 
+## Dashboard (2026-11-07)
+
+- Feito: monitoramento das antenas/agentes, alertas recentes, inventario por estado, cabine e conferencia (`GET /api/dashboard`).
+- Ideias: grafico de leituras por hora no Painel; historico de disponibilidade das antenas (hoje so ha o ultimo estado; precisaria de tabela de checagens para "uptime %"); temperatura do Acura/R700; itens parados ha X dias fora da lavanderia; ranking de tipos com maior perda/divergencia; link do card de antena para "Configurar radio".
+
 ## Aprendido com o eTrace (nao feito ainda)
 
 - Conferencia de estoque: feita (2026-11-07); falta registrar o usuario e exportar/imprimir o resultado.

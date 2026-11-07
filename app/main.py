@@ -915,6 +915,77 @@ def summary():
         }
 
 
+def _extra_publico(extra) -> dict:
+    """Só campos seguros/úteis do que o agente leu do rádio (firmware, uptime, preset, webhook)."""
+    try:
+        e = json.loads(extra) if isinstance(extra, str) else (extra or {})
+    except ValueError:
+        return {}
+    out = {k: e[k] for k in ("firmware", "uptime", "serial") if isinstance(e.get(k), (str, int, float))}
+    ap = e.get("activePreset")
+    if isinstance(ap, dict) and isinstance(ap.get("id"), str):
+        out["preset"] = ap["id"]
+    w = _webhook_status(e)
+    if w:
+        out["webhook"] = {"status": w.get("status"), "http": w.get("httpStatusCode")}
+    return out
+
+
+@app.get("/api/dashboard", dependencies=[Depends(ui_auth)])
+def dashboard():
+    """Visão geral para o Painel: monitoramento das antenas/agentes, alertas e números da operação."""
+    now = time.time()
+    dia = now - 86400
+    hoje = now - (now + TZ_OFFSET) % 86400  # 00:00 local de hoje
+    with closing(db()) as con:
+        q1 = lambda sql, *a: list(con.execute(sql, a).fetchone().values())[0]
+        antenas = con.execute("""
+            SELECT a.id, a.nome, a.descricao, a.modelo, a.ip, a.evasao, a.alerta, d.nome ambiente,
+                   s.online, s.latencia_ms, s.detalhe, s.extra, s.verificado_em
+            FROM antenas a LEFT JOIN destinos d ON d.id=a.destino_id
+            LEFT JOIN antena_status s ON s.antena_id=a.id ORDER BY a.evasao, a.nome""").fetchall()
+        agentes = con.execute("SELECT nome, visto_em, versao, host FROM agentes ORDER BY nome").fetchall()
+        envios = con.execute("SELECT quando, tipo, status FROM alerta_envios ORDER BY quando DESC LIMIT 400").fetchall()
+        estados = con.execute("""SELECT e.nome estado, e.comportamento, COUNT(i.epc) qtd FROM estados_inventario e
+                                 LEFT JOIN itens i ON i.estado_id=e.id GROUP BY e.id ORDER BY qtd DESC, e.nome""").fetchall()
+        aguard = con.execute("SELECT COUNT(*) n, COALESCE(SUM(quantidade),0) pecas FROM lotes WHERE status='aguardando'").fetchone()
+        transf = con.execute("""SELECT COUNT(*) n, COALESCE(SUM(l.quantidade),0) pecas FROM transferencias t
+                                JOIN lotes l ON l.id=t.lote_id WHERE t.criado_em>=%s""", (hoje,)).fetchone()
+        ultimas = con.execute("""SELECT t.criado_em, d.nome destino, l.quantidade FROM transferencias t
+                                 JOIN destinos d ON d.id=t.destino_id JOIN lotes l ON l.id=t.lote_id
+                                 ORDER BY t.criado_em DESC LIMIT 5""").fetchall()
+        saida = con.execute("""SELECT COUNT(*) total, COUNT(*) FILTER (WHERE documentado=0) nao FROM eventos_saida
+                               WHERE detectado_em>%s""", (dia,)).fetchone()
+        conf = con.execute("""SELECT id, status, esperados, conferidos, iniciada_em, finalizada_em FROM conferencias
+                              ORDER BY iniciada_em DESC LIMIT 1""").fetchone()
+        total_itens = q1("SELECT COUNT(*) FROM itens")
+    lista = []
+    for a in antenas:
+        visto = a["verificado_em"]
+        fresco = visto is not None and now - visto < AGENTE_SEM_CONTATO_SEG
+        lista.append({**{k: a[k] for k in ("id", "nome", "descricao", "modelo", "ip", "evasao", "alerta", "ambiente", "latencia_ms", "detalhe", "verificado_em")},
+                      "online": bool(a["online"]) if fresco else None,  # None = sem informação recente do agente
+                      "extra": _extra_publico(a["extra"])})
+    ag = [{**x, "online": x["visto_em"] is not None and now - x["visto_em"] < AGENTE_SEM_CONTATO_SEG} for x in agentes]
+    env24 = [e for e in envios if e["quando"] > dia]
+    problemas = [a["nome"] for a in lista if a["online"] is False] + [x["nome"] for x in ag if not x["online"]]
+    return {
+        "now": now,
+        "antenas": lista, "agentes": ag,
+        "resumo": {"antenas_total": len(lista), "antenas_online": sum(1 for a in lista if a["online"]),
+                   "antenas_offline": sum(1 for a in lista if a["online"] is False),
+                   "antenas_sem_info": sum(1 for a in lista if a["online"] is None), "problemas": problemas},
+        "alertas": {"ativos": len(state["alertas"]), "enviados_24h": sum(1 for e in env24 if e["status"] == "enviado"),
+                    "falhas_24h": sum(1 for e in env24 if e["status"] != "enviado"),
+                    "ultimos": [{"quando": e["quando"], "tipo": e["tipo"], "status": e["status"]} for e in envios[:6]]},
+        "cabine": {"lotes_aguardando": aguard["n"], "pecas_aguardando": aguard["pecas"],
+                   "transferencias_hoje": transf["n"], "pecas_hoje": transf["pecas"], "ultimas": ultimas},
+        "evasao": {"saidas_24h": saida["total"], "nao_documentadas_24h": saida["nao"]},
+        "inventario": {"total": total_itens, "por_estado": estados},
+        "conferencia": conf,
+    }
+
+
 @app.get("/api/tags", dependencies=[Depends(ui_auth)])
 def tags(hours: float = 24, limit: int = 200):
     since = time.time() - hours * 3600

@@ -370,3 +370,40 @@ def test_falhas_sao_expurgadas():
     main._falhas["velho"] = [time.time() - 10_000]
     main.bloqueado("novo")
     assert "velho" not in main._falhas
+
+
+def test_dashboard_monitoramento_e_numeros(client):
+    vazio = client.get("/api/dashboard").json()
+    assert vazio["antenas"] == [] and vazio["resumo"]["antenas_total"] == 0 and vazio["conferencia"] is None
+    client.post("/api/antenas", json={"nome": "r700", "modelo": "ImpinjR700", "ip": "10.0.0.1", "porta": 443, "alerta": True})
+    client.post("/api/antenas", json={"nome": "acura", "modelo": "AcuraEdgeR30", "ip": "10.0.0.2", "porta": 80, "evasao": True})
+    ids = {a["nome"]: a["id"] for a in client.get("/api/antenas").json()}
+    d = client.get("/api/dashboard").json()
+    assert d["resumo"]["antenas_sem_info"] == 2 and all(a["online"] is None for a in d["antenas"])  # nunca verificadas
+    ag = client.post("/api/agentes", json={"nome": "hotel"}).json()
+    H = {"X-Agent-Token": ag["token"]}
+    client.post("/api/agente/status", headers=H, auth=None, json={"versao": "0.1.6", "host": "PC", "antenas": [
+        {"id": ids["r700"], "online": True, "latencia_ms": 20, "detalhe": "running",
+         "extra": {"firmware": "9.9", "activePreset": {"id": "etrace"}, "eventWebhookStatus": {"status": "active", "httpStatusCode": 200}, "senha": "x"}},
+        {"id": ids["acura"], "online": False, "detalhe": "sem resposta"}]})
+    d = client.get("/api/dashboard").json()
+    por_nome = {a["nome"]: a for a in d["antenas"]}
+    assert por_nome["r700"]["online"] is True and por_nome["acura"]["online"] is False and por_nome["acura"]["evasao"] is True
+    assert por_nome["r700"]["extra"] == {"firmware": "9.9", "preset": "etrace", "webhook": {"status": "active", "http": 200}}  # só campos seguros
+    assert d["resumo"]["antenas_online"] == 1 and d["resumo"]["problemas"] == ["acura"]
+    assert d["agentes"][0]["online"] is True and d["agentes"][0]["versao"] == "0.1.6"
+    # operação: inventário, lote e estados
+    client.post("/api/itens", json={"epc": "AA11", "tipo": "Roupão"})
+    ingest_e_lote(client)
+    d = client.get("/api/dashboard").json()
+    assert d["inventario"]["total"] == 1 and sum(e["qtd"] for e in d["inventario"]["por_estado"]) == 1
+    assert d["cabine"]["lotes_aguardando"] == 1 and d["cabine"]["pecas_aguardando"] >= 1
+    assert d["evasao"]["nao_documentadas_24h"] == 0
+    assert client.get("/api/dashboard", auth=None).status_code == 401  # exige login
+
+
+def ingest_e_lote(client):
+    with main_db() as con:
+        lid = con.execute("INSERT INTO lotes(criado_em,janela_segundos,quantidade,status) VALUES(%s,15,1,'aguardando') RETURNING id", (time.time(),)).fetchone()["id"]
+        con.execute("INSERT INTO lote_itens(lote_id,epc) VALUES(%s,'AA11')", (lid,))
+        con.commit()

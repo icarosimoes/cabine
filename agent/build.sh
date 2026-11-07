@@ -2,7 +2,7 @@
 # Compila o agente para Windows (amd64) dentro do Docker; saída em dist/. Uso: ./build.sh [versão]
 set -euo pipefail
 cd "$(dirname "$0")"
-VERSION="${1:-$(grep -oP 'Version = "\K[^"]+' internal/config/config.go)}"
+VERSION="${1:-$(tr -d '[:space:]' < VERSION)}"  # versão única em agent/VERSION (o CI usa a mesma)
 mkdir -p dist
 docker run --rm -v "$PWD":/src -w /src -v cabine-gomod:/go/pkg/mod golang:1.25 sh -c "
   gofmt -w . && go vet ./... && go test ./... &&

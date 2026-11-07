@@ -32,6 +32,8 @@ jobs:
     concurrency: deploy-cabine
     steps:
       - uses: actions/checkout@v4
+      - name: Compila o agente Windows (vai na imagem para download no painel)
+        run: ./agent/build.sh
       # Deploy manual-equivalente (rsync + build na VPS + stack deploy), ver docs/infra/deploy.md.
       # Só roda se os secrets existirem; sem eles o job termina com aviso, sem quebrar o CI.
       - name: Deploy na VPS

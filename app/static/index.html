@@ -57,6 +57,13 @@ button:disabled{opacity:.5;cursor:default}
 .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--navy-light)}
 .pill.setor{color:var(--teal)}.pill.lavanderia{color:var(--yellow)}
 .pill.alerta{background:var(--red-soft);color:var(--red)}.pill.ok,.pill.ativo{background:var(--green-soft);color:var(--green)}.pill.inativo{background:var(--red-soft);color:var(--red)}
+.banner{border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-weight:700;display:flex;gap:10px;align-items:center}
+.banner.ok{background:var(--green-soft);color:var(--green);border-color:var(--green)}.banner.bad{background:var(--red-soft);color:var(--red);border-color:var(--red)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}.grid2>section{margin-bottom:0}
+.barra{display:flex;align-items:center;gap:8px;padding:5px 16px;font-size:13px}.barra .rot{width:150px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.barra .tr{flex:1;height:8px;background:var(--navy-light);border-radius:4px;overflow:hidden}.barra .tr i{display:block;height:100%;background:var(--teal)}.barra .tr i.inat{background:var(--muted)}
+.card b.ruim{color:var(--red)}.card b.bom{color:var(--green)}
+.pill.cinza{background:var(--navy-light);color:var(--muted)}
 .msg{padding:0 var(--sp-4) var(--sp-3);font-size:12px}.msg.ok{color:var(--green)}.msg.bad{color:var(--red)}
 .epcs{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted);max-width:320px;overflow:hidden;text-overflow:ellipsis}
 .epcs.open{white-space:normal;max-width:none;overflow:visible;text-overflow:unset;cursor:default}
@@ -114,16 +121,45 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
 <main class="main-content">
 <h1 id="titulo">Painel</h1>
 <div class="view" data-view="painel">
+<div class="banner" id="dashBanner">carregando…</div>
 <div class="cards">
+  <div class="card"><b id="dAntenas">–</b><span>antenas online</span></div>
+  <div class="card"><b id="dAgentes">–</b><span>agentes do hotel online</span></div>
+  <div class="card"><b id="dAlertas">–</b><span>alertas enviados (24h)</span></div>
+  <a class="card" href="#leitura"><b id="cPend">–</b><span>lotes aguardando transferência</span></a>
+  <a class="card" href="#evasao"><b id="cEvasao">–</b><span>saídas não documentadas (últimas 200)</span></a>
+  <div class="card"><b id="dTransfHoje">–</b><span>peças transferidas hoje</span></div>
+  <div class="card"><b id="dItens">–</b><span>itens no inventário</span></div>
+</div>
+<section>
+  <h2><span>Monitoramento das antenas <span id="antCount" class="mut"></span></span><span class="mut">atualiza sozinho a cada 3s</span></h2>
+  <div class="scroll"><table><thead><tr><th>Antena</th><th>Ambiente</th><th>IP</th><th>Status</th><th>Detalhe</th><th>Latência</th><th>Verificado</th></tr></thead><tbody id="dAntenasTb"></tbody></table></div>
+</section>
+<div class="grid2">
+  <section>
+    <h2><span>Agentes do hotel</span></h2>
+    <div class="scroll"><table><thead><tr><th>Agente</th><th>Status</th><th>Versão</th><th>Último contato</th></tr></thead><tbody id="dAgentesTb"></tbody></table></div>
+  </section>
+  <section>
+    <h2><span>Alertas de WhatsApp recentes</span><span class="mut" id="dAlertasInfo"></span></h2>
+    <div class="scroll"><table><thead><tr><th>Quando</th><th>Tipo</th><th>Envio</th></tr></thead><tbody id="dAlertasTb"></tbody></table></div>
+  </section>
+  <section>
+    <h2><span>Inventário por estado</span></h2>
+    <div id="dEstados" style="padding:8px 0"></div>
+  </section>
+  <section>
+    <h2><span>Cabine — últimas transferências</span><span class="mut" id="dCabineInfo"></span></h2>
+    <div class="scroll"><table><thead><tr><th>Quando</th><th>Destino</th><th>Peças</th></tr></thead><tbody id="dTransfTb"></tbody></table></div>
+    <p class="mut" id="dConf" style="margin:0;padding:8px 16px"></p>
+  </section>
+</div>
+<div class="cards" style="margin-top:16px">
   <div class="card"><b id="c1">–</b><span>leituras no último minuto</span></div>
   <div class="card"><b id="c2">–</b><span>leituras na última hora</span></div>
   <div class="card"><b id="c3">–</b><span>tags distintas (1h)</span></div>
   <div class="card"><b id="c4">–</b><span>tags distintas (24h)</span></div>
   <div class="card"><b id="c5">–</b><span>eventos guardados</span></div>
-</div>
-<div class="cards">
-  <a class="card" href="#leitura"><b id="cPend">–</b><span>lotes aguardando transferência</span></a>
-  <a class="card" href="#evasao"><b id="cEvasao">–</b><span>saídas não documentadas (últimas 200)</span></a>
 </div>
 </div>
 <div class="view" data-view="leitura" hidden>
@@ -419,7 +455,7 @@ const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuar
   inventario:'Inventário',catalogo:'Catálogo de itens',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
 let view='painel';
 const LOADERS={
-  painel:()=>Promise.resolve(),
+  painel:()=>carregarDashboard(),
   leitura:async()=>{await carregarPendentes();await carregarSessoes()},
   relatorios:()=>carregarHoras(),
   transferencias:async()=>{await carregarDestinos();await carregarTransferencias()},
@@ -438,6 +474,37 @@ const LOADERS={
   eventos:async()=>{const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
     $('evs').innerHTML=evs.map(e=>`<tr><td>${hm(e.received_at)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${itemTipo(e.tipo)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>'},
 };
+const ROTULO_ALERTA={antena_offline:'Antena offline',agente_offline:'Agente sem contato',webhook_falha:'Webhook do rádio',sem_sinal:'Rádio sem sinal',falhas:'Falhas no /ingest',divergencia:'Divergência',teste:'Teste'};
+const ha=t=>{if(!t)return '–';const a=Date.now()/1000-t;return a<5?'agora':a<90?Math.round(a)+'s atrás':a<5400?Math.round(a/60)+' min atrás':a<172800?Math.round(a/3600)+' h atrás':Math.round(a/86400)+' d atrás'};
+const pillStatus=o=>o===true?'<span class="pill ok">online</span>':o===false?'<span class="pill alerta">OFFLINE</span>':'<span class="pill cinza">sem informação</span>';
+async function carregarDashboard(){
+  const d=await j('/api/dashboard'),r=d.resumo;
+  const ok=!r.problemas.length&&!r.antenas_sem_info;
+  const b=$('dashBanner');b.className='banner '+(ok?'ok':'bad');
+  b.textContent=ok?`✓ Tudo certo: ${r.antenas_online} de ${r.antenas_total} antenas online`+(d.agentes.length?` e ${d.agentes.length} agente(s) em contato`:''):
+    (r.problemas.length?`⚠ ${r.problemas.length} problema(s): ${r.problemas.join(', ')}`:`⚠ ${r.antenas_sem_info} antena(s) sem informação do agente`);
+  const set=(id,v,cls)=>{const e=$(id);e.textContent=v;e.className=cls||''};
+  set('dAntenas',`${r.antenas_online}/${r.antenas_total}`,r.antenas_offline?'ruim':'bom');
+  const agOn=d.agentes.filter(x=>x.online).length;
+  set('dAgentes',d.agentes.length?`${agOn}/${d.agentes.length}`:'–',d.agentes.length&&agOn<d.agentes.length?'ruim':'bom');
+  set('dAlertas',d.alertas.enviados_24h,d.alertas.falhas_24h?'ruim':'');
+  set('dTransfHoje',d.cabine.pecas_hoje);set('dItens',d.inventario.total);
+  $('antCount').textContent=d.antenas.length?'· '+d.antenas.length:'';
+  $('dAntenasTb').innerHTML=d.antenas.map(a=>{
+    const x=a.extra||{},w=x.webhook,det=[a.detalhe||'',x.uptime?'uptime '+x.uptime:'',w&&w.status!=='active'?'webhook '+w.status:''].filter(Boolean).join(' · ');
+    return `<tr><td><b>${esc(a.nome)}</b>${a.evasao?' <span class="pill alerta">evasão</span>':''}<br><span class="mut">${esc(a.descricao||a.modelo||'')}</span></td>
+    <td>${esc(a.ambiente||'–')}</td><td>${esc(a.ip||'–')}</td><td>${pillStatus(a.online)}${a.alerta?'':' <span class="mut">sem alerta</span>'}</td>
+    <td class="mut">${esc(det)}</td><td>${a.latencia_ms!=null&&a.online?a.latencia_ms+' ms':'–'}</td><td>${ha(a.verificado_em)}</td></tr>`}).join('')||'<tr><td colspan=7>nenhuma antena cadastrada</td></tr>';
+  $('dAgentesTb').innerHTML=d.agentes.map(a=>`<tr><td>${esc(a.nome)}<br><span class="mut">${esc(a.host||'')}</span></td><td>${pillStatus(a.online)}</td><td>${esc(a.versao||'–')}</td><td>${ha(a.visto_em)}</td></tr>`).join('')||'<tr><td colspan=4>nenhum agente cadastrado</td></tr>';
+  $('dAlertasInfo').textContent=`${d.alertas.ativos} ativo(s) agora · ${d.alertas.falhas_24h} falha(s) de envio em 24h`;
+  $('dAlertasTb').innerHTML=d.alertas.ultimos.map(a=>`<tr><td>${ha(a.quando)}</td><td>${esc(ROTULO_ALERTA[a.tipo]||a.tipo||'–')}</td><td>${a.status==='enviado'?pill('ok')+' enviado':pill('alerta')+' '+esc(a.status)}</td></tr>`).join('')||'<tr><td colspan=3>nenhum alerta enviado ainda</td></tr>';
+  const max=Math.max(1,...d.inventario.por_estado.map(e=>e.qtd));
+  $('dEstados').innerHTML=d.inventario.por_estado.map(e=>`<div class="barra"><span class="rot" title="${esc(e.estado)}">${esc(e.estado)}</span><span class="tr"><i class="${e.comportamento==='ativo'?'':'inat'}" style="width:${Math.round(e.qtd*100/max)}%"></i></span><b>${e.qtd}</b></div>`).join('')||'<p class="mut" style="padding:8px 16px">nenhum item</p>';
+  $('dCabineInfo').textContent=`${d.cabine.transferencias_hoje} hoje · ${d.cabine.pecas_aguardando} peça(s) aguardando`;
+  $('dTransfTb').innerHTML=d.cabine.ultimas.map(t=>`<tr><td>${dt(t.criado_em)}</td><td>${esc(t.destino)}</td><td>${t.quantidade}</td></tr>`).join('')||'<tr><td colspan=3>nenhuma transferência</td></tr>';
+  const c=d.conferencia;
+  $('dConf').textContent=c?`Última conferência #${c.id}: ${c.status==='andamento'?'em andamento':'finalizada'} — ${c.conferidos??0} de ${c.esperados} item(ns) conferidos (${ha(c.iniciada_em)})`:'Nenhuma conferência de estoque realizada.';
+}
 async function tick(){
   try{
     const s=await j('/api/summary');
