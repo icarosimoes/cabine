@@ -34,6 +34,8 @@ type Config struct {
 	Readers map[string]ReaderCred `json:"readers,omitempty"`
 	// Leitores usam certificado autoassinado: por padrão não validamos.
 	StrictTLSReaders bool `json:"strictTlsReaders,omitempty"`
+	// Não abrir conexão na porta de dados dos Acura (ex.: 8080), nem rápida: monitora só a página de status (porta 80).
+	SkipCommPort bool `json:"skipCommPort,omitempty"`
 }
 
 func DataDir() string {

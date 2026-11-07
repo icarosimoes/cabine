@@ -2,4 +2,5 @@
 __pycache__/
 .claude/settings.local.json
 .claude/worktrees/
-agent/dist/
+agent/dist/*
+!agent/dist/.gitkeep

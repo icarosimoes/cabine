@@ -313,3 +313,36 @@ def test_alerta_webhook_do_radio(client):
     assert main.avaliar_agentes(now + 5, ant("active", 401), [], c) == []
     assert "voltou" in main.avaliar_agentes(now + 10, ant("active", 200), [], c)[0][1]
     main.state["alertas"].clear()
+
+
+def test_antena_de_evasao_flag_config_e_alerta(client):
+    body = {"nome": "saida", "modelo": "AcuraEdgeR30", "ip": "192.168.30.104", "porta": 8080, "alerta": False, "evasao": True}
+    assert client.post("/api/antenas", json=body).status_code == 200
+    a = client.get("/api/antenas").json()[0]
+    assert a["evasao"] is True
+    ag = client.post("/api/agentes", json={"nome": "h"}).json()
+    cfg = client.get("/api/agente/config", headers={"X-Agent-Token": ag["token"]}, auth=None).json()
+    assert cfg["antenas"][0]["evasao"] is True  # reflete no endpoint do agente
+    assert client.put(f"/api/antenas/{a['id']}", json={**body, "evasao": False}).status_code == 200
+    assert client.get("/api/antenas").json()[0]["evasao"] is False
+    # alerta sai mesmo com "alerta" desligado quando é de evasão, com prefixo prioritário
+    main.state["alertas"].clear()
+    now = time.time()
+    ant = [{"id": 5, "nome": "saida", "ip": "1.1.1.1", "alerta": False, "evasao": True, "online": False, "detalhe": "porta 8080 FECHADA", "verificado_em": now, "extra": None}]
+    m = main.avaliar_agentes(now, ant, [], main.cfg())
+    assert m and "EVASÃO" in m[0][1] and "OFFLINE" in m[0][1]
+    main.state["alertas"].clear()
+    ant[0]["evasao"] = False  # sem evasão e sem alerta: nada
+    assert main.avaliar_agentes(now, ant, [], main.cfg()) == []
+    main.state["alertas"].clear()
+
+
+def test_download_do_agente(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "AGENTE_DIST", tmp_path)
+    assert client.get("/api/agente/download/cabine-agent.exe").status_code == 404  # não publicado
+    (tmp_path / "instalar.cmd").write_text("echo ok")
+    r = client.get("/api/agente/download/instalar.cmd")
+    assert r.status_code == 200 and r.text == "echo ok"
+    assert client.get("/api/agente/download/../main.py").status_code in (404, 422)
+    assert client.get("/api/agente/download/outro.txt").status_code == 404
+    assert client.get("/api/agente/download/instalar.cmd", auth=None).status_code in (401, 302, 307)

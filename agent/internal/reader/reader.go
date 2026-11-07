@@ -71,7 +71,7 @@ func Check(cfg *config.Config, a cloud.Antena) Probe {
 		return Probe{Detalhe: "sem IP cadastrado"}
 	}
 	if !isR700(a) {
-		return tcpCheck(a)
+		return tcpCheck(cfg, a)
 	}
 	user, pass := creds(cfg, a.Nome)
 	t0 := time.Now()
@@ -155,7 +155,7 @@ func detalheR700(extra map[string]any) string {
 	return d
 }
 
-func tcpCheck(a cloud.Antena) Probe {
+func tcpCheck(cfg *config.Config, a cloud.Antena) Probe {
 	if !strings.Contains(strings.ToLower(a.Modelo), "acura") && !strings.Contains(strings.ToLower(a.Modelo), "edge") {
 		port := a.Porta
 		if port == 0 {
@@ -183,10 +183,13 @@ func tcpCheck(a cloud.Antena) Probe {
 	if fw, ok := extra["firmware"].(string); ok {
 		detalhe += " · fw " + fw
 	}
-	if a.Porta > 0 && a.Porta != 80 {
+	if a.Porta > 0 && a.Porta != 80 && !cfg.SkipCommPort {
 		if ok, _, _ := portOpen(a.IP, a.Porta); !ok {
 			detalhe += fmt.Sprintf(" · ATENÇÃO: porta de comunicação %d FECHADA", a.Porta)
 			extra["porta_comunicacao"] = "fechada"
+			if a.Evasao { // antena de saída sem canal de dados = evasão passa despercebida: conta como offline
+				return Probe{Online: false, LatenciaMs: lat, Detalhe: detalhe, Extra: extra}
+			}
 		}
 	}
 	return Probe{Online: resp.StatusCode < 500, LatenciaMs: lat, Detalhe: detalhe, Extra: extra}

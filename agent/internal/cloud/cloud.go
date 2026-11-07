@@ -28,6 +28,7 @@ type Antena struct {
 	Porta  int    `json:"porta"`
 	Modo   string `json:"modo"`
 	Alerta bool   `json:"alerta"`
+	Evasao bool   `json:"evasao"` // antena de saída: monitoramento prioritário
 }
 
 type Config struct {

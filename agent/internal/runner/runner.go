@@ -68,8 +68,15 @@ func (r *Runner) Cycle() *config.State {
 		} else {
 			r.falhas[a.ID]++
 		}
-		online := p.Online || r.falhas[a.ID] < falhasParaOffline // 1ª falha: ainda não derruba
+		limite := falhasParaOffline
+		if a.Evasao {
+			limite = 1 // antena de evasão: não esperar uma segunda falha
+		}
+		online := p.Online || r.falhas[a.ID] < limite // 1ª falha: ainda não derruba (exceto evasão)
 		detalhe := p.Detalhe
+		if a.Evasao {
+			detalhe = "[evasão] " + detalhe
+		}
 		if !p.Online && online {
 			detalhe = "falha isolada, reconfirmando: " + p.Detalhe
 		}

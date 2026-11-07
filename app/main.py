@@ -192,7 +192,7 @@ def init_db():
           destino_id INTEGER REFERENCES destinos(id),
           criado_em DOUBLE PRECISION NOT NULL)""")
         for col in ("descricao TEXT", "modo TEXT NOT NULL DEFAULT 'automatico'", "alerta BOOLEAN NOT NULL DEFAULT TRUE",
-                    "ip TEXT", "porta INTEGER"):
+                    "ip TEXT", "porta INTEGER", "evasao BOOLEAN NOT NULL DEFAULT FALSE"):
             con.execute(f"ALTER TABLE antenas ADD COLUMN IF NOT EXISTS {col}")
 
         con.execute("""
@@ -492,10 +492,11 @@ def avaliar_agentes(agora: float, antenas: list[dict], agentes: list[dict], c: d
     repetir = int(c["repetir_min"])
     condicoes = {}
     for a in antenas:
-        if a["alerta"] and a["verificado_em"] is not None:
+        pri = "🚨 EVASÃO — " if a.get("evasao") else ""  # antena de saída: sem ela, a evasão passa sem ser detectada
+        if (a["alerta"] or a.get("evasao")) and a["verificado_em"] is not None:
             off = (not a["online"]) and agora - a["verificado_em"] < AGENTE_SEM_CONTATO_SEG
-            condicoes[f"antena:{a['id']}"] = (off, f"⚠️ Cabine RFID: antena {a['nome']} ({a.get('ip') or 'sem IP'}) está OFFLINE — {a.get('detalhe') or 'sem resposta'}.",
-                                              f"✅ Cabine RFID: antena {a['nome']} voltou a responder.")
+            condicoes[f"antena:{a['id']}"] = (off, f"⚠️ Cabine RFID: {pri}antena {a['nome']} ({a.get('ip') or 'sem IP'}) está OFFLINE — {a.get('detalhe') or 'sem resposta'}.",
+                                              f"✅ Cabine RFID: {pri}antena {a['nome']} voltou a responder.")
     for a in antenas:  # webhook de eventos do R700 (informado pelo próprio leitor em /api/v1/status)
         w = _webhook_status(a.get("extra"))
         if a["alerta"] and w is not None and a["verificado_em"] is not None:
@@ -530,7 +531,7 @@ def checar_alertas():
     for tipo, texto in avaliar_alertas(agora, ultimo, len(state["falhas_ingest"]), c):
         notificar(tipo, texto, c)
     with closing(db()) as con:
-        antenas = con.execute("""SELECT a.id,a.nome,a.ip,a.alerta,s.online,s.detalhe,s.verificado_em,s.extra FROM antenas a
+        antenas = con.execute("""SELECT a.id,a.nome,a.ip,a.alerta,a.evasao,s.online,s.detalhe,s.verificado_em,s.extra FROM antenas a
                                  JOIN antena_status s ON s.antena_id=a.id""").fetchall()
         agentes = con.execute("SELECT id,nome,visto_em FROM agentes").fetchall()
     for tipo, texto in avaliar_agentes(agora, antenas, agentes, c):
@@ -1333,6 +1334,7 @@ class AntenaIn(BaseModel):
     alerta: bool = True
     ip: str | None = None
     porta: int | None = None
+    evasao: bool = False  # antena de saída (detecção de evasão): monitoramento e alertas prioritários
 
 
 def _valida_antena(con, p: AntenaIn) -> dict:
@@ -1347,14 +1349,14 @@ def _valida_antena(con, p: AntenaIn) -> dict:
         raise HTTPException(400, "localização inválida")
     return {"nome": nome, "descricao": (p.descricao or "").strip() or None, "modelo": (p.modelo or "").strip() or None,
             "destino_id": p.destino_id, "modo": p.modo, "alerta": p.alerta, "ip": (p.ip or "").strip() or None,
-            "porta": p.porta}
+            "porta": p.porta, "evasao": p.evasao}
 
 
 @app.get("/api/antenas", dependencies=[Depends(ui_auth)])
 def listar_antenas():
     with closing(db()) as con:
         return con.execute("""SELECT a.id, a.nome, a.descricao, a.modelo, a.destino_id, d.nome destino_nome,
-                                     a.modo, a.alerta, a.ip, a.porta,
+                                     a.modo, a.alerta, a.ip, a.porta, a.evasao,
                                      s.online, s.latencia_ms, s.detalhe, s.verificado_em, s.extra
                               FROM antenas a LEFT JOIN destinos d ON d.id=a.destino_id
                               LEFT JOIN antena_status s ON s.antena_id=a.id ORDER BY a.nome""").fetchall()
@@ -1366,8 +1368,8 @@ def salvar_antena(payload: AntenaIn):
         v = _valida_antena(con, payload)
         if con.execute("SELECT 1 FROM antenas WHERE nome=%s", (v["nome"],)).fetchone():
             raise HTTPException(409, "já existe antena com esse nome (use Editar)")
-        con.execute("""INSERT INTO antenas(nome,descricao,modelo,destino_id,modo,alerta,ip,porta,criado_em)
-                       VALUES(%(nome)s,%(descricao)s,%(modelo)s,%(destino_id)s,%(modo)s,%(alerta)s,%(ip)s,%(porta)s,%(t)s)""",
+        con.execute("""INSERT INTO antenas(nome,descricao,modelo,destino_id,modo,alerta,ip,porta,evasao,criado_em)
+                       VALUES(%(nome)s,%(descricao)s,%(modelo)s,%(destino_id)s,%(modo)s,%(alerta)s,%(ip)s,%(porta)s,%(evasao)s,%(t)s)""",
                     {**v, "t": time.time()})
         con.commit()
     return {"ok": True}
@@ -1382,7 +1384,7 @@ def editar_antena(antena_id: int, payload: AntenaIn):
         if con.execute("SELECT 1 FROM antenas WHERE nome=%s AND id<>%s", (v["nome"], antena_id)).fetchone():
             raise HTTPException(409, "já existe outra antena com esse nome")
         con.execute("""UPDATE antenas SET nome=%(nome)s, descricao=%(descricao)s, modelo=%(modelo)s, destino_id=%(destino_id)s,
-                       modo=%(modo)s, alerta=%(alerta)s, ip=%(ip)s, porta=%(porta)s WHERE id=%(id)s""", {**v, "id": antena_id})
+                       modo=%(modo)s, alerta=%(alerta)s, ip=%(ip)s, porta=%(porta)s, evasao=%(evasao)s WHERE id=%(id)s""", {**v, "id": antena_id})
         con.commit()
     return {"ok": True}
 
@@ -1407,6 +1409,21 @@ def agente_auth(request: Request) -> dict:
         con.execute("UPDATE agentes SET visto_em=%s WHERE id=%s", (time.time(), ag["id"]))
         con.commit()
     return ag
+
+
+AGENTE_DIST = Path(os.environ.get("AGENTE_DIST", "/srv/agente"))
+AGENTE_ARQUIVOS = {"cabine-agent.exe": "application/octet-stream", "instalar.cmd": "text/plain", "cabine-agent.exe.sha256": "text/plain"}
+
+
+@app.get("/api/agente/download/{nome}", dependencies=[Depends(admin_auth)])
+def baixar_agente(nome: str):
+    """Download do instalador do agente (só admin logado): .exe, instalar.cmd e o hash SHA-256."""
+    if nome not in AGENTE_ARQUIVOS:
+        raise HTTPException(404, "arquivo não encontrado")
+    f = AGENTE_DIST / nome
+    if not f.is_file():
+        raise HTTPException(404, "o instalador ainda não foi publicado neste servidor (rode agent/build.sh e faça o deploy)")
+    return FileResponse(f, media_type=AGENTE_ARQUIVOS[nome], filename=nome)
 
 
 class AgenteIn(BaseModel):
@@ -1447,7 +1464,7 @@ def excluir_agente(agente_id: int):
 def agente_config(ag: dict = Depends(agente_auth)):
     """Lista de antenas a monitorar (as que têm IP) + intervalo."""
     with closing(db()) as con:
-        antenas = con.execute("""SELECT id,nome,modelo,ip,porta,modo,alerta FROM antenas
+        antenas = con.execute("""SELECT id,nome,modelo,ip,porta,modo,alerta,evasao FROM antenas
                                  WHERE ip IS NOT NULL AND ip<>'' ORDER BY nome""").fetchall()
     return {"agente": ag["nome"], "intervalo_seg": AGENTE_INTERVALO_SEG, "antenas": antenas}
 

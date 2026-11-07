@@ -125,3 +125,27 @@ func TestTokenInvalidoGeraErroNoEstado(t *testing.T) {
 		t.Fatalf("esperava erro de token: %+v", st)
 	}
 }
+
+func TestAntenaDeEvasaoFicaOfflineNaPrimeiraFalha(t *testing.T) {
+	t.Setenv("CABINE_AGENT_DIR", t.TempDir())
+	mux := http.NewServeMux()
+	var enviado cloud.StatusReq
+	mux.HandleFunc("/api/agente/config", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(cloud.Config{IntervaloSeg: 5, Antenas: []cloud.Antena{{ID: 1, Nome: "saida", Modelo: "AcuraEdgeR30", IP: "10.0.0.2", Evasao: true}}})
+	})
+	mux.HandleFunc("/api/agente/status", func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&enviado)
+		w.Write([]byte(`{"ok":true,"comandos":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	r := New(&config.Config{Server: srv.URL, Token: "x"})
+	r.Probe = func(*config.Config, cloud.Antena) reader.Probe { return reader.Probe{Detalhe: "timeout"} }
+	r.Cycle()
+	if len(enviado.Antenas) != 1 || enviado.Antenas[0].Online {
+		t.Fatalf("evasão deveria ficar offline já na 1ª falha: %+v", enviado.Antenas)
+	}
+	if got := enviado.Antenas[0].Detalhe; got != "[evasão] timeout" {
+		t.Fatalf("detalhe: %q", got)
+	}
+}

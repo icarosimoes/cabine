@@ -44,6 +44,39 @@ O agente le a pagina de status do Acura (porta 80) e checa a porta de comunicaca
 webhook de eventos; **webhook com falha (status != active ou HTTP >= 400) gera alerta de WhatsApp** (`webhook_falha`).
 Teste manual: `LIVE=1 READER_USER=.. READER_PASS=.. go test ./internal/reader -run Live -v`.
 
+## Antenas de evasao (decisao de 2026-11-07)
+
+- As antenas **192.168.30.32 (recepcao)** e **192.168.30.104 (servico)** sao as de **saida/evasao**. No cadastro (tela Antenas) ha o campo
+  **"Antena de evasao (saida)"** (`antenas.evasao`), editavel; vai no `GET /api/agente/config` e muda o comportamento:
+  1 falha ja marca offline (sem esperar a 2a), porta de comunicacao fechada conta como offline, alerta de WhatsApp com
+  prefixo "🚨 EVASAO" e sai mesmo com "alerta" desligado.
+- **Por enquanto so monitoramento (estado), sem leitura de tags**: o agente nao le nenhum fluxo de dados desses leitores; o
+  `bridge-saida/` (que le a porta 8080 do `.104`) continua parado ate mapearmos o protocolo. Checagem do agente: pagina de status
+  (porta 80) + uma conexao TCP que abre e fecha na porta de comunicacao. Para **nao tocar na porta de dados**, ponha
+  `"skipCommPort": true` no `config.json` do agente.
+- Achados: `.32` com porta 8080 **fechada** (sem canal de dados — verificar); `.104` com 8080 aberta (fluxo bruto, sem HTTP).
+  Senha `acura@autoid` **recusada** na pagina de administracao dos dois (login volta para o index).
+- Antes de capturar o protocolo na 8080 do `.104`: pode haver so 1 conexao por vez (o eTrace pode usa-la); fazer fora do horario de pico.
+
+## Baixar e testar no Windows
+
+**Onde baixar:** painel do Cabine (logado como admin) > **Antenas** > secao **Agente do hotel (Windows)** > links
+`cabine-agent.exe`, `instalar.cmd` e `SHA-256` (rotas `/api/agente/download/...`; so admin). Os arquivos vem de `agent/dist/`
+(gerados por `agent/build.sh`) e entram na imagem no deploy. Sem deploy ainda, copie de `agent/dist/` no repositorio.
+
+**Passo a passo:**
+1. No painel: Antenas > *Agente do hotel* > nome > **Gerar token** (copie o token).
+2. No PC Windows (na mesma rede 192.168.30.x): crie uma pasta, ponha `cabine-agent.exe` e `instalar.cmd` juntos. Confira o hash:
+   `certutil -hashfile cabine-agent.exe SHA256` deve bater com o `.sha256`.
+3. Dois cliques em `instalar.cmd` > Permitir (Administrador) > URL (Enter) > colar o token. Se o Windows/SmartScreen avisar ("editor
+   desconhecido"): *Mais informacoes > Executar assim mesmo* (o exe ainda nao e assinado digitalmente).
+4. Resultado esperado: janela "Instalado com sucesso", icone na bandeja (verde, vermelho ou cinza), servico `CabineAgent` em
+   `services.msc` (Automatico, Em execucao).
+5. Conferir: `"C:\Program Files\Cabine Agent\cabine-agent.exe" status`; painel Antenas > coluna **Status (agente)** em ~15s;
+   botao **Configurar rádio** > *Ler status* / *Ler preset ativo* (so leitura). Log: `C:\ProgramData\CabineAgent\public\agent.log`.
+6. Testar o alerta: desligue um Acura/cabo de rede; em ~30s o grupo do WhatsApp recebe "antena ... OFFLINE" (evasao: com prefixo).
+7. Remover: `cabine-agent.exe uninstall` (Administrador).
+
 ## Instalar (teste inicial)
 
 1. Painel > Antenas > *Agente do hotel* > **Gerar token** (copie; nao aparece de novo). Cadastre IP/porta das antenas.

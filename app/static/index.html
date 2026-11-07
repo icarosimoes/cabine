@@ -365,6 +365,7 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
   <div class="row">
     <label class="mut">Modo de operação <select id="anModo"><option value="automatico">Automático</option><option value="manual">Manual</option></select></label>
     <label class="mut"><input id="anAlerta" type="checkbox" checked> Ativar alerta</label>
+    <label class="mut" title="Antena de saída: alertas prioritários; porta de comunicação fechada conta como offline"><input id="anEvasao" type="checkbox"> Antena de evasão (saída)</label>
     <label class="mut">Endereço IP <input id="anIp" type="text" placeholder="192.168.30.32" style="width:150px"></label>
     <label class="mut">Porta de comunicação <input id="anPorta" type="number" min="1" max="65535" placeholder="8080" style="width:100px"></label>
     <button class="acc" id="anSalvar">Salvar</button><button id="anCancelar" type="button" hidden>Cancelar edição</button>
@@ -375,6 +376,11 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
 <section id="secAgentes" hidden>
   <h2><span>Agente do hotel (Windows)</span></h2>
   <div class="mut" style="padding:0 16px 8px">Programa instalado no PC do hotel que testa cada antena (IP cadastrado acima), envia o status para cá e aplica as configurações de rádio. Gere um token, instale com o <code>instalar.cmd</code> e cole o token quando pedir.</div>
+  <div class="row"><b class="mut">Instalador (Windows):</b>
+    <a href="/api/agente/download/cabine-agent.exe" download>cabine-agent.exe</a> ·
+    <a href="/api/agente/download/instalar.cmd" download>instalar.cmd</a> ·
+    <a href="/api/agente/download/cabine-agent.exe.sha256" download>SHA-256</a>
+    <span class="mut">— baixe os dois primeiros na mesma pasta do PC do hotel</span></div>
   <div class="row"><input id="agNome" type="text" placeholder="nome (ex.: PC Recepção Fera)" style="width:240px"><button class="acc" id="agCriar">Gerar token</button></div>
   <div id="agMsg" class="msg"></div>
   <div class="scroll"><table><thead><tr><th>Agente</th><th>Último contato</th><th>Versão</th><th>Computador</th><th></th></tr></thead><tbody id="agentes"></tbody></table></div>
@@ -887,7 +893,7 @@ async function carregarAntenas(){
   if(antenaEdit===null)$('anDestino').innerHTML='<option value="">–</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
   antenasCache=await j('/api/antenas');
   carregarAgentes().catch(()=>{});
-  $('antenas').innerHTML=antenasCache.map(a=>`<tr><td>${esc(a.nome)}</td><td>${esc(a.descricao||'–')}</td><td>${esc(a.modelo||'–')}</td><td>${esc(a.destino_nome||'–')}</td>
+  $('antenas').innerHTML=antenasCache.map(a=>`<tr><td>${esc(a.nome)}${a.evasao?' <span class="pill alerta" title="antena de evasão (saída)">🚨 evasão</span>':''}</td><td>${esc(a.descricao||'–')}</td><td>${esc(a.modelo||'–')}</td><td>${esc(a.destino_nome||'–')}</td>
     <td>${a.modo==='manual'?'Manual':'Automático'}</td><td>${a.alerta?'<span class="pill ok">sim</span>':'não'}</td><td>${a.ip?esc(a.ip)+(a.porta?':'+a.porta:''):'–'}</td>
     <td>${statusAntena(a)}</td>
     <td><button data-edit="${a.id}">Editar</button> <button data-cfg="${a.id}">Configurar rádio</button></td></tr>`).join('')||'<tr><td colspan=9>nenhuma antena cadastrada</td></tr>';
@@ -952,14 +958,14 @@ function configurarRadio(a){
 }
 function limparAntena(){
   antenaEdit=null;['anNome','anDesc','anIp','anPorta'].forEach(i=>$(i).value='');$('anModelo').value='';$('anDestino').value='';
-  $('anModo').value='automatico';$('anAlerta').checked=true;$('anTitulo').textContent='Antenas cadastradas';$('anSalvar').textContent='Salvar';$('anCancelar').hidden=true;
+  $('anModo').value='automatico';$('anAlerta').checked=true;$('anEvasao').checked=false;$('anTitulo').textContent='Antenas cadastradas';$('anSalvar').textContent='Salvar';$('anCancelar').hidden=true;
 }
 $('antenas').addEventListener('click',e=>{
   const cf=e.target.closest('[data-cfg]');if(cf){const a=antenasCache.find(x=>x.id===Number(cf.dataset.cfg));if(a)configurarRadio(a);return}
   const b=e.target.closest('[data-edit]');if(!b)return;
   const a=antenasCache.find(x=>x.id===Number(b.dataset.edit));if(!a)return;
   antenaEdit=a.id;$('anNome').value=a.nome;$('anDesc').value=a.descricao||'';$('anModelo').value=a.modelo||'';$('anDestino').value=a.destino_id||'';
-  $('anModo').value=a.modo;$('anAlerta').checked=a.alerta;$('anIp').value=a.ip||'';$('anPorta').value=a.porta||'';
+  $('anModo').value=a.modo;$('anAlerta').checked=a.alerta;$('anEvasao').checked=!!a.evasao;$('anIp').value=a.ip||'';$('anPorta').value=a.porta||'';
   $('anTitulo').textContent='Editar antena: '+a.nome;$('anSalvar').textContent='Atualizar';$('anCancelar').hidden=false;
   $('anNome').scrollIntoView({block:'center'});
 });
@@ -968,7 +974,7 @@ $('anSalvar').onclick=async()=>{
   const msg=$('antenaMsg'),nome=$('anNome').value.trim();
   if(!nome){msg.className='msg bad';msg.textContent='informe o nome da antena';return}
   const corpo={nome,descricao:$('anDesc').value.trim()||null,modelo:$('anModelo').value||null,destino_id:$('anDestino').value?Number($('anDestino').value):null,
-    modo:$('anModo').value,alerta:$('anAlerta').checked,ip:$('anIp').value.trim()||null,porta:$('anPorta').value?Number($('anPorta').value):null};
+    modo:$('anModo').value,alerta:$('anAlerta').checked,evasao:$('anEvasao').checked,ip:$('anIp').value.trim()||null,porta:$('anPorta').value?Number($('anPorta').value):null};
   try{await j(antenaEdit?'/api/antenas/'+antenaEdit:'/api/antenas',{method:antenaEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)});
     msg.className='msg ok';msg.textContent=antenaEdit?'antena atualizada':'antena cadastrada';limparAntena();await carregarAntenas()}
   catch(e){msg.className='msg bad';msg.textContent=e.message}

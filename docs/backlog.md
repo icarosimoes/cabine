@@ -44,3 +44,5 @@
 - Sessao de leitura continua: pronta, opt-in (`SESSAO_AUTO=1`), desligada em producao.
 - CI/CD: workflow criado (testes + deploy por secrets); falta configurar secrets e validar. GHCR nao adotado.
 - Cadastrar o projeto em `erpsolid/docs/projetos/` (indice central de repos).
+
+- Evasao: antenas .32 e .104 marcadas como de evasao (so monitoramento por ora). Pendente: mapear protocolo da porta 8080 do .104, descobrir por que a 8080 do .32 esta fechada, senha de administracao dos Acura.
