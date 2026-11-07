@@ -130,6 +130,16 @@ BASE_URL=http://localhost:8000 UI_USER=... UI_PASS=... WEBHOOK_USER=... WEBHOOK_
 | `POST` | `/api/estados` | Body `{nome, descricao?, comportamento: "ativo"\|"inativo"}`. 409 se nome já existe. |
 | `PATCH` | `/api/itens/{epc}/estado` | Body `{estado_id}`. Define o estado de um item do catálogo. 404 se item não cadastrado, 400 se estado inválido. |
 
+## Dashboard
+
+A seção de cards no topo, além dos números de leitura, mostra "lotes aguardando transferência" e
+"alertas de evasão não documentados" em destaque (número fica vermelho quando > 0) — os dois sinais
+que antes só apareciam rolando a página. Logo abaixo, "Status das antenas" lista cada antena distinta
+vista em `events.antenna` nas últimas 24h, com última leitura e status (`ativa` se dentro de
+`STALE_MINUTES`, `sem comunicação` senão) — endpoint `GET /api/antenas?hours=24`. Só cobre as antenas
+da cabine (via webhook Impinj); a ponte de saída (`bridge-saida/`) ainda não fala com hardware real,
+então não tem status pra mostrar ali.
+
 ## Controle de evasão (saídas não documentadas)
 
 Leitores RFID fixos nas saídas do prédio (fisicamente separados da cabine, ligados na rede local

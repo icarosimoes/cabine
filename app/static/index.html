@@ -15,6 +15,7 @@ h1{font-size:18px;margin:0 0 12px;display:flex;align-items:center;gap:10px}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:10px 12px}
 .card b{display:block;font-size:22px}.card span{color:var(--mut);font-size:12px}
+.card b.warn-if-nonzero.nonzero{color:var(--bad)}
 section{background:var(--card);border:1px solid var(--bd);border-radius:8px;margin-bottom:16px;overflow:hidden}
 section h2{font-size:14px;margin:0;padding:10px 12px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;gap:8px;align-items:center}
 .scroll{overflow-x:auto;max-height:380px;overflow-y:auto}
@@ -46,7 +47,15 @@ td.toggle{cursor:pointer}
   <div class="card"><b id="c3">–</b><span>tags distintas (1h)</span></div>
   <div class="card"><b id="c4">–</b><span>tags distintas (24h)</span></div>
   <div class="card"><b id="c5">–</b><span>eventos guardados</span></div>
+  <div class="card"><b id="c6" class="warn-if-nonzero">–</b><span>lotes aguardando transferência</span></div>
+  <div class="card"><b id="c7" class="warn-if-nonzero">–</b><span>alertas de evasão não documentados</span></div>
 </div>
+
+<section>
+  <h2><span>Status das antenas <span id="antCount" class="mut"></span></span></h2>
+  <p class="mut" style="margin:0;padding:10px 12px 0">Só cobre as antenas da cabine (porta Impinj, via <code>events.antenna</code>). A ponte de saída (<code>bridge-saida</code>) ainda não fala com o leitor físico, então não entra aqui.</p>
+  <div class="scroll"><table><thead><tr><th>Antena</th><th>Leituras (24h)</th><th>Última leitura</th><th>Status</th></tr></thead><tbody id="antenas"></tbody></table></div>
+</section>
 
 <section>
   <h2><span>Inventário</span></h2>
@@ -187,7 +196,7 @@ async function tick(){
     const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
     $('evs').innerHTML=evs.map(e=>`<tr><td>${hm(e.received_at)}</td><td>${esc(e.event_type)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>';
   }catch(e){$('status').textContent='erro ao atualizar';$('dot').className='dot bad'}
-  await Promise.all([carregarPendentes(),carregarTransferencias(),carregarOpcoesInventario(),carregarInventario(),carregarCatalogo(),carregarEvasoes()]);
+  await Promise.all([carregarPendentes(),carregarTransferencias(),carregarOpcoesInventario(),carregarInventario(),carregarCatalogo(),carregarEvasoes(),carregarAlertasAbertos(),carregarAntenas()]);
 }
 document.addEventListener('click',e=>{const t=e.target.closest('td.epc');if(t&&t.dataset.e){epc=t.dataset.e;$('filtro').textContent='· filtro: '+epc;$('limpar').hidden=false;tick()}});
 $('limpar').onclick=()=>{epc=null;$('filtro').textContent='';$('limpar').hidden=true;tick()};
@@ -219,6 +228,8 @@ async function carregarPendentes(){
   document.querySelectorAll('select.destinoSel').forEach(s=>antes[s.dataset.lote]={destino:s.value,obs:document.querySelector(`input.obsLote[data-lote="${s.dataset.lote}"]`)?.value||''});
   const lotes=await j('/api/lotes?status=aguardando&limit=100');
   $('pendCount').textContent=lotes.length?('· '+lotes.length):'';
+  $('c6').textContent=lotes.length;
+  $('c6').classList.toggle('nonzero',lotes.length>0);
   $('pendentes').innerHTML=lotes.map(l=>`<tr>
     <td>#${l.id}</td><td>${dt(l.criado_em)}</td><td>${l.quantidade}</td>
     <td><select class="destinoSel" data-lote="${l.id}"></select></td>
@@ -343,6 +354,21 @@ async function carregarEvasoes(){
 }
 $('evAplicar').onclick=carregarEvasoes;
 $('evLimpar').onclick=()=>{$('evDestino').value='';$('evDocumentado').value='';$('evDesde').value='';$('evAte').value='';carregarEvasoes()};
+
+async function carregarAlertasAbertos(){
+  const abertos=await j('/api/saida?documentado=false&limit=1000');
+  $('c7').textContent=abertos.length;
+  $('c7').classList.toggle('nonzero',abertos.length>0);
+}
+
+async function carregarAntenas(){
+  const r=await j('/api/antenas?hours=24');
+  $('antCount').textContent=r.antenas.length?('· '+r.antenas.length):'';
+  $('antenas').innerHTML=r.antenas.map(a=>`<tr>
+    <td>${esc(a.antenna)}</td><td>${a.leituras}</td><td>${dt(a.ultima)}</td>
+    <td>${a.status==='ativa'?pill('ok')+' ativa':pill('alerta')+' sem comunicação'}</td>
+  </tr>`).join('')||'<tr><td colspan=4>nenhuma antena leu nas últimas 24h</td></tr>';
+}
 
 const INV_FILTROS=[['invLocal','localizacoes','localizacao'],['invEstado','estados','estado'],['invTipo','tipos','tipo'],
   ['invFabricante','fabricantes','fabricante'],['invTamanho','tamanhos','tamanho'],['invComposicao','composicoes','composicao'],['invCor','cores','cor']];

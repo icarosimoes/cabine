@@ -270,6 +270,23 @@ def tags(hours: float = 24, limit: int = 200):
     return rows
 
 
+@app.get("/api/antenas", dependencies=[Depends(ui_auth)])
+def status_antenas(hours: float = 24):
+    now = time.time()
+    since = now - hours * 3600
+    with closing(db()) as con:
+        rows = con.execute("""
+          SELECT antenna, COUNT(*) leituras, MAX(received_at) ultima, MIN(received_at) primeira
+          FROM events WHERE antenna IS NOT NULL AND received_at>%s
+          GROUP BY antenna ORDER BY ultima DESC""", (since,)).fetchall()
+    antenas = []
+    for r in rows:
+        idle_min = (now - r["ultima"]) / 60
+        antenas.append({**r, "idle_minutos": idle_min,
+                         "status": "ativa" if idle_min <= STALE_MINUTES else "sem comunicação"})
+    return {"now": now, "stale_minutes": STALE_MINUTES, "antenas": antenas}
+
+
 @app.get("/api/events", dependencies=[Depends(ui_auth)])
 def events(limit: int = 100, epc: str | None = None, after_id: int = 0, raw: bool = False):
     sql = "SELECT id,received_at,event_type,epc,tid,antenna,rssi,seen_at" + (",raw" if raw else "") + " FROM events WHERE id>%s"
