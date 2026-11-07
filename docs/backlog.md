@@ -28,7 +28,15 @@
 ## Dashboard (2026-11-07)
 
 - Feito: monitoramento das antenas/agentes, alertas recentes, inventario por estado, cabine e conferencia (`GET /api/dashboard`).
+- Feito: perfil de acesso `painel` (so dashboard). Ideia: esconder IPs/hosts para esse perfil se for dado a terceiros; mais perfis (ex.: lavanderia so ve transferencias).
 - Ideias: grafico de leituras por hora no Painel; historico de disponibilidade das antenas (hoje so ha o ultimo estado; precisaria de tabela de checagens para "uptime %"); temperatura do Acura/R700; itens parados ha X dias fora da lavanderia; ranking de tipos com maior perda/divergencia; link do card de antena para "Configurar radio".
+
+## Responsivo e PWA (2026-11-07)
+
+- Feito: PWA instalavel (manifest, service worker so de icones/offline, icones) e Painel responsivo (cartoes no celular).
+- **Proximo: tornar o restante responsivo**, uma tela por vez, na ordem de uso em celular/tablet: Leitura da cabine (botao grande de registrar leitura, lista agrupada), Alertas de evasao, Transferencias, Conferencia, Antenas, Inventario/Catalogo. Reusar `table.rt` (+ `data-l` nas celulas) e os dialogos `<dialog>` em tela cheia no celular.
+- Ideias PWA: notificacoes push (Web Push com VAPID) para os mesmos alertas do WhatsApp; atalho "Leitura da cabine" no manifest; cache de leitura do Painel com carimbo "dados de HH:MM" (hoje sem rede mostra so a pagina offline, de proposito).
+- Fora do escopo: app nativo; PWA nao substitui o agente Windows (que fala com os radios na LAN).
 
 ## Aprendido com o eTrace (nao feito ainda)
 

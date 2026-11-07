@@ -50,7 +50,7 @@ Data de referencia: 2026-11-07.
   `events` durante leitura solicitada (`/api/leitura/armar` ou conferencia `andamento`); o resto e descartado
   (resposta `stored: 0`). O "ultimo sinal" fica em memoria (`state["ultimo_sinal"]`) para o indicador e o Kuma.
 - **Auth (2026-11-07):** Basic separado para webhook/saida; painel usa cookie de sessao (HMAC, scrypt) com
-  papeis leitura<operador<admin; admin de ambiente via `UI_USER/UI_PASS`. Env: `SESSION_SECRET`,
+  papeis painel<leitura<operador<admin (painel = so dashboard: `/api/dashboard`, `/api/summary`, `/api/me`; todo o resto 403); admin de ambiente via `UI_USER/UI_PASS`. Env: `SESSION_SECRET`,
   `SESSION_HORAS`, `TZ_OFFSET_HOURS`, `SESSAO_AUTO`. CI em `.github/workflows/ci.yml` (secrets `VPS_HOST`, `VPS_SSH_KEY`).
 
 ## Convencoes
@@ -59,3 +59,8 @@ Data de referencia: 2026-11-07.
 - Timestamps em epoch seconds (`DOUBLE PRECISION`); a UI formata em pt-BR no navegador.
 - Imagem `impinj-rfid:local` buildada na VPS; servico `impinj_impinj` (nome legado mantido para nao
   quebrar stack/volume/Traefik).
+
+## PWA
+
+- `app/static/`: `manifest.webmanifest`, `sw.js`, `offline.html`, `icons/` (gerados por `scripts/gerar_icones.py`). Rotas publicas em `app/main.py` (`pwa_*`). O SW nunca cacheia `/api/*` nem HTML do painel — so icones e offline. Mudou o SW? Incremente `VERSAO` em `sw.js`.
+- Tabelas responsiveis: classe `rt` na `<table>` e `data-l="Rotulo"` nas `<td>` (a primeira celula e o titulo do cartao).

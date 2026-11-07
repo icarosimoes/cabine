@@ -1,0 +1,21 @@
+{
+  "name": "Cabine RFID",
+  "short_name": "Cabine",
+  "description": "Monitoramento das antenas, alertas e operação do enxoval do hotel.",
+  "lang": "pt-BR",
+  "id": "/",
+  "start_url": "/#painel",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f1623",
+  "theme_color": "#0f1623",
+  "icons": [
+    {"src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ],
+  "shortcuts": [
+    {"name": "Painel", "url": "/#painel", "icons": [{"src": "/icons/icon-192.png", "sizes": "192x192"}]}
+  ]
+}

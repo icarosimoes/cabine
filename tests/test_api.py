@@ -407,3 +407,63 @@ def ingest_e_lote(client):
         lid = con.execute("INSERT INTO lotes(criado_em,janela_segundos,quantidade,status) VALUES(%s,15,1,'aguardando') RETURNING id", (time.time(),)).fetchone()["id"]
         con.execute("INSERT INTO lote_itens(lote_id,epc) VALUES(%s,'AA11')", (lid,))
         con.commit()
+
+
+def test_perfil_painel_so_acessa_o_dashboard(client):
+    assert client.post("/api/usuarios", json={"usuario": "gerente", "papel": "painel", "senha": "senha-forte-1"}).status_code == 200
+    assert client.post("/api/usuarios", json={"usuario": "x", "papel": "inexistente"}).status_code == 400
+    p = client.__class__(client.app)
+    assert p.post("/api/login", json={"usuario": "gerente", "senha": "senha-forte-1"}).status_code == 200
+    assert p.get("/api/me").json()["papel"] == "painel"
+    for ok in ("/api/dashboard", "/api/summary", "/api/me"):
+        assert p.get(ok).status_code == 200, ok
+    for negado in ("/api/lotes", "/api/itens", "/api/antenas", "/api/destinos", "/api/tags", "/api/events", "/api/saida",
+                   "/api/inventario", "/api/export/inventario.csv", "/api/conferencias", "/api/transferencias", "/api/usuarios",
+                   "/api/agentes", "/api/alertas/destinatarios", "/api/config/alertas", "/api/leituras-hora", "/api/sessoes"):
+        assert p.get(negado).status_code == 403, negado
+    assert p.post("/api/lotes/registrar", json={}).status_code == 403
+    assert p.post("/api/leitura/armar", json={}).status_code == 403
+    # o papel vale na hora: promovido a leitura passa a enxergar o resto
+    uid = next(u["id"] for u in client.get("/api/usuarios").json() if u["usuario"] == "gerente")
+    client.patch(f"/api/usuarios/{uid}", json={"papel": "leitura"})
+    assert p.get("/api/lotes").status_code == 200
+
+
+def test_nenhuma_rota_get_da_api_abre_para_o_perfil_painel(client):
+    """Rota nova em /api/* sem ui_auth/op_auth/admin_auth vira acesso indevido do perfil 'painel': este teste pega."""
+    client.post("/api/usuarios", json={"usuario": "gerente", "papel": "painel", "senha": "senha-forte-1"})
+    p = client.__class__(client.app)
+    p.post("/api/login", json={"usuario": "gerente", "senha": "senha-forte-1"})
+    permitidas = {"/api/dashboard", "/api/summary", "/api/me", "/api/login", "/api/logout"}
+    abertas = []
+    for r in client.app.routes:
+        caminho = getattr(r, "path", "")
+        if not caminho.startswith("/api/") or "GET" not in getattr(r, "methods", ()) or "{" in caminho or caminho in permitidas:
+            continue
+        if caminho.startswith("/api/agente/"):  # autenticação própria por token do agente
+            continue
+        if p.get(caminho).status_code != 403:
+            abertas.append(caminho)
+    assert abertas == [], f"rotas acessíveis ao perfil painel: {abertas}"
+
+
+def test_pwa_arquivos_publicos_e_manifest_valido(client):
+    anon = client.__class__(client.app)  # sem login: o navegador busca estes arquivos sem cookie
+    m = anon.get("/manifest.webmanifest")
+    assert m.status_code == 200 and "manifest+json" in m.headers["content-type"]
+    man = m.json()
+    assert man["display"] == "standalone" and man["start_url"].startswith("/") and man["name"] and man["short_name"]
+    tamanhos = {i["sizes"] for i in man["icons"]}
+    assert {"192x192", "512x512"} <= tamanhos and any(i.get("purpose") == "maskable" for i in man["icons"])
+    for i in man["icons"]:  # todo ícone declarado existe e é PNG
+        r = anon.get(i["src"])
+        assert r.status_code == 200 and r.content[:8] == b"\x89PNG\r\n\x1a\n", i["src"]
+    sw = anon.get("/sw.js")
+    assert sw.status_code == 200 and sw.headers["service-worker-allowed"] == "/" and "no-cache" in sw.headers["cache-control"]
+    assert anon.get("/offline.html").status_code == 200
+    assert anon.get("/icons/nao-existe.png").status_code == 404
+    assert anon.get("/icons/..%2Fmain.py").status_code == 404
+    # as páginas apontam para o manifest e registram o service worker
+    for pagina in (anon.get("/login").text, client.get("/").text):
+        assert 'rel="manifest"' in pagina and "serviceWorker" in pagina and "viewport-fit=cover" in pagina
+    assert anon.get("/api/dashboard").status_code == 401  # e a API continua protegida

@@ -36,7 +36,8 @@ if len(_sess) < 32:  # chave do cookie não pode derivar de senha: exigir segred
 SESSION_SECRET = _sess.encode()
 SESSION_HORAS = int(os.environ.get("SESSION_HORAS", "12"))
 COOKIE = "cabine_sessao"
-PAPEIS = {"leitura": 1, "operador": 2, "admin": 3}
+# painel < leitura < operador < admin. "painel" só vê o Painel (dashboard); não acessa nenhuma outra rota da API.
+PAPEIS = {"painel": 0, "leitura": 1, "operador": 2, "admin": 3}
 
 ITENS_VIEW_SQL = """
 SELECT i.epc, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, i.criado_em, i.atualizado_em,
@@ -137,7 +138,7 @@ def init_db():
           usuario TEXT NOT NULL UNIQUE,
           nome TEXT,
           senha_hash TEXT,
-          papel TEXT NOT NULL DEFAULT 'operador' CHECK(papel IN ('leitura','operador','admin')),
+          papel TEXT NOT NULL DEFAULT 'operador' CHECK(papel IN ('painel','leitura','operador','admin')),
           ativo INTEGER NOT NULL DEFAULT 1,
           criado_em DOUBLE PRECISION NOT NULL)""")
         con.execute("ALTER TABLE transferencias ADD COLUMN IF NOT EXISTS usuario TEXT")
@@ -162,6 +163,8 @@ def init_db():
           nome TEXT, whatsapp TEXT, tipo TEXT, status TEXT NOT NULL, detalhe TEXT)""")
         con.execute("""
         CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY, valor TEXT NOT NULL)""")
+        con.execute("ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_papel_check")  # inclui o papel 'painel'
+        con.execute("ALTER TABLE usuarios ADD CONSTRAINT usuarios_papel_check CHECK(papel IN ('painel','leitura','operador','admin'))")
         con.execute("""
         CREATE TABLE IF NOT EXISTS sessoes(
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -352,9 +355,16 @@ def usuario_opt(request: Request, c: HTTPBasicCredentials | None = Depends(_basi
     return u
 
 
-def ui_auth(u=Depends(usuario_opt)):
+def painel_auth(u=Depends(usuario_opt)):
+    """Qualquer usuário autenticado, inclusive o perfil 'painel' (só dashboard). Use só em /api/dashboard, /api/summary e /api/me."""
     if not u:
         raise HTTPException(401, "não autenticado")
+    return u
+
+
+def ui_auth(u=Depends(painel_auth)):
+    if PAPEIS[u["papel"]] < PAPEIS["leitura"]:
+        raise HTTPException(403, "seu perfil só acessa o Painel")
     return u
 
 
@@ -897,7 +907,7 @@ def health():
     return {"ok": True}
 
 
-@app.get("/api/summary", dependencies=[Depends(ui_auth)])
+@app.get("/api/summary", dependencies=[Depends(painel_auth)])
 def summary():
     now = time.time()
     with closing(db()) as con:
@@ -931,7 +941,7 @@ def _extra_publico(extra) -> dict:
     return out
 
 
-@app.get("/api/dashboard", dependencies=[Depends(ui_auth)])
+@app.get("/api/dashboard", dependencies=[Depends(painel_auth)])
 def dashboard():
     """Visão geral para o Painel: monitoramento das antenas/agentes, alertas e números da operação."""
     now = time.time()
@@ -1833,7 +1843,7 @@ def logout():
 
 
 @app.get("/api/me")
-def me(u: dict = Depends(ui_auth)):
+def me(u: dict = Depends(painel_auth)):
     return {"usuario": u["usuario"], "nome": u["nome"], "papel": u["papel"]}
 
 
@@ -1893,6 +1903,33 @@ def listar_sessoes(limit: int = 50):
         return {"auto": SESSAO_AUTO, "ocioso_segundos": SESSAO_OCIOSO,
                 "sessoes": con.execute("SELECT * FROM sessoes ORDER BY id DESC LIMIT %s", (min(limit, 500),)).fetchall()}
 
+# ---- PWA: arquivos públicos (o navegador os busca sem cookie; não têm dado sensível) ---------------
+ICONES = {p.name for p in (STATIC / "icons").glob("*.png")} if (STATIC / "icons").is_dir() else set()
+
+
+@app.get("/manifest.webmanifest")
+def pwa_manifest():
+    return FileResponse(STATIC / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+def pwa_service_worker():
+    return FileResponse(STATIC / "sw.js", media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+
+@app.get("/offline.html")
+def pwa_offline():
+    return FileResponse(STATIC / "offline.html", media_type="text/html")
+
+
+@app.get("/icons/{nome}")
+def pwa_icone(nome: str):
+    if nome not in ICONES:  # lista fechada: sem path traversal
+        raise HTTPException(404)
+    return FileResponse(STATIC / "icons" / nome, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/login")
 def pagina_login():
     return FileResponse(STATIC / "login.html")
@@ -1914,7 +1951,7 @@ class UsuarioPatch(BaseModel):
 
 def _valida_usuario(papel, senha):
     if papel is not None and papel not in PAPEIS:
-        raise HTTPException(400, "papel deve ser leitura, operador ou admin")
+        raise HTTPException(400, "papel deve ser painel, leitura, operador ou admin")
     if senha is not None and len(senha) < 8:
         raise HTTPException(400, "a senha precisa ter ao menos 8 caracteres")
 
