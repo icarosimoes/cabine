@@ -21,25 +21,15 @@ security = HTTPBasic()
 
 ITENS_VIEW_SQL = """
 SELECT i.epc, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, i.criado_em, i.atualizado_em,
-       d.nome AS localizacao,
-       CASE
-         WHEN d.tipo='setor' THEN 'Em uso'
-         WHEN d.tipo='lavanderia' THEN 'Na lavanderia'
-         WHEN ul.status='aguardando' THEN 'Aguardando transferência'
-         ELSE 'Sem leitura'
-       END AS estado
+       d.nome AS localizacao, e.nome AS estado
 FROM itens i
+JOIN estados_inventario e ON e.id = i.estado_id
 LEFT JOIN (
   SELECT li.epc, t.destino_id,
          ROW_NUMBER() OVER (PARTITION BY li.epc ORDER BY t.criado_em DESC) rn
   FROM lote_itens li JOIN transferencias t ON t.lote_id = li.lote_id
 ) ut ON ut.epc = i.epc AND ut.rn = 1
 LEFT JOIN destinos d ON d.id = ut.destino_id
-LEFT JOIN (
-  SELECT li.epc, l.status,
-         ROW_NUMBER() OVER (PARTITION BY li.epc ORDER BY l.criado_em DESC) rn
-  FROM lote_itens li JOIN lotes l ON l.id = li.lote_id
-) ul ON ul.epc = i.epc AND ul.rn = 1
 """
 
 
@@ -93,13 +83,34 @@ def init_db():
         con.execute("CREATE INDEX IF NOT EXISTS ix_transf_criado ON transferencias(criado_em)")
 
         con.execute("""
+        CREATE TABLE IF NOT EXISTS estados_inventario(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          nome TEXT NOT NULL UNIQUE,
+          descricao TEXT,
+          comportamento TEXT NOT NULL CHECK(comportamento IN ('ativo','inativo')) DEFAULT 'ativo',
+          padrao INTEGER NOT NULL DEFAULT 0,
+          criado_em DOUBLE PRECISION NOT NULL)""")
+
+        con.execute("""
         CREATE TABLE IF NOT EXISTS itens(
           epc TEXT PRIMARY KEY,
           tipo TEXT NOT NULL,
           fabricante TEXT, tamanho TEXT, composicao TEXT, cor TEXT,
+          estado_id INTEGER NOT NULL REFERENCES estados_inventario(id),
           criado_em DOUBLE PRECISION NOT NULL, atualizado_em DOUBLE PRECISION NOT NULL)""")
         con.execute("CREATE INDEX IF NOT EXISTS ix_itens_tipo ON itens(tipo)")
         con.commit()
+
+        if not con.execute("SELECT 1 FROM estados_inventario").fetchone():
+            now = time.time()
+            with con.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO estados_inventario(nome,descricao,comportamento,padrao,criado_em) VALUES(%s,%s,%s,%s,%s)",
+                    [("Em uso", "Peça em uso normal", "ativo", 1, now),
+                     ("Em manutenção", "Temporariamente fora de uso", "ativo", 0, now),
+                     ("Vendido", "Vendida, não volta mais", "inativo", 0, now),
+                     ("Descartado", "Fim de vida útil", "inativo", 0, now)])
+            con.commit()
 
         if not con.execute("SELECT 1 FROM destinos").fetchone():
             con.execute("INSERT INTO destinos(tipo,nome,ativo,criado_em) VALUES('setor','Governança',1,%s)", (time.time(),))
@@ -435,12 +446,14 @@ def cadastrar_item(payload: ItemIn):
         raise HTTPException(400, "epc e tipo são obrigatórios")
     now = time.time()
     with closing(db()) as con:
-        con.execute("""INSERT INTO itens(epc,tipo,fabricante,tamanho,composicao,cor,criado_em,atualizado_em)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
+        estado_padrao = con.execute("SELECT id FROM estados_inventario WHERE padrao=1 LIMIT 1").fetchone()["id"]
+        con.execute("""INSERT INTO itens(epc,tipo,fabricante,tamanho,composicao,cor,estado_id,criado_em,atualizado_em)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         ON CONFLICT(epc) DO UPDATE SET tipo=excluded.tipo, fabricante=excluded.fabricante,
                           tamanho=excluded.tamanho, composicao=excluded.composicao, cor=excluded.cor,
                           atualizado_em=excluded.atualizado_em""",
-                    (epc, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor, now, now))
+                    (epc, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor,
+                     estado_padrao, now, now))
         con.commit()
         row = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v WHERE v.epc=%s", (epc,)).fetchone()
     return row
@@ -468,9 +481,57 @@ def itens_opcoes():
             "tipos": distinct("tipo"), "fabricantes": distinct("fabricante"), "tamanhos": distinct("tamanho"),
             "composicoes": distinct("composicao"), "cores": distinct("cor"),
             "localizacoes": [r["nome"] for r in con.execute("SELECT nome FROM destinos ORDER BY nome").fetchall()],
-            "estados": ["Em uso", "Na lavanderia", "Aguardando transferência", "Sem leitura"],
+            "estados": [r["nome"] for r in con.execute("SELECT nome FROM estados_inventario ORDER BY nome").fetchall()],
         }
     return resultado
+
+
+class EstadoIn(BaseModel):
+    nome: str
+    descricao: str | None = None
+    comportamento: str = "ativo"
+
+
+class EstadoItemIn(BaseModel):
+    estado_id: int
+
+
+@app.get("/api/estados", dependencies=[Depends(ui_auth)])
+def listar_estados():
+    with closing(db()) as con:
+        return con.execute("SELECT * FROM estados_inventario ORDER BY padrao DESC, nome").fetchall()
+
+
+@app.post("/api/estados", dependencies=[Depends(ui_auth)])
+def criar_estado(payload: EstadoIn):
+    if payload.comportamento not in ("ativo", "inativo"):
+        raise HTTPException(400, "comportamento deve ser 'ativo' ou 'inativo'")
+    nome = payload.nome.strip()
+    if not nome:
+        raise HTTPException(400, "nome é obrigatório")
+    with closing(db()) as con:
+        try:
+            con.execute("INSERT INTO estados_inventario(nome,descricao,comportamento,padrao,criado_em) VALUES(%s,%s,%s,0,%s)",
+                        (nome, payload.descricao, payload.comportamento, time.time()))
+            con.commit()
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(409, "já existe um estado com esse nome")
+        row = con.execute("SELECT * FROM estados_inventario WHERE nome=%s", (nome,)).fetchone()
+    return row
+
+
+@app.patch("/api/itens/{epc}/estado", dependencies=[Depends(ui_auth)])
+def definir_estado_item(epc: str, payload: EstadoItemIn):
+    with closing(db()) as con:
+        if not con.execute("SELECT 1 FROM itens WHERE epc=%s", (epc,)).fetchone():
+            raise HTTPException(404, "item não encontrado no catálogo")
+        if not con.execute("SELECT 1 FROM estados_inventario WHERE id=%s", (payload.estado_id,)).fetchone():
+            raise HTTPException(400, "estado inválido")
+        con.execute("UPDATE itens SET estado_id=%s, atualizado_em=%s WHERE epc=%s",
+                    (payload.estado_id, time.time(), epc))
+        con.commit()
+        row = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v WHERE v.epc=%s", (epc,)).fetchone()
+    return row
 
 
 @app.get("/api/inventario", dependencies=[Depends(ui_auth)])

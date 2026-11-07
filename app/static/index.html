@@ -78,7 +78,7 @@ td.toggle{cursor:pointer}
     <input id="itBusca" type="text" placeholder="buscar por EPC ou tipo" style="flex:1;min-width:180px">
     <button id="itBuscar">buscar</button>
   </div>
-  <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th>Localização</th><th>Estado</th></tr></thead><tbody id="catalogo"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th>Localização</th><th>Estado</th><th></th></tr></thead><tbody id="catalogo"></tbody></table></div>
 </section>
 
 <section>
@@ -134,6 +134,18 @@ td.toggle{cursor:pointer}
   </div>
   <div id="destinoMsg" class="msg"></div>
   <div class="scroll"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Status</th><th></th></tr></thead><tbody id="destinos"></tbody></table></div>
+</section>
+
+<section>
+  <h2><span>Estados de inventário cadastrados</span></h2>
+  <div class="row">
+    <input id="novoEstadoNome" type="text" placeholder="nome do estado (ex. Em manutenção)" style="flex:1;min-width:180px">
+    <input id="novoEstadoDesc" type="text" placeholder="descrição (opcional)" style="flex:1;min-width:180px">
+    <select id="novoEstadoComportamento"><option value="ativo">ativo</option><option value="inativo">inativo</option></select>
+    <button class="acc" id="novoEstado">Cadastrar</button>
+  </div>
+  <div id="estadoMsg" class="msg"></div>
+  <div class="scroll"><table><thead><tr><th>Nome</th><th>Descrição</th><th>Comportamento</th><th>Padrão</th></tr></thead><tbody id="estados"></tbody></table></div>
 </section>
 
 </main>
@@ -321,15 +333,57 @@ async function carregarInventario(){
 }
 INV_FILTROS.forEach(([id])=>{$(id).onchange=carregarInventario});
 
+let estadosCache=[];
+async function carregarEstados(){
+  estadosCache=await j('/api/estados');
+  $('estados').innerHTML=estadosCache.map(e=>`<tr>
+    <td>${esc(e.nome)}</td><td>${esc(e.descricao||'–')}</td><td>${pill(e.comportamento)}</td><td>${e.padrao?'★':''}</td>
+  </tr>`).join('')||'<tr><td colspan=4>nenhum estado cadastrado</td></tr>';
+}
+$('novoEstado').onclick=async()=>{
+  const nome=$('novoEstadoNome').value.trim(),descricao=$('novoEstadoDesc').value.trim()||null,
+        comportamento=$('novoEstadoComportamento').value,msg=$('estadoMsg');
+  if(!nome){msg.className='msg bad';msg.textContent='informe o nome do estado';return}
+  try{await j('/api/estados',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome,descricao,comportamento})});
+    $('novoEstadoNome').value='';$('novoEstadoDesc').value='';msg.className='msg ok';msg.textContent='estado cadastrado';
+    await Promise.all([carregarEstados(),carregarOpcoesInventario()])}
+  catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
+
 async function carregarCatalogo(){
   const q=$('itBusca').value.trim();
+  const escolhasPendentes={};
+  document.querySelectorAll('select.estadoSel').forEach(s=>escolhasPendentes[s.dataset.epc]=s.value);
   const rows=await j('/api/itens'+(q?'?q='+encodeURIComponent(q):''));
+  await carregarEstados();
+  const opts=estadosCache.map(e=>`<option value="${e.id}">${esc(e.nome)}</option>`).join('');
   $('catalogo').innerHTML=rows.map(i=>`<tr>
     <td class="epc">${esc(i.epc)}</td><td>${esc(i.tipo)}</td><td>${esc(i.fabricante||'–')}</td>
     <td>${esc(i.tamanho||'–')}</td><td>${esc(i.composicao||'–')}</td><td>${esc(i.cor||'–')}</td>
-    <td>${esc(i.localizacao||'–')}</td><td>${esc(i.estado)}</td>
-  </tr>`).join('')||'<tr><td colspan=8>nenhum item cadastrado</td></tr>';
+    <td>${esc(i.localizacao||'–')}</td>
+    <td><select class="estadoSel" data-epc="${esc(i.epc)}">${opts}</select></td>
+    <td><button class="definirEstadoBtn" data-epc="${esc(i.epc)}">Definir</button></td>
+  </tr>`).join('')||'<tr><td colspan=9>nenhum item cadastrado</td></tr>';
+  for(const i of rows){
+    const sel=document.querySelector(`select.estadoSel[data-epc="${CSS.escape(i.epc)}"]`);
+    if(!sel)continue;
+    const pendente=escolhasPendentes[i.epc];
+    if(pendente){sel.value=pendente;continue}
+    const atual=estadosCache.find(e=>e.nome===i.estado);
+    if(atual)sel.value=atual.id;
+  }
 }
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('.definirEstadoBtn');if(!b)return;
+  const epc=b.dataset.epc,sel=document.querySelector(`select.estadoSel[data-epc="${CSS.escape(epc)}"]`);
+  b.disabled=true;
+  try{
+    await j('/api/itens/'+encodeURIComponent(epc)+'/estado',{method:'PATCH',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({estado_id:Number(sel.value)})});
+    await Promise.all([carregarCatalogo(),carregarOpcoesInventario(),carregarInventario()]);
+  }catch(err){alert(err.message)}
+  b.disabled=false;
+});
 $('itBuscar').onclick=carregarCatalogo;
 $('cadastrarItem').onclick=async()=>{
   const epc=$('itEpc').value.trim(),tipo=$('itTipo').value.trim(),msg=$('itemMsg');

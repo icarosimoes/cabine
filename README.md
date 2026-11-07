@@ -91,13 +91,17 @@ item, com filtros por Localização, Estado, Tipo, Fabricante, Tamanho, Composi�
   Cadastro é *upsert* por EPC: recadastrar uma EPC substitui todos os campos pelo que foi enviado
   dessa vez (campo deixado em branco vira `null`, não mantém o valor anterior). Uma EPC lida pelo
   leitor mas nunca cadastrada no catálogo não aparece no Inventário.
-- **Localização e Estado não são campos editáveis** — são calculados a partir do histórico de
-  transferências de cada EPC (a mesma tabela `transferencias` do recurso acima), pra não poderem ficar
-  desatualizados manualmente:
-  - sem nenhuma leitura em lote → `Sem leitura`
-  - leitura feita, lote ainda aguardando transferência → `Aguardando transferência`
-  - transferido pra destino tipo `setor` → `Em uso`, localização = nome do destino
-  - transferido pra destino tipo `lavanderia` → `Na lavanderia`, localização = nome do destino
+- **Localização** não é campo editável — é calculada a partir da última transferência de cada EPC
+  (nome do destino, ou `null`/"–" se o item nunca foi transferido). Mesma lógica de antes, inalterada.
+- **Estado** é uma entidade própria e independente de localização (`estados_inventario`), igual ao
+  conceito "Estados de Inventário" do eTrace — **não** é mais derivado de "para onde foi a última
+  transferência". Um item pode estar "Em manutenção" fisicamente na Rouparia Geral, por exemplo. Todo
+  item novo nasce no estado marcado como `padrao` (semeado como "Em uso"); trocar o estado é uma ação
+  manual separada de "Movimentar" (botão "Definir" na seção "Catálogo de itens", equivalente ao
+  "DEFINIR ESTADO" do eTrace), e recadastrar o item (mudar tipo/fabricante/etc.) não reseta o estado.
+  Estados são cadastráveis na seção "Estados de inventário cadastrados" (nome, descrição,
+  comportamento `ativo`/`inativo`); o banco já nasce com os 4 do eTrace: Em uso, Em manutenção,
+  Vendido, Descartado.
 
 ### Dados de exemplo
 
@@ -121,6 +125,9 @@ BASE_URL=http://localhost:8000 UI_USER=... UI_PASS=... WEBHOOK_USER=... WEBHOOK_
 | `GET` | `/api/itens?q=&limit=` | Lista o catálogo (busca por EPC/tipo), já com `localizacao`/`estado` calculados. |
 | `GET` | `/api/itens/opcoes` | Valores distintos pra preencher os filtros da tela (tipos, fabricantes, tamanhos, composições, cores, localizações, estados). |
 | `GET` | `/api/inventario?localizacao=&estado=&tipo=&fabricante=&tamanho=&composicao=&cor=` | `{total, resumo:[{tipo, quantidade}]}` — contagem agrupada por tipo, com todos os filtros combináveis. |
+| `GET` | `/api/estados` | Lista os estados de inventário cadastrados. |
+| `POST` | `/api/estados` | Body `{nome, descricao?, comportamento: "ativo"\|"inativo"}`. 409 se nome já existe. |
+| `PATCH` | `/api/itens/{epc}/estado` | Body `{estado_id}`. Define o estado de um item do catálogo. 404 se item não cadastrado, 400 se estado inválido. |
 
 ## Limitações e riscos conhecidos
 
