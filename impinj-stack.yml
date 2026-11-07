@@ -1,4 +1,4 @@
-# Receptor de webhook do leitor RFID Impinj + painel de leituras (rfid.solidsd.com.br)
+# Receptor de webhook do leitor RFID Impinj + painel de leituras (cabine.solidsd.com.br)
 # VPS principal (Swarm, nó único). Imagem buildada local no manager (sem registry).
 #
 #   ssh root@95.111.250.4
@@ -43,7 +43,7 @@ services:
       labels:
         - traefik.enable=true
         - traefik.swarm.network=traefik-public
-        - traefik.http.routers.impinj.rule=Host(`${RFID_HOST:-rfid.solidsd.com.br}`)
+        - traefik.http.routers.impinj.rule=Host(`${RFID_HOST:-cabine.solidsd.com.br}`)
         - traefik.http.routers.impinj.entrypoints=websecure
         - traefik.http.routers.impinj.tls.certresolver=letsencrypt
         - traefik.http.services.impinj.loadbalancer.server.port=8000
