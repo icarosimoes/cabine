@@ -60,6 +60,7 @@
 
 - **Proximo: `.msi`** (ver `docs/infra/agente-hotel.md` > Proximos passos): aparece em Aplicativos instalados, atualiza por cima, token por parametro.
 - Agente 0.1.5: online = host responde (nao sonda 8080 do Acura). 0.1.6: reinstalacao fecha servico/tray e mantem o token.
+- **Falso alarme noturno**: o agente do PC da governanca desliga no fim do expediente e dispara "agente sem contato" todo dia. Opcoes: horario de funcionamento por agente (ex.: 07h-19h) ou nao alertar quando outro agente cobre todas as antenas dele. Aguardando decisao.
 - Idea: alertas extras vindos do agente — R700 fora de `running`, preset diferente do esperado, temperatura alta, comando de config com falha, Acura sem cliente na 8080 (lendo a pagina de status).
 - Validado em producao (2026-11-07): agente 0.1.6 no Windows, 3 antenas reportando, alertas de offline/voltou entregues no grupo de WhatsApp. Proxima: `.msi`.
 - Ideia: cadastrar numero individual como destinatario alem do grupo (o grupo pode ficar silenciado/enterrado).

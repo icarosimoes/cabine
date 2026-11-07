@@ -505,3 +505,53 @@ def test_estado_de_alerta_de_item_removido_e_descartado(client):
     main.state["alertas"]["antena:999"] = time.time()
     main.salvar_estado_alertas([], [])
     assert "antena:999" not in main.state["alertas"]
+
+
+def test_dois_agentes_na_mesma_antena_online_vence_e_cobertura_retomada(client, monkeypatch):
+    enviados = []
+    monkeypatch.setattr(main, "notificar", lambda tipo, texto, c=None, destinatario_id=None: enviados.append((tipo, texto)))
+    main.state["alertas"].clear(); main.state.pop("_salvo", None)
+    client.post("/api/antenas", json={"nome": "saida", "modelo": "AcuraEdgeR30", "ip": "10.0.0.9", "porta": 80, "alerta": True, "evasao": True})
+    aid = client.get("/api/antenas").json()[0]["id"]
+    ta = {"X-Agent-Token": client.post("/api/agentes", json={"nome": "governanca"}).json()["token"]}
+    tb = {"X-Agent-Token": client.post("/api/agentes", json={"nome": "pcsom"}).json()["token"]}
+    def rep(h, online):
+        client.post("/api/agente/status", headers=h, auth=None, json={"versao": "1", "host": "pc", "antenas": [{"id": aid, "online": online, "detalhe": "x"}]})
+    def estado():
+        with main_db() as con:
+            return con.execute("SELECT online, g.nome agente FROM antena_status s JOIN agentes g ON g.id=s.agente_id WHERE antena_id=%s", (aid,)).fetchone()
+    def envelhece():
+        with main_db() as con:
+            con.execute("UPDATE antena_status SET verificado_em=%s", (time.time() - 1000,)); con.commit()
+    def tipos():
+        return [t for t, _ in enviados if t.startswith("antena")]
+    # 1) vários agentes: o "online" de um agente em dia não é derrubado pelo "offline" de outro
+    rep(ta, True); rep(tb, False)
+    assert estado() == {"online": True, "agente": "governanca"}
+    # 2) se quem via online some (PC desligado), o offline do outro passa a valer após o prazo
+    envelhece(); rep(tb, False)
+    assert estado() == {"online": False, "agente": "pcsom"}
+    # 3) cobertura: antena fica sem nenhum agente reportando -> em silêncio, marca a perda
+    envelhece(); main.state["alertas"].clear()
+    main.checar_alertas()
+    assert "cobertura:%d" % aid in main.state["alertas"] and tipos() == []
+    # 4) algum agente volta a vê-la online -> avisa uma vez, citando o agente
+    rep(tb, True)
+    main.checar_alertas()
+    assert tipos() == ["antena_online"] and "pcsom" in enviados[-1][1] and "ONLINE" in enviados[-1][1] and "EVASÃO" in enviados[-1][1]
+    main.checar_alertas()
+    assert tipos() == ["antena_online"]  # sem repetir
+    main.state["alertas"].clear()
+
+
+def test_retomada_de_cobertura_nao_duplica_com_o_aviso_de_offline(client, monkeypatch):
+    enviados = []
+    monkeypatch.setattr(main, "notificar", lambda tipo, texto, c=None, destinatario_id=None: enviados.append(tipo))
+    main.state["alertas"].clear(); main.state.pop("_salvo", None)
+    now = time.time(); c = main.cfg()
+    def ant(online, visto): return [{"id": 7, "nome": "r", "ip": "1.1.1.1", "alerta": True, "evasao": False, "online": online, "detalhe": "", "verificado_em": visto, "extra": None, "agente": "x"}]
+    main.avaliar_agentes(now, ant(False, now), [], c)              # offline em dia: alerta de offline
+    main.avaliar_agentes(now + 500, ant(False, now), [], c)        # sem agente por >2min: marca cobertura
+    msgs = main.avaliar_agentes(now + 510, ant(True, now + 510), [], c)  # volta online
+    assert [t for t, _ in msgs] == ["antena_offline"] and "voltou" in msgs[0][1]  # só a retomada normal, sem duplicar
+    main.state["alertas"].clear()

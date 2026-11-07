@@ -68,3 +68,7 @@ Data de referencia: 2026-11-07.
 ## Estado dos alertas
 
 - `state["alertas"]` (memoria) guarda quando cada alerta foi enviado. Chaves `antena:ID`, `webhook:ID`, `agente:ID` sao espelhadas na tabela `alerta_estado` (restart/deploy nao reenvia). `sem_sinal` e `falhas` ficam so em memoria (dependem de dados que zeram no restart). Alerta novo derivado do banco: use um prefixo e inclua em `PERSISTE_ALERTA`.
+
+## Varios agentes
+
+- `antena_status` guarda UMA linha por antena (ultimo agente a reportar), com a regra: "online" de agente em dia vence "offline" de outro. Sem dado fresco (>`AGENTE_SEM_CONTATO_SEGUNDOS`) o alerta da antena nao e reavaliado (estado preservado). `cobertura:ID` em `alerta_estado` marca antena que ficou sem agente; a volta online gera o aviso `antena_online`.

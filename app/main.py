@@ -538,16 +538,29 @@ def avaliar_agentes(agora: float, antenas: list[dict], agentes: list[dict], c: d
     msgs = []
     repetir = int(c["repetir_min"])
     condicoes = {}
+    for a in antenas:  # cobertura: nenhum agente a vê (ex.: PC do hotel desligado) -> quando algum voltar a vê-la online, avisa
+        if not (a["alerta"] or a.get("evasao")) or a["verificado_em"] is None:
+            continue
+        chave = f"cobertura:{a['id']}"
+        if agora - a["verificado_em"] >= AGENTE_SEM_CONTATO_SEG:
+            state["alertas"].setdefault(chave, agora)  # em silêncio: o aviso de "agente sem contato" já cobre a perda
+        elif chave in state["alertas"] and a["online"]:
+            del state["alertas"][chave]
+            if f"antena:{a['id']}" not in state["alertas"]:  # se havia alerta de offline, a retomada dele já avisa
+                pri = "🚨 EVASÃO — " if a.get("evasao") else ""
+                msgs.append(("antena_online", f"✅ Cabine RFID: {pri}antena {a['nome']} ({a.get('ip') or 'sem IP'}) está ONLINE"
+                                              + (f" (agente {a['agente']})" if a.get("agente") else "") + " — voltou a ser monitorada."))
     for a in antenas:
         pri = "🚨 EVASÃO — " if a.get("evasao") else ""  # antena de saída: sem ela, a evasão passa sem ser detectada
-        if (a["alerta"] or a.get("evasao")) and a["verificado_em"] is not None:
-            off = (not a["online"]) and agora - a["verificado_em"] < AGENTE_SEM_CONTATO_SEG
+        # sem dado fresco (nenhum agente reportando) não se avalia: manter o estado, nem alertar nem dar "voltou" falso
+        if (a["alerta"] or a.get("evasao")) and a["verificado_em"] is not None and agora - a["verificado_em"] < AGENTE_SEM_CONTATO_SEG:
+            off = not a["online"]
             condicoes[f"antena:{a['id']}"] = (off, f"⚠️ Cabine RFID: {pri}antena {a['nome']} ({a.get('ip') or 'sem IP'}) está OFFLINE — {a.get('detalhe') or 'sem resposta'}.",
                                               f"✅ Cabine RFID: {pri}antena {a['nome']} voltou a responder.")
     for a in antenas:  # webhook de eventos do R700 (informado pelo próprio leitor em /api/v1/status)
         w = _webhook_status(a.get("extra"))
-        if a["alerta"] and w is not None and a["verificado_em"] is not None:
-            ruim = (w.get("status") != "active" or int(w.get("httpStatusCode") or 0) >= 400) and agora - a["verificado_em"] < AGENTE_SEM_CONTATO_SEG
+        if a["alerta"] and w is not None and a["verificado_em"] is not None and agora - a["verificado_em"] < AGENTE_SEM_CONTATO_SEG:
+            ruim = w.get("status") != "active" or int(w.get("httpStatusCode") or 0) >= 400
             condicoes[f"webhook:{a['id']}"] = (ruim, f"⚠️ Cabine RFID: o rádio {a['nome']} está com FALHA ao enviar eventos pelo webhook (status {w.get('status')}, HTTP {w.get('httpStatusCode')}).",
                                                f"✅ Cabine RFID: o webhook do rádio {a['nome']} voltou a entregar eventos.")
     for ag in agentes:
@@ -566,7 +579,7 @@ def avaliar_agentes(agora: float, antenas: list[dict], agentes: list[dict], c: d
     return msgs
 
 
-PERSISTE_ALERTA = ("antena:", "webhook:", "agente:")  # derivados do banco; sem_sinal/falhas dependem de memória e ficam fora
+PERSISTE_ALERTA = ("antena:", "webhook:", "agente:", "cobertura:")  # derivados do banco; sem_sinal/falhas dependem de memória e ficam fora
 
 
 def carregar_estado_alertas():
@@ -580,7 +593,7 @@ def carregar_estado_alertas():
 
 def salvar_estado_alertas(antenas: list[dict], agentes: list[dict]):
     """Grava no banco o estado dos alertas de antena/agente (só se mudou) e descarta os de itens que não existem mais."""
-    validas = {f"{p}{a['id']}" for a in antenas for p in ("antena:", "webhook:")} | {f"agente:{g['id']}" for g in agentes}
+    validas = {f"{p}{a['id']}" for a in antenas for p in ("antena:", "webhook:", "cobertura:")} | {f"agente:{g['id']}" for g in agentes}
     for chave in [k for k in state["alertas"] if k.startswith(PERSISTE_ALERTA) and k not in validas]:
         del state["alertas"][chave]
     atual = {k: v for k, v in state["alertas"].items() if k.startswith(PERSISTE_ALERTA)}
@@ -606,8 +619,8 @@ def checar_alertas():
     for tipo, texto in avaliar_alertas(agora, ultimo, len(state["falhas_ingest"]), c):
         notificar(tipo, texto, c)
     with closing(db()) as con:
-        antenas = con.execute("""SELECT a.id,a.nome,a.ip,a.alerta,a.evasao,s.online,s.detalhe,s.verificado_em,s.extra FROM antenas a
-                                 JOIN antena_status s ON s.antena_id=a.id""").fetchall()
+        antenas = con.execute("""SELECT a.id,a.nome,a.ip,a.alerta,a.evasao,s.online,s.detalhe,s.verificado_em,s.extra,g.nome agente FROM antenas a
+                                 JOIN antena_status s ON s.antena_id=a.id LEFT JOIN agentes g ON g.id=s.agente_id""").fetchall()
         agentes = con.execute("SELECT id,nome,visto_em FROM agentes").fetchall()
     for tipo, texto in avaliar_agentes(agora, antenas, agentes, c):
         notificar(tipo, texto, c)
@@ -984,9 +997,9 @@ def dashboard():
         q1 = lambda sql, *a: list(con.execute(sql, a).fetchone().values())[0]
         antenas = con.execute("""
             SELECT a.id, a.nome, a.descricao, a.modelo, a.ip, a.evasao, a.alerta, d.nome ambiente,
-                   s.online, s.latencia_ms, s.detalhe, s.extra, s.verificado_em
+                   s.online, s.latencia_ms, s.detalhe, s.extra, s.verificado_em, g.nome agente
             FROM antenas a LEFT JOIN destinos d ON d.id=a.destino_id
-            LEFT JOIN antena_status s ON s.antena_id=a.id ORDER BY a.evasao, a.nome""").fetchall()
+            LEFT JOIN antena_status s ON s.antena_id=a.id LEFT JOIN agentes g ON g.id=s.agente_id ORDER BY a.evasao, a.nome""").fetchall()
         agentes = con.execute("SELECT nome, visto_em, versao, host FROM agentes ORDER BY nome").fetchall()
         envios = con.execute("SELECT quando, tipo, status FROM alerta_envios ORDER BY quando DESC LIMIT 400").fetchall()
         estados = con.execute("""SELECT e.nome estado, e.comportamento, COUNT(i.epc) qtd FROM estados_inventario e
@@ -1006,7 +1019,7 @@ def dashboard():
     for a in antenas:
         visto = a["verificado_em"]
         fresco = visto is not None and now - visto < AGENTE_SEM_CONTATO_SEG
-        lista.append({**{k: a[k] for k in ("id", "nome", "descricao", "modelo", "ip", "evasao", "alerta", "ambiente", "latencia_ms", "detalhe", "verificado_em")},
+        lista.append({**{k: a[k] for k in ("id", "nome", "descricao", "modelo", "ip", "evasao", "alerta", "ambiente", "latencia_ms", "detalhe", "verificado_em", "agente")},
                       "online": bool(a["online"]) if fresco else None,  # None = sem informação recente do agente
                       "extra": _extra_publico(a["extra"])})
     ag = [{**x, "online": x["visto_em"] is not None and now - x["visto_em"] < AGENTE_SEM_CONTATO_SEG} for x in agentes]
@@ -1641,8 +1654,12 @@ def agente_status(b: StatusIn, ag: dict = Depends(agente_auth)):
             con.execute("""INSERT INTO antena_status(antena_id,online,latencia_ms,detalhe,extra,verificado_em,agente_id)
                            SELECT id,%s,%s,%s,%s,%s,%s FROM antenas WHERE id=%s
                            ON CONFLICT(antena_id) DO UPDATE SET online=EXCLUDED.online, latencia_ms=EXCLUDED.latencia_ms,
-                             detalhe=EXCLUDED.detalhe, extra=EXCLUDED.extra, verificado_em=EXCLUDED.verificado_em, agente_id=EXCLUDED.agente_id""",
-                        (a.online, a.latencia_ms, (a.detalhe or "")[:300], json.dumps(a.extra) if a.extra else None, now, ag["id"], a.id))
+                             detalhe=EXCLUDED.detalhe, extra=EXCLUDED.extra, verificado_em=EXCLUDED.verificado_em, agente_id=EXCLUDED.agente_id
+                           -- vários agentes na mesma antena: "online" de um agente em dia vale mais que "offline" de outro
+                           WHERE EXCLUDED.online OR NOT antena_status.online OR antena_status.agente_id IS NULL
+                              OR antena_status.agente_id = EXCLUDED.agente_id OR antena_status.verificado_em < %s""",
+                        (a.online, a.latencia_ms, (a.detalhe or "")[:300], json.dumps(a.extra) if a.extra else None, now, ag["id"], a.id,
+                         now - AGENTE_SEM_CONTATO_SEG))
         con.execute("UPDATE comandos SET status='expirado', concluido_em=%s WHERE status IN ('pendente','enviado') AND criado_em<%s",
                     (now, now - 120))
         cmds = con.execute("""UPDATE comandos SET status='enviado', enviado_em=%s WHERE status='pendente'
