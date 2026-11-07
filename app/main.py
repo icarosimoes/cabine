@@ -112,6 +112,29 @@ def init_db():
           transferencia_id INTEGER REFERENCES transferencias(id))""")
         con.execute("CREATE INDEX IF NOT EXISTS ix_saida_epc ON eventos_saida(epc, detectado_em)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_saida_destino ON eventos_saida(destino_id, detectado_em)")
+        con.execute("ALTER TABLE destinos ADD COLUMN IF NOT EXISTS alerta INTEGER NOT NULL DEFAULT 0")
+
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS antenas(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          nome TEXT NOT NULL UNIQUE,
+          modelo TEXT,
+          destino_id INTEGER REFERENCES destinos(id),
+          criado_em DOUBLE PRECISION NOT NULL)""")
+
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS acomodacoes(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          nome TEXT NOT NULL UNIQUE,
+          uhs INTEGER NOT NULL DEFAULT 0,
+          criado_em DOUBLE PRECISION NOT NULL)""")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS acomodacao_itens(
+          acomodacao_id INTEGER NOT NULL REFERENCES acomodacoes(id) ON DELETE CASCADE,
+          tipo TEXT NOT NULL,
+          qtd DOUBLE PRECISION NOT NULL,
+          fluxo DOUBLE PRECISION NOT NULL DEFAULT 1,
+          PRIMARY KEY(acomodacao_id, tipo))""")
         con.commit()
 
         if not con.execute("SELECT 1 FROM estados_inventario").fetchone():
@@ -292,20 +315,24 @@ def tags(hours: float = 24, limit: int = 200):
     since = time.time() - hours * 3600
     with closing(db()) as con:
         rows = con.execute("""
-          SELECT epc, COUNT(*) reads, MAX(received_at) last, MIN(received_at) first,
-                 MAX(rssi) best_rssi, STRING_AGG(DISTINCT antenna, ',') antennas
-          FROM events WHERE epc IS NOT NULL AND received_at>%s
-          GROUP BY epc ORDER BY last DESC LIMIT %s""", (since, min(limit, 1000))).fetchall()
+          SELECT t.*, i.tipo FROM (
+            SELECT epc, COUNT(*) reads, MAX(received_at) last, MIN(received_at) first,
+                   MAX(rssi) best_rssi, STRING_AGG(DISTINCT antenna, ',') antennas
+            FROM events WHERE epc IS NOT NULL AND received_at>%s
+            GROUP BY epc ORDER BY last DESC LIMIT %s) t
+          LEFT JOIN itens i ON i.epc = t.epc
+          ORDER BY t.last DESC""", (since, min(limit, 1000))).fetchall()
     return rows
 
 
 @app.get("/api/events", dependencies=[Depends(ui_auth)])
 def events(limit: int = 100, epc: str | None = None, after_id: int = 0, raw: bool = False):
-    sql = "SELECT id,received_at,event_type,epc,tid,antenna,rssi,seen_at" + (",raw" if raw else "") + " FROM events WHERE id>%s"
+    sql = ("SELECT e.id,e.received_at,e.event_type,e.epc,e.tid,e.antenna,e.rssi,e.seen_at,i.tipo"
+           + (",e.raw" if raw else "") + " FROM events e LEFT JOIN itens i ON i.epc=e.epc WHERE e.id>%s")
     args: list = [after_id]
     if epc:
-        sql += " AND epc=%s"; args.append(epc)
-    sql += " ORDER BY id DESC LIMIT %s"; args.append(min(limit, 1000))
+        sql += " AND e.epc=%s"; args.append(epc)
+    sql += " ORDER BY e.id DESC LIMIT %s"; args.append(min(limit, 1000))
     with closing(db()) as con:
         return con.execute(sql, args).fetchall()
 
@@ -313,10 +340,12 @@ def events(limit: int = 100, epc: str | None = None, after_id: int = 0, raw: boo
 class DestinoIn(BaseModel):
     tipo: str
     nome: str
+    alerta: bool = False
 
 
 class DestinoPatch(BaseModel):
-    ativo: bool
+    ativo: bool | None = None
+    alerta: bool | None = None
 
 
 class TransferenciaIn(BaseModel):
@@ -432,8 +461,8 @@ def criar_destino(payload: DestinoIn):
         raise HTTPException(400, "nome é obrigatório")
     with closing(db()) as con:
         try:
-            con.execute("INSERT INTO destinos(tipo,nome,ativo,criado_em) VALUES(%s,%s,1,%s)",
-                        (payload.tipo, nome, time.time()))
+            con.execute("INSERT INTO destinos(tipo,nome,ativo,alerta,criado_em) VALUES(%s,%s,1,%s,%s)",
+                        (payload.tipo, nome, 1 if payload.alerta else 0, time.time()))
             con.commit()
         except psycopg.errors.UniqueViolation:
             raise HTTPException(409, "já existe um destino com esse nome")
@@ -444,7 +473,10 @@ def criar_destino(payload: DestinoIn):
 @app.patch("/api/destinos/{destino_id}", dependencies=[Depends(ui_auth)])
 def atualizar_destino(destino_id: int, payload: DestinoPatch):
     with closing(db()) as con:
-        con.execute("UPDATE destinos SET ativo=%s WHERE id=%s", (1 if payload.ativo else 0, destino_id))
+        if payload.ativo is not None:
+            con.execute("UPDATE destinos SET ativo=%s WHERE id=%s", (1 if payload.ativo else 0, destino_id))
+        if payload.alerta is not None:
+            con.execute("UPDATE destinos SET alerta=%s WHERE id=%s", (1 if payload.alerta else 0, destino_id))
         con.commit()
         row = con.execute("SELECT * FROM destinos WHERE id=%s", (destino_id,)).fetchone()
     if not row:
@@ -649,6 +681,88 @@ def listar_saidas(documentado: bool | None = None, destino_id: int | None = None
     with closing(db()) as con:
         return con.execute(sql, args).fetchall()
 
+
+
+class AntenaIn(BaseModel):
+    nome: str
+    modelo: str | None = None
+    destino_id: int | None = None
+
+
+@app.get("/api/antenas", dependencies=[Depends(ui_auth)])
+def listar_antenas():
+    with closing(db()) as con:
+        return con.execute("""SELECT a.id, a.nome, a.modelo, a.destino_id, d.nome destino_nome
+                              FROM antenas a LEFT JOIN destinos d ON d.id=a.destino_id ORDER BY a.nome""").fetchall()
+
+
+@app.post("/api/antenas", dependencies=[Depends(ui_auth)])
+def salvar_antena(payload: AntenaIn):
+    nome = payload.nome.strip()
+    if not nome:
+        raise HTTPException(400, "nome é obrigatório")
+    with closing(db()) as con:
+        if payload.destino_id and not con.execute("SELECT 1 FROM destinos WHERE id=%s", (payload.destino_id,)).fetchone():
+            raise HTTPException(400, "destino inválido")
+        con.execute("""INSERT INTO antenas(nome,modelo,destino_id,criado_em) VALUES(%s,%s,%s,%s)
+                       ON CONFLICT(nome) DO UPDATE SET modelo=excluded.modelo, destino_id=excluded.destino_id""",
+                    (nome, payload.modelo, payload.destino_id, time.time()))
+        con.commit()
+    return {"ok": True}
+
+
+class AcomodacaoItemIn(BaseModel):
+    tipo: str
+    qtd: float
+    fluxo: float = 1
+
+
+class AcomodacaoIn(BaseModel):
+    nome: str
+    uhs: int = 0
+    itens: list[AcomodacaoItemIn] = []
+
+
+@app.get("/api/acomodacoes", dependencies=[Depends(ui_auth)])
+def listar_acomodacoes():
+    with closing(db()) as con:
+        acs = con.execute("SELECT id,nome,uhs FROM acomodacoes ORDER BY nome").fetchall()
+        itens = con.execute("SELECT acomodacao_id,tipo,qtd,fluxo FROM acomodacao_itens ORDER BY tipo").fetchall()
+    for a in acs:
+        a["itens"] = [{"tipo": i["tipo"], "qtd": i["qtd"], "fluxo": i["fluxo"]} for i in itens if i["acomodacao_id"] == a["id"]]
+    return acs
+
+
+@app.post("/api/acomodacoes", dependencies=[Depends(ui_auth)])
+def salvar_acomodacao(payload: AcomodacaoIn):
+    nome = payload.nome.strip()
+    if not nome or payload.uhs < 0:
+        raise HTTPException(400, "nome obrigatório e UHs não pode ser negativo")
+    with closing(db()) as con:
+        ac_id = con.execute("""INSERT INTO acomodacoes(nome,uhs,criado_em) VALUES(%s,%s,%s)
+                               ON CONFLICT(nome) DO UPDATE SET uhs=excluded.uhs RETURNING id""",
+                            (nome, payload.uhs, time.time())).fetchone()["id"]
+        con.execute("DELETE FROM acomodacao_itens WHERE acomodacao_id=%s", (ac_id,))
+        with con.cursor() as cur:
+            cur.executemany("INSERT INTO acomodacao_itens(acomodacao_id,tipo,qtd,fluxo) VALUES(%s,%s,%s,%s)",
+                            [(ac_id, i.tipo.strip(), i.qtd, i.fluxo) for i in payload.itens if i.tipo.strip()])
+        con.commit()
+    return {"ok": True, "id": ac_id}
+
+
+@app.get("/api/enxoval/esperado", dependencies=[Depends(ui_auth)])
+def enxoval_esperado(estado: str = "Em uso"):
+    """Par de enxoval: esperado = Σ UHs × qtd por UH × fluxo (jogos em circulação), contra o atual no estado."""
+    with closing(db()) as con:
+        esperado = {r["tipo"]: r["esperado"] for r in con.execute(
+            """SELECT ai.tipo, SUM(a.uhs * ai.qtd * ai.fluxo) esperado
+               FROM acomodacao_itens ai JOIN acomodacoes a ON a.id=ai.acomodacao_id GROUP BY ai.tipo""").fetchall()}
+        atual = {r["tipo"]: r["n"] for r in con.execute(
+            f"SELECT v.tipo, COUNT(*) n FROM ({ITENS_VIEW_SQL}) v WHERE v.estado=%s GROUP BY v.tipo", (estado,)).fetchall()}
+    tipos = sorted(set(esperado) | set(atual))
+    linhas = [{"tipo": t, "esperado": round(esperado.get(t, 0), 1), "atual": atual.get(t, 0),
+               "diferenca": round(atual.get(t, 0) - esperado.get(t, 0), 1)} for t in tipos]
+    return {"estado": estado, "linhas": linhas}
 
 @app.get("/", dependencies=[Depends(ui_auth)])
 def index():

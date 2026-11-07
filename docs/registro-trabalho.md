@@ -41,3 +41,12 @@
   8 EPCs fora do padrao hex foram importados mesmo assim (ex.: `3`, `300F`, `???`) a pedido do usuario.
 - Conferencia: 152 dos 237 EPCs lidos pelo leitor existem no catalogo; 85 aparecem como "novas".
   **Aberto:** revisar os 8 EPCs fora do padrao e as 85 tags lidas que nao estao no CSV.
+
+### Cadastros do Fera Palace + par de enxoval (2026-11-07)
+
+- Lido o eTrace de referencia (Chrome, somente leitura). Implementado: `destinos.alerta`, tabelas `antenas`,
+  `acomodacoes`/`acomodacao_itens`, `GET /api/enxoval/esperado` e telas Antenas, Acomodacoes, coluna Alerta
+  em Destinos e "Enxoval esperado x atual" em Inventario. `scripts/seed_fera_palace.py` carrega os cadastros
+  (11 ambientes, 3 antenas, 3 acomodacoes / 20 itens de enxoval). Testado local contra Postgres.
+- Tipo do item (catalogo) agora aparece em Eventos ao vivo e Tags lidas.
+- **Aberto:** deploy em producao destas duas mudancas e execucao do seed (aguardando autorizacao).

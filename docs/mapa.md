@@ -23,6 +23,7 @@ bridge-saida/             Ponte Go (captura de bytes do leitor de saida; ainda s
 scripts/seed_exemplo.py   Dados de exemplo via HTTP
 scripts/migrar_sqlite.py  Copia events do SQLite antigo para o Postgres
 scripts/normalizar_epc.py Converte EPCs base64 ja gravados em events para hex
+scripts/seed_fera_palace.py  Cadastros do cliente Fera Palace (ambientes, antenas, acomodacoes)
 scripts/importar_inventario_csv.py  Importa CSV do eTrace (Item;Localizacao;RfidTag;...) para itens
 impinj-stack.yml          Stack Swarm (postgres + impinj)
 docs/                     Esta documentacao
@@ -42,7 +43,9 @@ topbar + drawer no celular). Itens agrupados por tarefa, nao em lista unica:
 | Controle | Alertas de evasao (badge com nao documentados) | `#evasao` |
 | Cadastros | Inventario | `#inventario` |
 | Cadastros | Catalogo de itens | `#catalogo` |
-| Cadastros | Destinos | `#destinos` |
+| Cadastros | Destinos (ambientes, com alerta) | `#destinos` |
+| Cadastros | Antenas (leitor -> ambiente) | `#antenas` |
+| Cadastros | Acomodações (enxoval por UH) | `#acomodacoes` |
 | Cadastros | Estados de inventario | `#estados` |
 | Leitor | Tags lidas | `#tags` |
 | Leitor | Eventos ao vivo | `#eventos` |
@@ -53,7 +56,7 @@ Cada tela carrega so os dados dela (polling de 3s apenas da view aberta + resumo
 
 `events` (leituras brutas, expiram por `RETENTION_DAYS`) · `destinos` (setor|lavanderia) ·
 `lotes` -> `lote_itens` (EPCs) -> 0..1 `transferencias` (append-only) · `estados_inventario` ·
-`itens` (catalogo por EPC) · `eventos_saida` (deteccoes nas saidas, `documentado` 0/1).
+`antenas` (leitor -> ambiente) · `acomodacoes` -> `acomodacao_itens` (qtd por UH x fluxo) · `destinos.alerta` · `itens` (catalogo por EPC) · `eventos_saida` (deteccoes nas saidas, `documentado` 0/1).
 Localizacao do item = destino da ultima transferencia do lote que o continha (`ITENS_VIEW_SQL`).
 
 ## Rotas
@@ -68,5 +71,7 @@ Auth: `/ingest` = `WEBHOOK_*`; `POST /api/saida` = `SAIDA_*`; demais `/api/*` e 
 | Transferencias | `GET /api/transferencias` |
 | Itens/estados | `POST/GET /api/itens`, `GET /api/itens/opcoes`, `PATCH /api/itens/{epc}/estado`, `GET/POST /api/estados`, `GET /api/inventario` |
 | Evasao | `POST /api/saida`, `GET /api/saida` |
+| Antenas | `GET/POST /api/antenas` (upsert por nome) |
+| Acomodacoes/par | `GET/POST /api/acomodacoes` (upsert por nome, substitui itens), `GET /api/enxoval/esperado` |
 
 Payloads, codigos de erro e fluxos: [api.md](api.md) e `app/main.py`.

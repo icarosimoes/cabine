@@ -29,6 +29,17 @@ Data de referencia: 2026-11-07.
 - **Localizacao nao e campo editavel**: vem da ultima transferencia. Importacoes de inventario nao
   fabricam lotes/transferencias para "carregar" localizacao (poluiria a auditoria).
 
+- **Referencia = eTrace (Fera Palace Hotel)**, lido em 2026-11-07 (somente leitura). Modelo dele: Ambientes
+  (com sino de alerta), Antenas (nome, modelo, ambiente), Estacoes de Controle (PCs que recebem alerta
+  `NTFY-...`, com heartbeat), Categorias (com pai), Atributos (Tamanho/Composicao/Cor/Fabricante),
+  Acomodacoes (tipo, UHs, enxoval por UH com **qtd** e **fluxo**), Estados, Conferencia de Estoque,
+  Movimentacoes (com usuario), Leitor Manual, Antenas de Controle (monitor ao vivo). O teste do Cabine usa
+  exatamente os cadastros desse cliente (`scripts/seed_fera_palace.py`).
+- **Esperado = UHs x qtd por UH x fluxo.** `fluxo` e o multiplicador de jogos em circulacao (3 = quarto +
+  lavanderia + rouparia; 1,1 = item que quase nao roda). Piscina usa qtd total (89/162/35) com 1 UH.
+- **Alerta por ambiente**: ligado onde a peca nao deveria cruzar antena de controle (Apartamentos, Rouparia
+  Geral...); desligado em Lavanderia, Relavar, Recepcao, Secagem. Ainda nao dispara nada: so e cadastro.
+
 ## Convencoes
 
 - Textos de UI em pt-BR; tabelas/rotas de dominio em pt-BR; termos do leitor/evento em ingles (Impinj).

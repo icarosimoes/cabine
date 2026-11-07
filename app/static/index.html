@@ -91,6 +91,8 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
     <a class="nav-item" href="#inventario" data-nav="inventario">Inventário</a>
     <a class="nav-item" href="#catalogo" data-nav="catalogo">Catálogo de itens</a>
     <a class="nav-item" href="#destinos" data-nav="destinos">Destinos</a>
+    <a class="nav-item" href="#antenas" data-nav="antenas">Antenas</a>
+    <a class="nav-item" href="#acomodacoes" data-nav="acomodacoes">Acomodações</a>
     <a class="nav-item" href="#estados" data-nav="estados">Estados de inventário</a>
     <div class="nav-section">Leitor</div>
     <a class="nav-item" href="#tags" data-nav="tags">Tags lidas</a>
@@ -180,6 +182,10 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
   <div class="row" style="padding-top:0"><b id="invResumo">Resumo — carregando…</b></div>
   <div class="scroll"><table><thead><tr><th>Tipo</th><th>Quantidade</th></tr></thead><tbody id="invTabela"></tbody></table></div>
 </section>
+<section>
+  <h2><span>Enxoval esperado × atual <span class="mut">(UHs × qtd por UH × fluxo, itens "Em uso")</span></span></h2>
+  <div class="scroll"><table><thead><tr><th>Tipo</th><th>Esperado</th><th>Atual</th><th>Diferença</th></tr></thead><tbody id="invEsperado"></tbody></table></div>
+</section>
 </div>
 <div class="view" data-view="catalogo" hidden>
 <section>
@@ -210,7 +216,7 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
     <button class="acc" id="novoDestino">Cadastrar</button>
   </div>
   <div id="destinoMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Status</th><th></th></tr></thead><tbody id="destinos"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Alerta</th><th>Status</th><th></th></tr></thead><tbody id="destinos"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="estados" hidden>
@@ -230,13 +236,39 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
 <section>
   <h2><span>Tags <span id="filtro" style="color:var(--muted)"></span></span>
     <span><select id="hours"><option value="1">1h</option><option value="24" selected>24h</option><option value="168">7 dias</option></select></span></h2>
-  <div class="scroll"><table><thead><tr><th>EPC</th><th>Leituras</th><th>Última</th><th>Antenas</th><th>Melhor RSSI</th></tr></thead><tbody id="tags"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>EPC</th><th>Item</th><th>Leituras</th><th>Última</th><th>Antenas</th><th>Melhor RSSI</th></tr></thead><tbody id="tags"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="eventos" hidden>
 <section>
   <h2><span>Eventos ao vivo</span><button id="limpar" hidden>limpar filtro</button></h2>
-  <div class="scroll"><table><thead><tr><th>Hora</th><th>Tipo</th><th>EPC</th><th>Antena</th><th>RSSI</th></tr></thead><tbody id="evs"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Hora</th><th>EPC</th><th>Item</th><th>Antena</th><th>RSSI</th></tr></thead><tbody id="evs"></tbody></table></div>
+</section>
+</div>
+<div class="view" data-view="antenas" hidden>
+<section>
+  <h2><span>Antenas cadastradas</span></h2>
+  <div class="row">
+    <input id="anNome" type="text" placeholder="nome (ex. impinj15f21c)" style="flex:1;min-width:180px">
+    <input id="anModelo" type="text" placeholder="modelo (ex. ImpinjR700)">
+    <select id="anDestino"></select>
+    <button class="acc" id="anSalvar">Salvar</button>
+  </div>
+  <div id="antenaMsg" class="msg"></div>
+  <div class="scroll"><table><thead><tr><th>Nome</th><th>Modelo</th><th>Ambiente</th></tr></thead><tbody id="antenas"></tbody></table></div>
+</section>
+</div>
+<div class="view" data-view="acomodacoes" hidden>
+<section>
+  <h2><span>Tipos de acomodação e enxoval por UH</span></h2>
+  <div class="row">
+    <input id="acNome" type="text" placeholder="nome (ex. King)">
+    <input id="acUhs" type="number" min="0" placeholder="UHs" style="width:90px">
+  </div>
+  <div class="row" style="padding-top:0"><textarea id="acItens" rows="4" style="flex:1;min-width:260px;font:inherit;font-size:12px;background:var(--navy-light);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px" placeholder="um item por linha: tipo;qtd por UH;fluxo   (ex. Toalha rosto;2;3)"></textarea>
+    <button class="acc" id="acSalvar">Salvar</button></div>
+  <div id="acMsg" class="msg"></div>
+  <div class="scroll"><table><thead><tr><th>Acomodação</th><th>UHs</th><th>Item</th><th>Qtd/UH</th><th>Fluxo</th></tr></thead><tbody id="acomodacoes"></tbody></table></div>
 </section>
 </div>
 </main>
@@ -251,9 +283,10 @@ async function j(u,opts){
   if(!r.ok){let m;try{m=(await r.json()).detail}catch(e){m=r.statusText}throw new Error(m||('erro '+r.status))}
   return r.status===204?null:r.json();
 }
+const itemTipo=t=>t?esc(t):'<span class="mut">não cadastrada</span>';
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
-const TITULOS={painel:'Painel',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
+const TITULOS={antenas:'Antenas',acomodacoes:'Acomodações',painel:'Painel',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
   inventario:'Inventário',catalogo:'Catálogo de itens',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
 let view='painel';
 const LOADERS={
@@ -261,14 +294,16 @@ const LOADERS={
   leitura:()=>carregarPendentes(),
   transferencias:async()=>{await carregarDestinos();await carregarTransferencias()},
   evasao:async()=>{await carregarDestinos();await carregarEvasoes()},
-  inventario:async()=>{await carregarOpcoesInventario();await carregarInventario()},
+  inventario:async()=>{await carregarOpcoesInventario();await carregarInventario();await carregarEsperado()},
+  antenas:()=>carregarAntenas(),
+  acomodacoes:()=>carregarAcomodacoes(),
   catalogo:()=>carregarCatalogo(),
   destinos:()=>carregarDestinos(),
   estados:()=>carregarEstados(),
   tags:async()=>{const t=await j('/api/tags?hours='+$('hours').value);
-    $('tags').innerHTML=t.map(t=>`<tr><td class="epc" data-e="${esc(t.epc)}">${esc(t.epc)}</td><td>${t.reads}</td><td>${dt(t.last)}</td><td>${esc(t.antennas)}</td><td>${t.best_rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem leituras</td></tr>'},
+    $('tags').innerHTML=t.map(t=>`<tr><td class="epc" data-e="${esc(t.epc)}">${esc(t.epc)}</td><td>${itemTipo(t.tipo)}</td><td>${t.reads}</td><td>${dt(t.last)}</td><td>${esc(t.antennas)}</td><td>${t.best_rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=6>sem leituras</td></tr>'},
   eventos:async()=>{const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
-    $('evs').innerHTML=evs.map(e=>`<tr><td>${hm(e.received_at)}</td><td>${esc(e.event_type)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>'},
+    $('evs').innerHTML=evs.map(e=>`<tr><td>${hm(e.received_at)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${itemTipo(e.tipo)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>'},
 };
 async function tick(){
   try{
@@ -308,8 +343,8 @@ async function carregarDestinos(){
   const opts=destinosCache.filter(d=>d.ativo).map(d=>`<option value="${d.id}">${esc(d.nome)} (${d.tipo})</option>`).join('');
   document.querySelectorAll('select.destinoSel').forEach(sel=>{const cur=sel.value;sel.innerHTML='<option value="">selecione o destino…</option>'+opts;if(cur)sel.value=cur});
   $('fDestino').innerHTML='<option value="">todos os destinos</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
-  $('destinos').innerHTML=destinosCache.map(d=>`<tr><td>${esc(d.nome)}</td><td>${pill(d.tipo)}</td><td>${d.ativo?'ativo':'inativo'}</td>
-    <td><button data-id="${d.id}" data-ativo="${d.ativo}" class="toggleDestino">${d.ativo?'desativar':'reativar'}</button></td></tr>`).join('')||'<tr><td colspan=4>nenhum destino cadastrado</td></tr>';
+  $('destinos').innerHTML=destinosCache.map(d=>`<tr><td>${esc(d.nome)}</td><td>${pill(d.tipo)}</td><td>${d.alerta?'<span class="pill alerta">🔔 alerta</span>':'<span class="mut">–</span>'}</td><td>${d.ativo?'ativo':'inativo'}</td>
+    <td><button data-id="${d.id}" data-alerta="${d.alerta}" class="toggleAlerta">${d.alerta?'desligar alerta':'ligar alerta'}</button> <button data-id="${d.id}" data-ativo="${d.ativo}" class="toggleDestino">${d.ativo?'desativar':'reativar'}</button></td></tr>`).join('')||'<tr><td colspan=5>nenhum destino cadastrado</td></tr>';
 }
 $('novoDestino').onclick=async()=>{
   const nome=$('novoNome').value.trim(),tipo=$('novoTipo').value,msg=$('destinoMsg');
@@ -318,6 +353,11 @@ $('novoDestino').onclick=async()=>{
     $('novoNome').value='';msg.className='msg ok';msg.textContent='destino cadastrado';await carregarDestinos()}
   catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
+document.addEventListener('click',async e=>{
+  const a=e.target.closest('.toggleAlerta');if(!a)return;
+  await j('/api/destinos/'+a.dataset.id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({alerta:a.dataset.alerta!=='1'})});
+  await carregarDestinos();
+});
 document.addEventListener('click',async e=>{
   const b=e.target.closest('.toggleDestino');if(!b)return;
   await j('/api/destinos/'+b.dataset.id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({ativo:b.dataset.ativo!=='1'})});
@@ -478,6 +518,38 @@ async function carregarInventario(){
   $('invTabela').innerHTML=r.resumo.map(x=>`<tr><td>${esc(x.tipo)}</td><td>${x.quantidade}</td></tr>`).join('')||'<tr><td colspan=2>nenhum item encontrado</td></tr>';
 }
 INV_FILTROS.forEach(([id])=>{$(id).onchange=carregarInventario});
+async function carregarEsperado(){
+  const r=await j('/api/enxoval/esperado');
+  $('invEsperado').innerHTML=r.linhas.map(l=>`<tr><td>${esc(l.tipo)}</td><td>${l.esperado||'–'}</td><td>${l.atual}</td>
+    <td style="color:${l.esperado&&l.diferenca<0?'var(--red)':'var(--green)'}">${l.esperado?(l.diferenca>0?'+':'')+l.diferenca:'–'}</td></tr>`).join('')||'<tr><td colspan=4>sem par de enxoval cadastrado (Acomodações)</td></tr>';
+}
+async function carregarAntenas(){
+  await carregarDestinos();
+  $('anDestino').innerHTML='<option value="">ambiente…</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
+  const rows=await j('/api/antenas');
+  $('antenas').innerHTML=rows.map(a=>`<tr><td>${esc(a.nome)}</td><td>${esc(a.modelo||'–')}</td><td>${esc(a.destino_nome||'–')}</td></tr>`).join('')||'<tr><td colspan=3>nenhuma antena cadastrada</td></tr>';
+}
+$('anSalvar').onclick=async()=>{
+  const msg=$('antenaMsg'),nome=$('anNome').value.trim();
+  if(!nome){msg.className='msg bad';msg.textContent='informe o nome da antena';return}
+  try{await j('/api/antenas',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome,modelo:$('anModelo').value.trim()||null,destino_id:$('anDestino').value?Number($('anDestino').value):null})});
+    msg.className='msg ok';msg.textContent='antena salva';$('anNome').value='';$('anModelo').value='';await carregarAntenas()}
+  catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
+async function carregarAcomodacoes(){
+  const rows=await j('/api/acomodacoes');
+  $('acomodacoes').innerHTML=rows.flatMap(a=>a.itens.length?a.itens.map((i,n)=>`<tr><td>${n?'':esc(a.nome)}</td><td>${n?'':a.uhs}</td><td>${esc(i.tipo)}</td><td>${i.qtd}</td><td>${i.fluxo}</td></tr>`)
+    :[`<tr><td>${esc(a.nome)}</td><td>${a.uhs}</td><td colspan=3 class="mut">sem itens</td></tr>`]).join('')||'<tr><td colspan=5>nenhuma acomodação cadastrada</td></tr>';
+}
+$('acSalvar').onclick=async()=>{
+  const msg=$('acMsg'),nome=$('acNome').value.trim();
+  if(!nome){msg.className='msg bad';msg.textContent='informe o nome';return}
+  const itens=$('acItens').value.split('\n').map(l=>l.split(';').map(x=>x.trim())).filter(p=>p[0]).map(p=>({tipo:p[0],qtd:Number((p[1]||'0').replace(',','.')),fluxo:Number((p[2]||'1').replace(',','.'))}));
+  if(itens.some(i=>isNaN(i.qtd)||isNaN(i.fluxo))){msg.className='msg bad';msg.textContent='qtd e fluxo devem ser números';return}
+  try{await j('/api/acomodacoes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome,uhs:Number($('acUhs').value)||0,itens})});
+    msg.className='msg ok';msg.textContent='acomodação salva';await carregarAcomodacoes()}
+  catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
 
 let estadosCache=[];
 async function carregarEstados(){

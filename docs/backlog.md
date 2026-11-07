@@ -16,6 +16,17 @@
 - **Falta validacao do formato de EPC na API**: `/api/itens` e `/api/saida` aceitam qualquer texto; um EPC
   digitado em minusculo ou base64 nao casa com as leituras. Considerar normalizar com `epc_hex()`.
 
+## Aprendido com o eTrace (nao feito ainda)
+
+- **Conferencia de estoque** (esperados x conferidos x nao conferidos, % e duracao, por usuario): maior lacuna.
+- **Usuario em cada movimentacao** e impressao de movimentacoes (precisa de login com usuarios).
+- **Leitor manual** (colar/ler tags avulsas e confirmar).
+- **Monitor de antenas de controle ao vivo** (intervalo, som, pausa, relatorio) e uso do `alerta` do ambiente
+  para disparar aviso; mapear `hostname` do evento -> antena -> ambiente.
+- **Estacoes de controle** (clientes que recebem alerta, com heartbeat) e **atributos/categorias com pai**
+  configuraveis.
+- Itens de acomodacao: so "Piscina", "Solteiro" e "King" do Fera Palace; Usuarios do eTrace nao foram lidos.
+
 ## Ideias
 
 - Resumo de leituras por hora (retido para sempre) + export CSV, com `RETENTION_DAYS` menor para eventos
