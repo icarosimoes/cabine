@@ -30,7 +30,7 @@ Avisa falhas de comunicacao do radio com o webhook: **sem sinal ha X min**, **fa
 4xx/5xx em 10 min) e a **retomada**. Um aviso por transicao, lembrete a cada `ALERTA_REPETIR_MINUTOS` (120).
 **Configuracao pela UI** (admin): menu *Alertas WhatsApp* — URL da Evolution (padrao `http://evolution-api:8080`,
 via rede `traefik-public`), instancia, API key (so grava; nunca e devolvida pela API), limites e, abaixo, o **cadastro de destinatarios**
-(nome, WhatsApp, recebe "radio sem sinal" / "falhas no /ingest", ativo, botao Testar por pessoa e historico de envios, como
+(nome, WhatsApp ou ID de grupo `...@g.us` — botao "Buscar grupos" lista os da instancia —, recebe "radio sem sinal" / "falhas no /ingest", ativo, botao Testar por pessoa e historico de envios, como
 no gestaointeligente). Fica na tabela `config` (a chave em texto no banco: proteger
 backups). Variaveis `WHATSAPP_*` no `.env` servem so de valor inicial. API: `GET/PUT /api/config/alertas`,
 `/api/alertas/destinatarios` (CRUD + `/{id}/teste`), `/api/alertas/envios`. Sem instancia+chave+destinatario ativo

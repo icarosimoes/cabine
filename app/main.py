@@ -1,5 +1,5 @@
 """Receptor de webhook do leitor Impinj (R700 Event Reporting) + painel ao vivo."""
-import asyncio, base64, csv, io, binascii, hashlib, hmac, json, os, secrets, time, urllib.parse, urllib.request
+import asyncio, re, base64, csv, io, binascii, hashlib, hmac, json, os, secrets, time, urllib.parse, urllib.request
 from pathlib import Path
 
 import psycopg
@@ -399,7 +399,7 @@ def enviar_um(c: dict, numero: str, texto: str) -> str | None:
         return "WhatsApp não configurado (instância e API key)"
     req = urllib.request.Request(
         f"{c['wa_url'].rstrip('/')}/message/sendText/{c['wa_instance']}", method="POST",
-        data=json.dumps({"number": "".join(ch for ch in numero if ch.isdigit()), "text": texto}).encode(),
+        data=json.dumps({"number": numero if numero.endswith("@g.us") else "".join(ch for ch in numero if ch.isdigit()), "text": texto}).encode(),
         headers={"apikey": c["wa_apikey"], "Content-Type": "application/json"})
     try:
         urllib.request.urlopen(req, timeout=15).read()
@@ -681,13 +681,19 @@ class DestinatarioIn(BaseModel):
 
 
 def _valida_dest(b: DestinatarioIn) -> dict:
-    nome, num = b.nome.strip(), "".join(ch for ch in b.whatsapp if ch.isdigit())
+    nome, bruto = b.nome.strip(), b.whatsapp.strip()
     if not nome:
         raise HTTPException(400, "nome é obrigatório")
-    if len(num) in (10, 11):  # DDD + número sem DDI: assume Brasil
-        num = "55" + num
-    if not 12 <= len(num) <= 15:
-        raise HTTPException(400, "número inválido: use DDI+DDD+número (ex.: 5511999999999)")
+    if bruto.endswith("@g.us"):  # grupo: ID completo (ex.: 120363123456789012@g.us)
+        num = bruto
+        if not re.fullmatch(r"[0-9]{10,25}(-[0-9]+)?@g\.us", num):
+            raise HTTPException(400, "ID de grupo inválido (ex.: 120363123456789012@g.us)")
+    else:
+        num = "".join(ch for ch in bruto if ch.isdigit())
+        if len(num) in (10, 11):  # DDD + número sem DDI: assume Brasil
+            num = "55" + num
+        if not 12 <= len(num) <= 15:
+            raise HTTPException(400, "número inválido: use DDI+DDD+número (ex.: 5511999999999) ou o ID do grupo (...@g.us)")
     return {"nome": nome, "whatsapp": num, "ativo": b.ativo, "recebe_sem_sinal": b.recebe_sem_sinal, "recebe_falhas": b.recebe_falhas}
 
 
@@ -739,6 +745,24 @@ def testar_destinatario(dest_id: int):
     if r[0]["erro"]:
         raise HTTPException(400, r[0]["erro"])
     return {"ok": True}
+
+
+@app.get("/api/alertas/grupos", dependencies=[Depends(admin_auth)])
+def listar_grupos_whatsapp():
+    """Grupos da instância Evolution, para escolher o destino sem digitar o ID."""
+    c = cfg()
+    if not (c["wa_apikey"] and c["wa_instance"]):
+        raise HTTPException(400, "configure instância e API key e salve antes de buscar grupos")
+    req = urllib.request.Request(f"{c['wa_url'].rstrip('/')}/group/fetchAllGroups/{c['wa_instance']}?getParticipants=false",
+                                 headers={"apikey": c["wa_apikey"]})
+    try:
+        dados = json.loads(urllib.request.urlopen(req, timeout=30).read())
+    except urllib.error.HTTPError as e:
+        raise HTTPException(400, f"Evolution respondeu HTTP {e.code} (confira instância e chave)") from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"falha ao falar com a Evolution: {e}") from e
+    return sorted(({"id": g.get("id"), "nome": g.get("subject") or g.get("id")} for g in dados if g.get("id")),
+                  key=lambda g: g["nome"].lower())
 
 
 @app.get("/api/alertas/envios", dependencies=[Depends(admin_auth)])

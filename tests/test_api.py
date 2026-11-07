@@ -201,3 +201,13 @@ def test_destinatarios_alerta(client, monkeypatch):
     assert client.post(f"/api/alertas/destinatarios/{ana['id']}/teste").status_code == 400
     assert client.delete(f"/api/alertas/destinatarios/{ana['id']}").status_code == 200
     assert len(client.get("/api/alertas/destinatarios").json()) == 2
+
+
+def test_destinatario_grupo(client, monkeypatch):
+    enviados = []
+    monkeypatch.setattr(main, "enviar_um", lambda c, n, t: enviados.append(n) or None)
+    assert client.post("/api/alertas/destinatarios", json={"nome": "Grupo TI", "whatsapp": "120363123456789012@g.us"}).status_code == 200
+    assert client.post("/api/alertas/destinatarios", json={"nome": "Ruim", "whatsapp": "abc@g.us"}).status_code == 400
+    main.notificar("sem_sinal", "x")
+    assert enviados == ["120363123456789012@g.us"]
+    assert client.get("/api/alertas/grupos").status_code == 400  # sem Evolution configurada

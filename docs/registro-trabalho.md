@@ -85,3 +85,4 @@
   pelo `docker stack deploy`); corrigido. Nunca usar default aninhado no stack.
 - Cadastro de destinatarios do alerta (padrao gestaointeligente): tabelas `alerta_destinatarios`/`alerta_envios`, envio por
   pessoa conforme o tipo, teste individual, historico (30 dias). Aberto: deploy.
+- Destinatario pode ser grupo de WhatsApp (ID @g.us) + botao Buscar grupos (Evolution fetchAllGroups). Aberto: deploy.
