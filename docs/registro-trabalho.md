@@ -30,3 +30,14 @@
   troca (leitor tem retry). Verificado: `/health` 200, UI 200, sem auth 401, leitor gravando.
   Volume SQLite antigo `impinj_impinj_data` mantido como backup.
 - **Aberto:** validar com material real a janela de leitura da cabine; sem suite de testes.
+
+### Normalizacao de EPC + importacao do inventario (2026-11-07)
+
+- O R700 manda `epc` em base64 (sem `epcHex`); o app guardava assim e nada casava com o catalogo (hex).
+  `epc_hex()` em `app/main.py` converte para hex maiusculo no `/ingest`; `scripts/normalizar_epc.py`
+  converteu 237 EPCs ja gravados em `events`.
+- `scripts/importar_inventario_csv.py`: 4.570 itens do CSV do eTrace importados (951 como Descartado,
+  3.619 Em uso). Localizacao e Data_Compra nao importadas (localizacao e derivada de transferencias).
+  8 EPCs fora do padrao hex foram importados mesmo assim (ex.: `3`, `300F`, `???`) a pedido do usuario.
+- Conferencia: 152 dos 237 EPCs lidos pelo leitor existem no catalogo; 85 aparecem como "novas".
+  **Aberto:** revisar os 8 EPCs fora do padrao e as 85 tags lidas que nao estao no CSV.
