@@ -5,7 +5,7 @@
 #   cd /opt/impinj && docker build -t impinj-rfid:local .
 #   bash -c 'set -a; . ./.env; set +a; docker stack deploy -c impinj-stack.yml impinj'
 #
-# .env (chmod 600): WEBHOOK_USER, WEBHOOK_PASS, UI_USER, UI_PASS, SAIDA_USER, SAIDA_PASS,
+# .env (chmod 600): WEBHOOK_USER, WEBHOOK_PASS, UI_USER, UI_PASS, SESSION_SECRET, SAIDA_USER, SAIDA_PASS,
 #                    POSTGRES_PASSWORD, KUMA_PUSH_URL (opcional)
 # Depois de rebuildar a imagem: docker service update --force impinj_impinj
 version: "3.8"
@@ -45,6 +45,7 @@ services:
       WEBHOOK_PASS: "${WEBHOOK_PASS:?Informe WEBHOOK_PASS}"
       UI_USER: "${UI_USER:?Informe UI_USER}"
       UI_PASS: "${UI_PASS:?Informe UI_PASS}"
+      SESSION_SECRET: "${SESSION_SECRET:?Informe SESSION_SECRET (openssl rand -hex 32)}"
       SAIDA_USER: "${SAIDA_USER:?Informe SAIDA_USER}"
       SAIDA_PASS: "${SAIDA_PASS:?Informe SAIDA_PASS}"
       SAIDA_JANELA_MINUTOS: "${SAIDA_JANELA_MINUTOS:-60}"

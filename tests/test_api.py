@@ -346,3 +346,27 @@ def test_download_do_agente(client, tmp_path, monkeypatch):
     assert client.get("/api/agente/download/../main.py").status_code in (404, 422)
     assert client.get("/api/agente/download/outro.txt").status_code == 404
     assert client.get("/api/agente/download/instalar.cmd", auth=None).status_code in (401, 302, 307)
+
+
+def test_rate_limit_ignora_xff_forjado_e_cobre_basic(client):
+    # cliente forja o 1º valor do X-Forwarded-For; vale o último (o que o proxy acrescentou)
+    for i in range(8):
+        client.post("/api/login", json={"usuario": "admin", "senha": "x"}, headers={"x-forwarded-for": f"9.9.9.{i}, 5.5.5.5"})
+    r = client.post("/api/login", json={"usuario": "admin", "senha": "admin-pass"}, headers={"x-forwarded-for": "1.1.1.1, 5.5.5.5"})
+    assert r.status_code == 429
+    # Basic Auth também conta e bloqueia
+    for _ in range(8):
+        client.get("/api/me", auth=("admin", "errada"), headers={"x-forwarded-for": "7.7.7.7"})
+    assert client.get("/api/me", auth=("admin", "admin-pass"), headers={"x-forwarded-for": "7.7.7.7"}).status_code == 429
+    # ingest (Basic do webhook) também
+    for _ in range(8):
+        client.post("/ingest", json=[], auth=("w", "errada"), headers={"x-forwarded-for": "8.8.8.8"})
+    assert client.post("/ingest", json=[], auth=("w", "w"), headers={"x-forwarded-for": "8.8.8.8"}).status_code == 429
+
+
+def test_falhas_sao_expurgadas():
+    from app import main
+    main._falhas.clear()
+    main._falhas["velho"] = [time.time() - 10_000]
+    main.bloqueado("novo")
+    assert "velho" not in main._falhas

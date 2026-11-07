@@ -2,6 +2,7 @@ import os
 import pytest
 
 os.environ.setdefault("WEBHOOK_USER", "w"); os.environ.setdefault("WEBHOOK_PASS", "w")
+os.environ.setdefault("SESSION_SECRET", "t" * 40)
 os.environ.setdefault("UI_USER", "admin"); os.environ.setdefault("UI_PASS", "admin-pass")
 os.environ.setdefault("SAIDA_USER", "s"); os.environ.setdefault("SAIDA_PASS", "s")
 if "DATABASE_URL" not in os.environ:

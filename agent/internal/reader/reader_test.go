@@ -107,15 +107,15 @@ func TestDetalheR700(t *testing.T) {
 	}
 }
 
-func TestSkipCommPortNaoAbreConexaoNaPortaDeDados(t *testing.T) {
+func TestAcuraNuncaSondaPortaDeDados(t *testing.T) {
 	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(paginaAcura)) }))
 	defer web.Close()
-	// a.Porta aponta para uma porta fechada, mas com SkipCommPort não pode ser consultada
+	// a.Porta aponta para uma porta fechada; mesmo assim não é consultada (o Acura só aceita 2 clientes)
 	a := cloud.Antena{ID: 1, Nome: "s", Modelo: "AcuraEdgeR30", IP: "127.0.0.1", Porta: 1, Evasao: true}
 	u, _ := url.Parse(web.URL)
 	_ = u // a página de status é buscada na porta 80; aqui só validamos o ramo de skip pela ausência de aviso
-	p := tcpCheck(&config.Config{SkipCommPort: true}, a)
+	p := tcpCheck(&config.Config{}, a)
 	if strings.Contains(p.Detalhe, "FECHADA") {
-		t.Fatalf("com SkipCommPort não pode checar a porta de dados: %q", p.Detalhe)
+		t.Fatalf("não pode checar a porta de dados: %q", p.Detalhe)
 	}
 }

@@ -30,7 +30,10 @@ ALERTA_REPETIR_MIN = int(os.environ.get("ALERTA_REPETIR_MINUTOS", "120"))
 SAIDA_JANELA_MINUTOS = int(os.environ.get("SAIDA_JANELA_MINUTOS", "60"))
 STATIC = Path(__file__).parent / "static"
 security = HTTPBasic()
-SESSION_SECRET = (os.environ.get("SESSION_SECRET") or hashlib.sha256((UI_PASS + "|cabine-sessao").encode()).hexdigest()).encode()
+_sess = os.environ.get("SESSION_SECRET", "")
+if len(_sess) < 32:  # chave do cookie não pode derivar de senha: exigir segredo próprio (>=32 caracteres)
+    raise RuntimeError("defina SESSION_SECRET com pelo menos 32 caracteres (ex.: openssl rand -hex 32)")
+SESSION_SECRET = _sess.encode()
 SESSION_HORAS = int(os.environ.get("SESSION_HORAS", "12"))
 COOKIE = "cabine_sessao"
 PAPEIS = {"leitura": 1, "operador": 2, "admin": 3}
@@ -248,9 +251,13 @@ def init_db():
 
 
 def auth(user, pw):
-    def dep(c: HTTPBasicCredentials = Depends(security)):
+    def dep(request: Request, c: HTTPBasicCredentials = Depends(security)):
+        ip = ip_cliente(request)
+        if bloqueado(ip):
+            raise HTTPException(429, "muitas tentativas; aguarde alguns minutos")
         ok = secrets.compare_digest(c.username, user) & secrets.compare_digest(c.password, pw)
         if not ok:
+            registra_falha(ip)
             raise HTTPException(401, headers={"WWW-Authenticate": "Basic"})
     return dep
 
@@ -263,6 +270,28 @@ saida_auth = auth(SAIDA_USER, SAIDA_PASS)
 # continua valendo como admin (não depende do banco). Usuários do banco sem senha cadastrada não logam.
 _basic_opt = HTTPBasic(auto_error=False)
 _falhas: dict[str, list[float]] = {}
+LIMITE_FALHAS, JANELA_FALHAS = 8, 300
+
+
+def ip_cliente(request: Request) -> str:
+    """IP real: o Traefik ACRESCENTA o IP de quem conectou ao fim do X-Forwarded-For; os valores anteriores
+    vêm do cliente e podem ser forjados, então vale o último."""
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "?"
+
+
+def bloqueado(ip: str) -> bool:
+    agora = time.time()
+    for k in [k for k, v in _falhas.items() if not v or agora - v[-1] > JANELA_FALHAS]:  # expurgo: não cresce sem limite
+        del _falhas[k]
+    _falhas[ip] = [t for t in _falhas.get(ip, []) if agora - t < JANELA_FALHAS]
+    return len(_falhas[ip]) >= LIMITE_FALHAS
+
+
+def registra_falha(ip: str):
+    _falhas.setdefault(ip, []).append(time.time())
 
 
 def hash_senha(senha: str) -> str:
@@ -314,7 +343,12 @@ def usuario_opt(request: Request, c: HTTPBasicCredentials | None = Depends(_basi
     tok = request.cookies.get(COOKIE)
     u = valida_token(tok) if tok else None
     if not u and c:
+        ip = ip_cliente(request)
+        if bloqueado(ip):
+            raise HTTPException(429, "muitas tentativas; aguarde alguns minutos")
         u = autentica(c.username, c.password)
+        if not u:
+            registra_falha(ip)
     return u
 
 
@@ -1707,14 +1741,12 @@ class LoginIn(BaseModel):
 
 @app.post("/api/login")
 def login(payload: LoginIn, request: Request):
-    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "?")).split(",")[0].strip()
-    agora = time.time()
-    _falhas[ip] = [t for t in _falhas.get(ip, []) if agora - t < 300]
-    if len(_falhas[ip]) >= 8:
+    ip = ip_cliente(request)
+    if bloqueado(ip):
         raise HTTPException(429, "muitas tentativas; aguarde alguns minutos")
     u = autentica(payload.usuario.strip(), payload.senha)
     if not u:
-        _falhas[ip].append(agora)
+        registra_falha(ip)
         raise HTTPException(401, "usuário ou senha inválidos")
     resp = JSONResponse({"usuario": u["usuario"], "nome": u["nome"], "papel": u["papel"]})
     resp.set_cookie(COOKIE, emite_token(u), max_age=SESSION_HORAS * 3600, httponly=True, samesite="lax",

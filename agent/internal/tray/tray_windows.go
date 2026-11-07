@@ -4,6 +4,7 @@ package tray
 
 import (
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/getlantern/systray"
@@ -44,7 +45,8 @@ func onReady() {
 			case <-painel.ClickedCh:
 				st, _ := config.ReadState()
 				url := config.DefaultServer
-				if st != nil && st.Server != "" {
+				// state.json é gravável por usuários locais: só aceita http(s), nunca file:/exe/etc.
+				if st != nil && (strings.HasPrefix(st.Server, "https://") || strings.HasPrefix(st.Server, "http://")) {
 					url = st.Server
 				}
 				_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()

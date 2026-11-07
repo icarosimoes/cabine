@@ -16,6 +16,15 @@
 - **Falta validacao do formato de EPC na API**: `/api/itens` e `/api/saida` aceitam qualquer texto; um EPC
   digitado em minusculo ou base64 nao casa com as leituras. Considerar normalizar com `epc_hex()`.
 
+## Seguranca (auditoria 2026-11-07, ver `docs/auditoria-2026-11-07.md`)
+
+- [x] **Alta**: Starlette 0.49.3 + FastAPI 0.120.4 (CVE-2025-62727). Corrigido no codigo (2026-11-07); **falta deploy**.
+- [x] `SESSION_SECRET` obrigatorio (>=32 chars, app nao sobe sem). **Antes do deploy: gerar no `.env` da VPS (`openssl rand -hex 32`)**; sessoes atuais caem.
+- [x] Rate limit: IP do ultimo hop do X-Forwarded-For, tambem no Basic/webhook/saida, expurgo de `_falhas` (corrigido, falta deploy).
+- [ ] Incluir `pg_dump` do Cabine no `espelhar-dumps.sh` (nao coberto hoje) e testar restore.
+- [x] Agente 0.1.4: tray so abre http(s) vindo do `state.json`. [ ] Ainda: tirar escrita de Users em `state.json`/pasta publica (risco de link no tmp do servico).
+- [x] Container sem root (uid 10001). [ ] `govulncheck` no agente; assinatura do instalador; restringir `wa_url` a https/publico.
+
 ## Aprendido com o eTrace (nao feito ainda)
 
 - Conferencia de estoque: feita (2026-11-07); falta registrar o usuario e exportar/imprimir o resultado.
@@ -45,4 +54,4 @@
 - CI/CD: workflow criado (testes + deploy por secrets); falta configurar secrets e validar. GHCR nao adotado.
 - Cadastrar o projeto em `erpsolid/docs/projetos/` (indice central de repos).
 
-- Evasao: antenas .32 e .104 marcadas como de evasao (so monitoramento por ora). Pendente: mapear protocolo da porta 8080 do .104, descobrir por que a 8080 do .32 esta fechada, senha de administracao dos Acura.
+- Evasao: antenas .32 e .104 so monitoramento de rede (online = pagina de status responde; agente 0.1.5 nao sonda a 8080). O Acura aceita 2 clientes na 8080 (hoje ocupadas por 192.168.30.18). Pendente: mapear protocolo da 8080, senha de administracao dos Acura.

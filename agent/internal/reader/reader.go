@@ -183,15 +183,8 @@ func tcpCheck(cfg *config.Config, a cloud.Antena) Probe {
 	if fw, ok := extra["firmware"].(string); ok {
 		detalhe += " · fw " + fw
 	}
-	if a.Porta > 0 && a.Porta != 80 && !cfg.SkipCommPort {
-		if ok, _, _ := portOpen(a.IP, a.Porta); !ok {
-			detalhe += fmt.Sprintf(" · ATENÇÃO: porta de comunicação %d FECHADA", a.Porta)
-			extra["porta_comunicacao"] = "fechada"
-			if a.Evasao { // antena de saída sem canal de dados = evasão passa despercebida: conta como offline
-				return Probe{Online: false, LatenciaMs: lat, Detalhe: detalhe, Extra: extra}
-			}
-		}
-	}
+	// "Online" = o host responde na rede (página de status). A porta de dados (8080) NÃO é sondada: o Acura aceita
+	// só 2 clientes e uma sondagem ocuparia uma vaga do cliente de verdade.
 	return Probe{Online: resp.StatusCode < 500, LatenciaMs: lat, Detalhe: detalhe, Extra: extra}
 }
 
