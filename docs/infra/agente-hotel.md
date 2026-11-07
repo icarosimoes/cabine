@@ -52,9 +52,14 @@ Teste manual: `LIVE=1 READER_USER=.. READER_PASS=.. go test ./internal/reader -r
   prefixo "🚨 EVASAO" e sai mesmo com "alerta" desligado.
 - **Por enquanto so monitoramento (estado), sem leitura de tags**: o agente nao le nenhum fluxo de dados desses leitores; o
   `bridge-saida/` (que le a porta 8080 do `.104`) continua parado ate mapearmos o protocolo. Checagem do agente: pagina de status
-  (porta 80) + uma conexao TCP que abre e fecha na porta de comunicacao. Para **nao tocar na porta de dados**, ponha
-  `"skipCommPort": true` no `config.json` do agente.
-- Achados: `.32` com porta 8080 **fechada** (sem canal de dados — verificar); `.104` com 8080 aberta (fluxo bruto, sem HTTP).
+  (porta 80). **Desde o agente 0.1.5 ele NAO sonda mais a porta de dados (8080)**: "online" = o host responde na rede.
+  (`skipCommPort` ficou sem efeito.)
+- **Por que a 8080 da `.32` parecia fechada (2026-11-07):** a pagina de status mostra *Modo Ethernet: Leitor como Servidor* e
+  "Conexao TCP #1 e #2 (8080): Conectada", as duas de **192.168.30.18**; a 9090 (configuracao) fica "Desconectada". O Acura aceita
+  so 2 clientes na 8080 — com as vagas ocupadas, nova conexao e recusada. Scan 1-10000 na `.32`: so 80 e 9090 abertas.
+  Por isso o agente nao deve abrir a 8080 (poderia tomar a vaga do cliente real). Idea futura: ler "Conexao TCP #1/#2" da pagina de status
+  e alertar quando nao houver cliente conectado.
+- Achados: `.104` com 8080 aberta (fluxo bruto, sem HTTP).
   Senha `acura@autoid` **recusada** na pagina de administracao dos dois (login volta para o index).
 - Antes de capturar o protocolo na 8080 do `.104`: pode haver so 1 conexao por vez (o eTrace pode usa-la); fazer fora do horario de pico.
 
@@ -77,6 +82,14 @@ Teste manual: `LIVE=1 READER_USER=.. READER_PASS=.. go test ./internal/reader -r
 6. Testar o alerta: desligue um Acura/cabo de rede; em ~30s o grupo do WhatsApp recebe "antena ... OFFLINE" (evasao: com prefixo).
 7. Remover: `cabine-agent.exe uninstall` (Administrador).
 
+**Atualizar / reinstalar (a partir da 0.1.6):** rode o `instalar.cmd` novo por cima. O instalador para o servico, fecha o icone da
+bandeja e qualquer outro `cabine-agent.exe`, tenta copiar ate 10x e **reaproveita o token** se voce deixar em branco (ENTER).
+Se a instalacao instalada for anterior a 0.1.6 (nao fecha o app) e der "acesso negado" ao copiar, feche uma vez a mao, num Prompt
+como Administrador: `net stop CabineAgent` e `taskkill /F /IM cabine-agent.exe`.
+Nao aparece em "Aplicativos instalados" (nao e MSI): services.msc ("Cabine RFID Agent") ou
+`"C:\Program Files\Cabine Agent\cabine-agent.exe" uninstall`; manual: `sc delete CabineAgent`,
+`reg delete HKLM\Software\Microsoft\Windows\CurrentVersion\Run /v CabineAgentTray /f`, `rmdir /s /q "C:\Program Files\Cabine Agent"`.
+
 ## Instalar (teste inicial)
 
 1. Painel > Antenas > *Agente do hotel* > **Gerar token** (copie; nao aparece de novo). Cadastre IP/porta das antenas.
@@ -90,5 +103,10 @@ Teste manual: `LIVE=1 READER_USER=.. READER_PASS=.. go test ./internal/reader -r
 
 - Auto-atualizacao assinada (Ed25519; manifesto servido pelo proprio Cabine) — chave publica embutida no agente.
 - Repositorio proprio do agente + CI que compila, assina e publica.
-- MSI (WiX) em maquina Windows; assinatura de codigo (evita aviso do SmartScreen/antivirus).
+- **MSI (proximo trabalho, decidido 2026-11-07):** gerar `CabineAgent.msi` no `build.sh` (wixl/msitools ou WiX via Docker, sem
+  precisar de Windows para gerar). Instala em Program Files, registra o servico (auto start + reinicio em falha), aparece em
+  *Aplicativos instalados* com Desinstalar, atualiza por cima fechando servico e tray, recebe `TOKEN=`/`SERVER=` por parametro
+  (`msiexec /i CabineAgent.msi TOKEN=xxx`) e reaproveita o comando `install` do agente numa acao personalizada (config.json + ACLs).
+  O painel passa a oferecer o `.msi`. Risco: so testavel no Windows do usuario (1-2 rodadas de ajuste); SmartScreen segue avisando
+  sem assinatura de codigo. Assinatura de codigo (evita aviso do SmartScreen/antivirus).
 - Validar API do R700 e comandos prontos (potencia por antena, iniciar/parar leitura).

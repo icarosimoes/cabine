@@ -47,11 +47,12 @@ func Install(server, token string) error {
 		return fmt.Errorf("conectar ao gerenciador de serviços (execute como Administrador): %w", err)
 	}
 	defer m.Disconnect()
-	// reinstalação: para o serviço antigo antes de sobrescrever o .exe
+	// reinstalação: para o serviço antigo e fecha o ícone da bandeja (que também mantém o .exe aberto) antes de sobrescrever
 	if s, err := m.OpenService(config.ServiceName); err == nil {
 		stopAndWait(s)
 		s.Close()
 	}
+	killOutros()
 
 	// config: guarda o token numa pasta restrita (SYSTEM e Administradores); o estado público fica em \public
 	if err := os.MkdirAll(config.PublicDir(), 0o755); err != nil {
@@ -60,6 +61,9 @@ func Install(server, token string) error {
 	cfg := &config.Config{Server: server, Token: token}
 	if old, err := config.Load(""); err == nil { // preserva credenciais de leitores já configuradas
 		cfg.ReaderUser, cfg.ReaderPass, cfg.Readers = old.ReaderUser, old.ReaderPass, old.Readers
+		if cfg.Token == "" { // reinstalação sem informar o token: mantém o atual
+			cfg.Token = old.Token
+		}
 	}
 	if err := cfg.Save(""); err != nil {
 		return err
@@ -69,8 +73,15 @@ func Install(server, token string) error {
 	_ = exec.Command("icacls", config.PublicDir(), "/grant:r", "Users:(OI)(CI)M").Run() // o tray lê; o log é escrito por usuário
 
 	if self != dest {
-		if err := copyFile(self, dest); err != nil {
-			return fmt.Errorf("copiar executável: %w", err)
+		var cerr error
+		for i := 0; i < 10; i++ { // o antivírus/Windows pode segurar o arquivo por instantes
+			if cerr = copyFile(self, dest); cerr == nil {
+				break
+			}
+			killOutros()
+		}
+		if cerr != nil {
+			return fmt.Errorf("copiar executável (feche o ícone do agente e tente de novo): %w", cerr)
 		}
 	}
 
@@ -127,6 +138,12 @@ func Uninstall() error {
 	// remove arquivos depois que este processo terminar
 	_ = exec.Command("cmd", "/c", fmt.Sprintf(`ping -n 3 127.0.0.1 >nul & rmdir /s /q "%s" & rmdir /s /q "%s"`, InstallDir(), config.DataDir())).Start()
 	return nil
+}
+
+// killOutros encerra os outros processos cabine-agent.exe (tray, instância avulsa), menos este.
+func killOutros() {
+	_ = exec.Command("taskkill", "/F", "/FI", "IMAGENAME eq cabine-agent.exe", "/FI", fmt.Sprintf("PID ne %d", os.Getpid())).Run()
+	time.Sleep(1500 * time.Millisecond)
 }
 
 func stopAndWait(s *mgr.Service) {

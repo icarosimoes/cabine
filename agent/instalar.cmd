@@ -10,13 +10,13 @@ if %errorlevel% neq 0 (
 cd /d "%~dp0"
 set SERVER=https://cabine.solidsd.com.br
 set /p SERVER=URL do Cabine [%SERVER%]: 
+echo Se o agente ja esta instalado, deixe o token em branco (ENTER) para manter o atual.
 set /p TOKEN=Token do agente (painel Cabine ^> Antenas ^> Agentes): 
 if "%TOKEN%"=="" (
-  echo Token nao informado.
-  pause
-  exit /b 1
+  cabine-agent.exe install --server "%SERVER%"
+) else (
+  cabine-agent.exe install --server "%SERVER%" --token "%TOKEN%"
 )
-cabine-agent.exe install --server "%SERVER%" --token "%TOKEN%"
 echo.
 echo Para ver o estado depois:  cabine-agent.exe status   (ou use o icone na bandeja)
 pause

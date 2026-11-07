@@ -104,7 +104,12 @@ func doInstall(args []string) {
 		fatal("execute como Administrador")
 	}
 	if strings.TrimSpace(*token) == "" {
-		fatal("informe --token (gere em Antenas > Agentes no painel do Cabine)")
+		if old, err := config.Load(""); err == nil && old.Token != "" { // reinstalação/atualização: reaproveita o token já instalado
+			*token = old.Token
+			out("usando o token já instalado")
+		} else {
+			fatal("informe --token (gere em Antenas > Agentes no painel do Cabine)")
+		}
 	}
 	srv := strings.TrimRight(strings.TrimSpace(*server), "/")
 	out("validando o token no servidor " + srv + " …")
