@@ -98,3 +98,11 @@ func TestExecValidaECorreAPI(t *testing.T) {
 		t.Fatalf("só R700 aceita comando")
 	}
 }
+
+func TestDetalheR700(t *testing.T) {
+	extra := map[string]any{"status": "running", "activePreset": map[string]any{"id": "etrace"},
+		"eventWebhookStatus": map[string]any{"status": "active", "httpStatusCode": float64(200)}}
+	if d := detalheR700(extra); d != "running · preset etrace · webhook active (HTTP 200)" {
+		t.Fatalf("detalhe: %q", d)
+	}
+}

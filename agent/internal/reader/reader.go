@@ -95,9 +95,7 @@ func Check(cfg *config.Config, a cloud.Antena) Probe {
 	var extra map[string]any
 	if json.Unmarshal(body, &extra) == nil && len(extra) > 0 {
 		p.Extra = extra
-		if st, ok := extra["status"].(string); ok {
-			p.Detalhe = "ok — " + st
-		}
+		p.Detalhe = detalheR700(extra)
 	}
 	return p
 }
@@ -138,6 +136,25 @@ func portOpen(ip string, port int) (bool, int, string) {
 
 // tcpCheck (leitores que não são R700): Acura EDGE30R tem página de status na porta 80 (firmware, uptime, status);
 // a "porta de comunicação" cadastrada (ex.: 8080) é verificada à parte. Outros modelos: só a porta cadastrada.
+// detalheR700 resume /api/v1/status: situação, preset ativo e se o webhook de eventos está entregando.
+func detalheR700(extra map[string]any) string {
+	d := "ok"
+	if st, ok := extra["status"].(string); ok {
+		d = st
+	}
+	if ap, ok := extra["activePreset"].(map[string]any); ok {
+		if id, ok := ap["id"].(string); ok {
+			d += " · preset " + id
+		}
+	}
+	if w, ok := extra["eventWebhookStatus"].(map[string]any); ok {
+		st, _ := w["status"].(string)
+		code, _ := w["httpStatusCode"].(float64)
+		d += fmt.Sprintf(" · webhook %s (HTTP %d)", st, int(code))
+	}
+	return d
+}
+
 func tcpCheck(a cloud.Antena) Probe {
 	if !strings.Contains(strings.ToLower(a.Modelo), "acura") && !strings.Contains(strings.ToLower(a.Modelo), "edge") {
 		port := a.Porta

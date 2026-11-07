@@ -478,6 +478,14 @@ def avaliar_alertas(agora: float, ultimo_sinal, falhas: int, c: dict | None = No
     return msgs
 
 
+def _webhook_status(extra) -> dict | None:
+    try:
+        w = (json.loads(extra) if isinstance(extra, str) else extra or {}).get("eventWebhookStatus")
+        return w if isinstance(w, dict) else None
+    except ValueError:
+        return None
+
+
 def avaliar_agentes(agora: float, antenas: list[dict], agentes: list[dict], c: dict) -> list[tuple[str, str]]:
     """Alertas do agente do hotel: antena offline (com alerta ligado) e agente sem contato. Um aviso por transição."""
     msgs = []
@@ -488,6 +496,12 @@ def avaliar_agentes(agora: float, antenas: list[dict], agentes: list[dict], c: d
             off = (not a["online"]) and agora - a["verificado_em"] < AGENTE_SEM_CONTATO_SEG
             condicoes[f"antena:{a['id']}"] = (off, f"⚠️ Cabine RFID: antena {a['nome']} ({a.get('ip') or 'sem IP'}) está OFFLINE — {a.get('detalhe') or 'sem resposta'}.",
                                               f"✅ Cabine RFID: antena {a['nome']} voltou a responder.")
+    for a in antenas:  # webhook de eventos do R700 (informado pelo próprio leitor em /api/v1/status)
+        w = _webhook_status(a.get("extra"))
+        if a["alerta"] and w is not None and a["verificado_em"] is not None:
+            ruim = (w.get("status") != "active" or int(w.get("httpStatusCode") or 0) >= 400) and agora - a["verificado_em"] < AGENTE_SEM_CONTATO_SEG
+            condicoes[f"webhook:{a['id']}"] = (ruim, f"⚠️ Cabine RFID: o rádio {a['nome']} está com FALHA ao enviar eventos pelo webhook (status {w.get('status')}, HTTP {w.get('httpStatusCode')}).",
+                                               f"✅ Cabine RFID: o webhook do rádio {a['nome']} voltou a entregar eventos.")
     for ag in agentes:
         if ag["visto_em"] is not None:
             sem = agora - ag["visto_em"] >= AGENTE_SEM_CONTATO_SEG
@@ -497,10 +511,10 @@ def avaliar_agentes(agora: float, antenas: list[dict], agentes: list[dict], c: d
         est = state["alertas"].get(chave)
         if ativo and (est is None or agora - est >= repetir * 60):
             state["alertas"][chave] = agora
-            msgs.append((chave.split(":")[0] + "_offline", texto))
+            msgs.append((chave.split(":")[0] + "_offline" if not chave.startswith("webhook") else "webhook_falha", texto))
         elif not ativo and est is not None:
             del state["alertas"][chave]
-            msgs.append((chave.split(":")[0] + "_offline", ok_texto))
+            msgs.append((chave.split(":")[0] + "_offline" if not chave.startswith("webhook") else "webhook_falha", ok_texto))
     return msgs
 
 
@@ -516,7 +530,7 @@ def checar_alertas():
     for tipo, texto in avaliar_alertas(agora, ultimo, len(state["falhas_ingest"]), c):
         notificar(tipo, texto, c)
     with closing(db()) as con:
-        antenas = con.execute("""SELECT a.id,a.nome,a.ip,a.alerta,s.online,s.detalhe,s.verificado_em FROM antenas a
+        antenas = con.execute("""SELECT a.id,a.nome,a.ip,a.alerta,s.online,s.detalhe,s.verificado_em,s.extra FROM antenas a
                                  JOIN antena_status s ON s.antena_id=a.id""").fetchall()
         agentes = con.execute("SELECT id,nome,visto_em FROM agentes").fetchall()
     for tipo, texto in avaliar_agentes(agora, antenas, agentes, c):

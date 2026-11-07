@@ -19,22 +19,30 @@ Programa em Go (`agent/`) que roda **na LAN do hotel** e faz so conexoes de said
 
 ## Leitores
 
-- **Impinj R700**: `https://<ip>/api/v1/status` com Basic (padrao de fabrica `root`/`impinj`, trocar em `config.json`:
+- **Impinj R700**: `https://<ip>/api/v1/status` com Basic (padrao de fabrica `root`/`impinj` — confirmado; trocar em `config.json`:
   `readerUser`/`readerPass` ou `readers.<nome-da-antena>`). Certificado autoassinado aceito. 401 = "no ar, credencial recusada".
   Configuracao: tela Antenas > **Configurar rádio** (GET status/presets, PUT/POST livre). **Os caminhos exatos da API do R700
   ainda precisam ser validados com um leitor real.**
 - **Acura EdgeR30**: protocolo nao mapeado; so teste de porta TCP (status). Sem configuracao remota.
 
-## Teste na LAN real (2026-11-07, feito da maquina de desenvolvimento em 192.168.30.0/24)
+## Teste na LAN real (2026-11-07, da maquina de desenvolvimento em 192.168.30.0/24)
 
 | Equipamento | IP | Resultado |
 |---|---|---|
-| R700 (impinj15f21c, "radio da cabine") | 192.168.30.90 | Online. HTTPS 443 (nginx, Basic "Reader Access"); 80 redireciona (307). **401 com admin/impinj** — credencial da API ainda a confirmar; ate la o agente reporta "no ar, credencial recusada". Portas 8080/5084 fechadas |
-| Acura EDGE30R recepcao | 192.168.30.32 | Online: pagina de status na **porta 80** (fw 4.1.0, EDGE30R-57D65E, SN 6480592, "OK - Modo de leitura automatica", uptime ~27d). **Porta 8080 (cadastrada no eTrace) FECHADA** |
-| Acura EDGE30R servico | 192.168.30.104 | Online: fw 4.2.0, EDGE30R-5826DE, SN 6480951, uptime ~120d. Porta 8080 aberta |
+| R700 (impinj15f21c, "radio da cabine") | 192.168.30.90 | Online. HTTPS 443 (nginx, Basic). **Usuario `root` / senha `impinj` (padrao de fabrica)** funciona. `running`, preset ativo **`etrace`**, `eventWebhookStatus` = active/HTTP 200, MQTT conectado (usado pelo eTrace). fw 8.1.7.240 |
+| Acura EDGE30R recepcao | 192.168.30.32 | Online: pagina de status na **porta 80** (fw 4.1.0, "OK - Modo de leitura automatica", uptime ~27d). **Porta 8080 (cadastrada no eTrace) FECHADA** |
+| Acura EDGE30R servico | 192.168.30.104 | Online: fw 4.2.0, status OK, uptime ~120d. Porta 8080 aberta |
 
-O agente le a pagina de status do Acura (porta 80) para firmware/uptime/status e checa a porta de comunicacao cadastrada a parte
-(aviso "porta de comunicacao FECHADA"). Teste manual: `LIVE=1 READER_USER=.. READER_PASS=.. go test ./internal/reader -run Live -v`.
+Caminhos da API do R700 **confirmados** (GET): `/api/v1/status`, `/api/v1/system`, `/api/v1/system/image`, `/api/v1/system/region`,
+`/api/v1/system/time`, `/api/v1/profiles`, `/api/v1/profiles/inventory/presets` (`default`, `etrace`),
+`/api/v1/profiles/inventory/presets/{id}`. Preset `etrace`: antenas 1-3 a 2000 cdBm (20 dBm), rfMode 1002, sessao 3, relatorio a cada 3s;
+evento com `epc` (base64), `tid`, antena, RSSI, hostname. Preset `default`: antena 1 a 30 dBm.
+**Escrita (PUT preset, start/stop) ainda nao testada** — para mudar o preset ativo: `POST /api/v1/profiles/stop`, `PUT` do preset,
+`POST /api/v1/profiles/inventory/presets/{id}/start`.
+
+O agente le a pagina de status do Acura (porta 80) e checa a porta de comunicacao cadastrada a parte. No R700 mostra preset ativo e o status do
+webhook de eventos; **webhook com falha (status != active ou HTTP >= 400) gera alerta de WhatsApp** (`webhook_falha`).
+Teste manual: `LIVE=1 READER_USER=.. READER_PASS=.. go test ./internal/reader -run Live -v`.
 
 ## Instalar (teste inicial)
 

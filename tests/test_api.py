@@ -1,3 +1,4 @@
+import json
 import time
 from contextlib import closing
 from tests.conftest import ingest
@@ -297,4 +298,18 @@ def test_agente_status_comandos_e_alertas(client):
     assert "voltou" in main.avaliar_agentes(now + 10, ant(True), [], c)[0][1]
     msgs = main.avaliar_agentes(now + 1000, [], [{"id": 1, "nome": "hotel", "visto_em": now}], c)
     assert msgs[0][0] == "agente_offline" and "sem contato" in msgs[0][1]
+    main.state["alertas"].clear()
+
+
+def test_alerta_webhook_do_radio(client):
+    main.state["alertas"].clear()
+    now = time.time()
+    c = main.cfg()
+    def ant(st, code): return [{"id": 9, "nome": "r700", "ip": "1.1.1.1", "alerta": True, "online": True, "detalhe": "ok", "verificado_em": now,
+                                "extra": json.dumps({"eventWebhookStatus": {"status": st, "httpStatusCode": code}})}]
+    assert main.avaliar_agentes(now, ant("active", 200), [], c) == []
+    m = main.avaliar_agentes(now, ant("active", 401), [], c)
+    assert m[0][0] == "webhook_falha" and "FALHA" in m[0][1] and "401" in m[0][1]
+    assert main.avaliar_agentes(now + 5, ant("active", 401), [], c) == []
+    assert "voltou" in main.avaliar_agentes(now + 10, ant("active", 200), [], c)[0][1]
     main.state["alertas"].clear()

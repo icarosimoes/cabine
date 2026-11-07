@@ -921,16 +921,16 @@ document.addEventListener('click',async e=>{
   try{await j('/api/agentes/'+d.dataset.agdel,{method:'DELETE'});await carregarAgentes()}catch(err){alert(err.message)}
 });
 async function enviarComando(antenaId,metodo,caminho,corpo,saida){
-  saida.textContent='enviando ao agente… (pode levar até ~15s)';
+  saida.textContent='enviando ao agente… (pode levar até ~15s)';let resultado=null;
   const c=await j('/api/antenas/'+antenaId+'/comandos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({metodo,caminho,corpo:corpo||null})});
   for(let i=0;i<65;i++){
     await new Promise(r=>setTimeout(r,2000));
     const r=await j('/api/comandos/'+c.id);
     if(['ok','erro','expirado'].includes(r.status)){
       let txt=r.resposta||'';try{txt=JSON.stringify(JSON.parse(txt),null,2)}catch(e){}
-      saida.textContent=(r.status==='ok'?'✔ HTTP '+r.http_status:r.status==='expirado'?'✖ expirou: o agente não respondeu (instalado e online?)':'✖ erro'+(r.http_status?' HTTP '+r.http_status:''))+'\n\n'+txt;return}
+      saida.textContent=(r.status==='ok'?'✔ HTTP '+r.http_status:r.status==='expirado'?'✖ expirou: o agente não respondeu (instalado e online?)':'✖ erro'+(r.http_status?' HTTP '+r.http_status:''))+'\n\n'+txt;return {status:r.status,texto:r.resposta||''}}
   }
-  saida.textContent='✖ sem resposta do agente';
+  saida.textContent='✖ sem resposta do agente';return {status:'expirado',texto:''};
 }
 function configurarRadio(a){
   dialogo(`<h3>Configurar rádio — ${esc(a.nome)}</h3>
@@ -938,11 +938,16 @@ function configurarRadio(a){
     <div class="row" style="padding:0"><select id="cmM"><option>GET</option><option>PUT</option><option>POST</option></select>
       <input id="cmP" type="text" value="/api/v1/status" style="flex:1;min-width:260px"></div>
     <textarea id="cmB" rows="6" placeholder="corpo JSON (PUT/POST)" style="width:100%;margin-top:8px;font-family:monospace"></textarea>
-    <div class="row" style="padding:8px 0 0"><button id="cmStatus" type="button">Ler status</button><button id="cmPresets" type="button">Ler presets</button><button class="acc" id="cmEnviar" type="button">Enviar</button></div>
+    <div class="row" style="padding:8px 0 0"><button id="cmStatus" type="button">Ler status</button><button id="cmPresets" type="button">Ler preset ativo</button><button class="acc" id="cmEnviar" type="button">Enviar</button></div>
     <pre id="cmOut" style="margin-top:8px;max-height:260px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre>`,[['Fechar','',()=>{}]]);
   const out=$('cmOut'),run=(m,p,b)=>enviarComando(a.id,m,p,b,out).catch(e=>out.textContent='✖ '+e.message);
   $('cmStatus').onclick=()=>{$('cmM').value='GET';$('cmP').value='/api/v1/status';run('GET','/api/v1/status')};
-  $('cmPresets').onclick=()=>{$('cmM').value='GET';$('cmP').value='/api/v1/profiles/inventory/presets';run('GET','/api/v1/profiles/inventory/presets')};
+  $('cmPresets').onclick=async()=>{ // descobre o preset ativo, lê e deixa pronto para editar (PUT)
+    try{const st=await enviarComando(a.id,'GET','/api/v1/status',null,out);const id=(JSON.parse(st.texto).activePreset||{}).id;if(!id){out.textContent='não encontrei o preset ativo (leitor parado?)';return}
+      const path='/api/v1/profiles/inventory/presets/'+id,r=await enviarComando(a.id,'GET',path,null,out);
+      if(r.status==='ok'){$('cmB').value=JSON.stringify(JSON.parse(r.texto),null,2);$('cmM').value='PUT';$('cmP').value=path;
+        out.textContent+='\\n\\n→ Edite o JSON acima (ex.: transmitPowerCdbm; 2000 = 20 dBm) e clique em Enviar. Dica: se o preset estiver rodando, pare (POST /api/v1/profiles/stop) antes e inicie de novo (POST '+path+'/start) depois.'}}
+    catch(e){out.textContent='✖ '+e.message}};
   $('cmEnviar').onclick=()=>{if($('cmM').value!=='GET'&&!confirm('Enviar '+$('cmM').value+' '+$('cmP').value+' para o leitor?'))return;run($('cmM').value,$('cmP').value.trim(),$('cmB').value.trim())};
 }
 function limparAntena(){
