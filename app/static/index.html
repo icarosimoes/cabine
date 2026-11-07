@@ -136,10 +136,23 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
   </div>
   <div id="registrarMsg" class="msg"></div>
   <div id="loteResultado" hidden>
-    <div class="row" style="padding-top:0"><b id="loteResumo"></b></div>
-    <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th></tr></thead><tbody id="loteIdentificados"></tbody></table></div>
-    <div class="row" style="padding-top:0"><b>Tags novas — cadastre pra identificar</b></div>
-    <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th></th></tr></thead><tbody id="loteNovos"></tbody></table></div>
+    <div class="row" style="padding-top:0"><b id="loteResumo"></b><button id="reiniciar" type="button">Reiniciar leitura</button></div>
+    <div class="mut" style="padding:0 16px 8px">Leitura concluída. Se a quantidade detectada for diferente do esperado, <a href="#" id="divergLink">clique aqui para avisar</a> (WhatsApp).</div>
+    <div class="row"><button class="acc" id="abaIdentBtn" type="button">Identificados</button><button id="abaNovosBtn" type="button">Novos</button></div>
+    <div id="abaIdent">
+      <div class="row">
+        <select id="movDestino"></select>
+        <input id="movObs" type="text" placeholder="observação (opcional)" style="width:200px">
+        <button class="acc" id="movimentar" type="button">Movimentar</button>
+        <select id="estLote"></select>
+        <button id="definirEstado" type="button">Definir estado</button>
+      </div>
+      <div class="scroll"><table><thead><tr><th>Total de peças</th><th>Tipo</th><th>Atributos</th><th>Estado</th><th>Última localização</th></tr></thead><tbody id="loteIdentificados"></tbody></table></div>
+    </div>
+    <div id="abaNovos" hidden>
+      <div class="row" style="padding-top:0"><b>Tags novas — cadastre pra identificar</b></div>
+      <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th></th></tr></thead><tbody id="loteNovos"></tbody></table></div>
+    </div>
   </div>
 </section>
 <section>
@@ -152,6 +165,10 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
   <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th></th></tr></thead><tbody id="pendentes"></tbody></table></div>
 </section>
 </div>
+<dialog id="dlg" style="margin:auto;padding:24px;border:1px solid var(--line);border-radius:12px;background:var(--navy-mid);color:var(--text);min-width:340px;max-width:560px">
+  <div id="dlgBody"></div>
+  <div class="row" id="dlgBotoes" style="justify-content:flex-end;padding:16px 0 0"></div>
+</dialog>
 <div class="view" data-view="transferencias" hidden>
 <section>
   <h2><span>Transferências (auditoria)</span></h2>
@@ -163,7 +180,7 @@ input,select{font-size:16px;min-height:42px}button{min-height:42px}}
     <button id="fAplicar">filtrar</button>
     <button id="fLimpar">limpar</button>
   </div>
-  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Usuário</th><th>Obs.</th><th>EPCs</th></tr></thead><tbody id="transf"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Usuário</th><th>Obs.</th><th>EPCs</th><th></th></tr></thead><tbody id="transf"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="evasao" hidden>
@@ -477,7 +494,7 @@ async function carregarPendentes(){
     <td>#${l.id}</td><td>${dt(l.criado_em)}</td><td>${l.quantidade}</td>
     <td><select class="destinoSel" data-lote="${l.id}"></select></td>
     <td><input type="text" class="obsLote" data-lote="${l.id}" placeholder="observação" style="width:140px"></td>
-    <td><button class="acc transferirBtn" data-lote="${l.id}">Transferir</button></td>
+    <td><button class="acc transferirBtn" data-lote="${l.id}">Transferir</button> <button data-abrir="${l.id}">Abrir</button></td>
   </tr>`).join('')||'<tr><td colspan=6>nenhum lote aguardando transferência</td></tr>';
   await carregarDestinos();
   Object.entries(antes).forEach(([loteId,v])=>{
@@ -487,6 +504,7 @@ async function carregarPendentes(){
     if(obs&&v.obs)obs.value=v.obs;
   });
 }
+document.addEventListener('click',e=>{const b=e.target.closest('[data-abrir]');if(b)abrirLote(Number(b.dataset.abrir)).then(()=>$('loteResultado').scrollIntoView()).catch(err=>alert(err.message))});
 document.addEventListener('click',async e=>{
   const b=e.target.closest('.transferirBtn');if(!b)return;
   const loteId=b.dataset.lote;
@@ -502,15 +520,27 @@ document.addEventListener('click',async e=>{
 });
 
 let loteAtual=null;
+function abaLote(a){$('abaIdent').hidden=a!=='ident';$('abaNovos').hidden=a!=='novos';$('abaIdentBtn').className=a==='ident'?'acc':'';$('abaNovosBtn').className=a==='novos'?'acc':''}
+$('abaIdentBtn').onclick=()=>abaLote('ident');$('abaNovosBtn').onclick=()=>abaLote('novos');
+function dialogo(html,botoes){
+  $('dlgBody').innerHTML=html;$('dlgBotoes').innerHTML='';
+  botoes.forEach(([txt,cls,fn])=>{const b=document.createElement('button');b.textContent=txt;if(cls)b.className=cls;b.onclick=async()=>{if(await fn()!==false)$('dlg').close()};$('dlgBotoes').appendChild(b)});
+  $('dlg').showModal();
+}
 function renderLoteResultado(){
   if(!loteAtual){$('loteResultado').hidden=true;return}
   $('loteResultado').hidden=false;
-  $('loteResumo').textContent=`Lote #${loteAtual.id} — ${loteAtual.identificados.length} identificada(s), ${loteAtual.novos.length} nova(s)`;
-  $('loteIdentificados').innerHTML=loteAtual.identificados.map(i=>`<tr>
-    <td class="epc">${esc(i.epc)}</td><td>${esc(i.tipo)}</td><td>${esc(i.fabricante||'–')}</td>
-    <td>${esc(i.tamanho||'–')}</td><td>${esc(i.composicao||'–')}</td><td>${esc(i.cor||'–')}</td>
-  </tr>`).join('')||'<tr><td colspan=6>nenhuma tag identificada neste lote</td></tr>';
-  $('loteNovos').innerHTML=loteAtual.novos.map(epc=>`<tr>
+  const idn=loteAtual.identificados,nov=loteAtual.novos;
+  $('loteResumo').textContent=`Cabine — ${idn.length+nov.length} itens (lote #${loteAtual.id})`;
+  $('abaIdentBtn').textContent=`Identificados (${idn.length})`;$('abaNovosBtn').textContent=`Novos (${nov.length})`;
+  const grupos={};
+  idn.forEach(i=>{const k=[i.tipo,i.fabricante,i.tamanho,i.composicao,i.cor,i.estado,i.localizacao].join('|');(grupos[k]=grupos[k]||{i,n:0}).n++});
+  $('loteIdentificados').innerHTML=Object.values(grupos).sort((a,b)=>a.i.tipo.localeCompare(b.i.tipo)).map(({i,n})=>`<tr>
+    <td>${n}</td><td>${esc(i.tipo)}</td><td>${esc([i.tamanho,i.composicao,i.cor,i.fabricante].filter(Boolean).join(', ')||'–')}</td>
+    <td>${esc(i.estado||'–')}</td><td>${esc(i.localizacao||'–')}</td></tr>`).join('')||'<tr><td colspan=5>nenhuma tag identificada neste lote</td></tr>';
+  $('movDestino').innerHTML='<option value="">destino…</option>'+destinosCache.filter(d=>d.ativo).map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
+  $('estLote').innerHTML='<option value="">estado…</option>'+estadosCache.map(e=>`<option value="${e.id}">${esc(e.nome)}</option>`).join('');
+  $('loteNovos').innerHTML=nov.map(epc=>`<tr>
     <td class="epc">${esc(epc)}</td>
     <td><input type="text" class="novoTipo" data-epc="${esc(epc)}" placeholder="tipo"></td>
     <td><input type="text" class="novoFab" data-epc="${esc(epc)}" placeholder="fabricante"></td>
@@ -519,6 +549,72 @@ function renderLoteResultado(){
     <td><input type="text" class="novoCor" data-epc="${esc(epc)}" placeholder="cor"></td>
     <td><button class="acc cadastrarNovo" data-epc="${esc(epc)}">Cadastrar</button></td>
   </tr>`).join('')||'<tr><td colspan=7>nenhuma tag nova neste lote</td></tr>';
+}
+async function abrirLote(id){ // carrega um lote já registrado (ex.: sessão automática ou pendente) na tela da cabine
+  if(!destinosCache.length)await carregarDestinos();
+  if(!estadosCache.length)estadosCache=await j('/api/estados');
+  const l=await j('/api/lotes/'+id);loteAtual={id:l.id,identificados:l.identificados,novos:l.novos};abaLote('ident');renderLoteResultado();
+}
+$('reiniciar').onclick=()=>dialogo(`<h3>Reiniciar leitura</h3><p style="padding-top:8px">Descartar o lote #${loteAtual.id} e fazer uma nova leitura?</p>`,[
+  ['Cancelar','',()=>{}],['Reiniciar','acc',async()=>{
+    try{await j('/api/lotes/'+loteAtual.id,{method:'DELETE'});loteAtual=null;renderLoteResultado();$('registrarMsg').textContent='';$('registrar').click()}
+    catch(e){alert(e.message);return false}}]]);
+$('divergLink').onclick=e=>{e.preventDefault();
+  dialogo(`<h3>Avisar divergência</h3><p class="mut" style="padding:8px 0">Detectado: <b>${loteAtual.identificados.length+loteAtual.novos.length}</b>. Informe o esperado:</p>
+    <input id="dvEsp" type="number" min="0" placeholder="quantidade esperada" style="width:100%;margin-bottom:8px"><input id="dvObs" type="text" placeholder="observação (opcional)" style="width:100%">`,[
+    ['Cancelar','',()=>{}],['Avisar por WhatsApp','acc',async()=>{
+      try{const r=await j('/api/lotes/'+loteAtual.id+'/divergencia',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({esperado:$('dvEsp').value===''?null:Number($('dvEsp').value),observacao:$('dvObs').value||null})});
+        $('registrarMsg').className='msg ok';$('registrarMsg').textContent=`divergência enviada a ${r.enviados} destinatário(s)`}
+      catch(err){alert(err.message);return false}}]])};
+$('definirEstado').onclick=()=>{
+  const id=$('estLote').value;if(!id){alert('escolha o estado');return}
+  const nome=$('estLote').selectedOptions[0].textContent;
+  dialogo(`<h3>Definir estado</h3><p style="padding-top:8px">Definir o estado <b>${esc(nome)}</b> para os ${loteAtual.identificados.length} itens identificados?</p>`,[
+    ['Cancelar','',()=>{}],['Confirmar','acc',async()=>{
+      try{const r=await j('/api/lotes/'+loteAtual.id+'/estado',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({estado_id:Number(id)})});
+        $('registrarMsg').className='msg ok';$('registrarMsg').textContent=`${r.itens} item(ns) agora em "${r.estado}"`;await abrirLote(loteAtual.id)}
+      catch(err){alert(err.message);return false}}]])};
+$('movimentar').onclick=()=>{
+  const dest=$('movDestino').value;if(!dest){alert('selecione o destino');return}
+  const nome=$('movDestino').selectedOptions[0].textContent,n=loteAtual.identificados.length+loteAtual.novos.length;
+  dialogo(`<h3>Confirmar movimentação</h3><p style="padding-top:8px">Deseja realmente registrar a movimentação de <b>${n}</b> itens para o local <b>${esc(nome)}</b>?</p>`,[
+    ['Cancelar','',()=>{}],['Confirmar','acc',async()=>{
+      try{const r=await j('/api/lotes/'+loteAtual.id+'/transferir',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({destino_id:Number(dest),observacao:$('movObs').value.trim()||null})});
+        loteAtual=null;renderLoteResultado();$('movObs').value='';$('registrarMsg').className='msg ok';$('registrarMsg').textContent='Movimentação de itens registrada com sucesso!';
+        await carregarPendentes();setTimeout(()=>detalheMovimentacao(r.transferencia_id),50)}
+      catch(err){alert(err.message);return false}}]])};
+async function detalheMovimentacao(id){
+  const c=await j('/api/transferencias/'+id+'/comprovante');
+  dialogo(`<h3>Detalhes da Movimentação</h3>
+    <p style="padding-top:8px"><b>Data:</b> ${dt(c.criado_em)}</p><p><b>Usuário:</b> ${esc(c.usuario||'–')}</p><p><b>Local de destino:</b> ${esc(c.destino)}</p>
+    ${c.observacao?`<p><b>Obs.:</b> ${esc(c.observacao)}</p>`:''}<p style="padding-top:8px"><b>Itens:</b></p>
+    <table><tbody>${c.itens.map(i=>`<tr><td style="padding-right:16px">${i.qtd}</td><td>${esc(i.tipo)}</td></tr>`).join('')}</tbody></table><p style="padding-top:8px"><b>Total de peças:</b> ${c.total}</p>`,
+    [['Fechar','',()=>{}],['Imprimir','acc',()=>{imprimirComprovante(c);return false}]]);
+}
+function imprimirComprovante(c){
+  const w=window.open('','_blank','width=420,height=640');if(!w){alert('permita pop-ups para imprimir');return}
+  const linha='-'.repeat(44),f=c.criado_em?new Date(c.criado_em*1000).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}):'';
+  w.document.write(`<!doctype html><title>Movimentação de Itens</title><style>body{font:12px/1.5 monospace;padding:16px}pre{white-space:pre-wrap}</style><pre>${linha}
+Movimentação de Itens para ${esc(c.destino)}
+${linha}
+Data: ${f}
+Responsável: ${esc(c.usuario||'')}
+Lote: #${c.lote_id}${c.observacao?'\nObs.: '+esc(c.observacao):''}
+
+Itens:
+${linha}
+Quantidade | Itens
+${linha}
+${c.itens.map(i=>String(i.qtd).padStart(10)+' | '+esc(i.tipo)).join('\n')}
+${linha}
+Total de peças: ${c.total}
+
+
+________________________________
+        Assinatura</pre>`);
+  w.document.close();w.focus();w.print();
 }
 document.addEventListener('click',async e=>{
   const b=e.target.closest('.cadastrarNovo');if(!b)return;
@@ -530,9 +626,7 @@ document.addEventListener('click',async e=>{
     const item=await j('/api/itens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       epc,tipo,fabricante:sel('.novoFab').value.trim()||null,tamanho:sel('.novoTam').value.trim()||null,
       composicao:sel('.novoComp').value.trim()||null,cor:sel('.novoCor').value.trim()||null})});
-    loteAtual.novos=loteAtual.novos.filter(e=>e!==epc);
-    loteAtual.identificados.push({epc:item.epc,tipo:item.tipo,fabricante:item.fabricante,tamanho:item.tamanho,composicao:item.composicao,cor:item.cor});
-    renderLoteResultado();
+    await abrirLote(loteAtual.id);
     await Promise.all([carregarCatalogo(),carregarOpcoesInventario(),carregarInventario()]);
   }catch(err){alert(err.message);b.disabled=false}
 });
@@ -545,8 +639,7 @@ $('registrar').onclick=async()=>{
     await new Promise(r=>setTimeout(r,janela*1000));
     const r=await j('/api/lotes/registrar?janela_segundos='+(janela+2),{method:'POST'});
     msg.className='msg ok';msg.textContent=`lote #${r.id} registrado: ${r.quantidade} tag(s) distinta(s).`;
-    loteAtual={id:r.id,identificados:r.identificados,novos:r.novos};
-    renderLoteResultado();
+    await abrirLote(r.id);
     await carregarPendentes();
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
   btn.disabled=false;
@@ -567,7 +660,8 @@ async function carregarTransferencias(){
     <td>#${t.lote_id}</td><td>${dt(t.criado_em)}</td><td>${t.quantidade}</td>
     <td>${esc(t.destino_nome)} ${pill(t.destino_tipo)}</td><td>${esc(t.usuario||'–')}</td><td>${esc(t.observacao||'–')}</td>
     <td class="epcs toggle" data-lote="${t.lote_id}">ver EPCs</td>
-  </tr>`).join('')||'<tr><td colspan=7>nenhuma transferência encontrada</td></tr>';
+    <td><button data-comp="${t.id}">Comprovante</button></td>
+  </tr>`).join('')||'<tr><td colspan=8>nenhuma transferência encontrada</td></tr>';
 }
 document.addEventListener('click',async e=>{
   const c=e.target.closest('td.epcs');if(!c)return;
@@ -575,6 +669,7 @@ document.addEventListener('click',async e=>{
   const lote=await j('/api/lotes/'+c.dataset.lote);
   c.classList.add('open');c.textContent=lote.epcs.join(', ');
 });
+document.addEventListener('click',e=>{const b=e.target.closest('[data-comp]');if(b)detalheMovimentacao(Number(b.dataset.comp)).catch(err=>alert(err.message))});
 $('fAplicar').onclick=carregarTransferencias;
 $('fLimpar').onclick=()=>{$('fTipo').value='';$('fDestino').value='';$('fDesde').value='';$('fAte').value='';carregarTransferencias()};
 

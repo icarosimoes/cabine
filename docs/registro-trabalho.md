@@ -88,3 +88,4 @@
 - Destinatario pode ser grupo de WhatsApp (ID @g.us) + botao Buscar grupos (Evolution fetchAllGroups). Aberto: deploy.
 - Busca de grupos da Evolution em segundo plano (instancia com 352 grupos leva ~130s): POST /api/alertas/grupos/atualizar + GET /api/alertas/grupos, com filtro por nome na tela. Aberto: deploy.
 - Corrigido alarme falso de 'sem sinal' logo apos cada restart/deploy (ultimo evento do banco e antigo por causa da gravacao sob demanda; agora conta a partir da subida do app).
+- Cabine no padrao eTrace: lista agrupada com ultima localizacao, Reiniciar leitura, confirmar movimentacao, Definir estado em lote, comprovante imprimivel com assinatura, aviso de divergencia por WhatsApp. 19 testes. Aberto: deploy (junto com o fix do alarme falso).

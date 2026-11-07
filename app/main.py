@@ -115,6 +115,7 @@ def init_db():
           estado_id INTEGER NOT NULL REFERENCES estados_inventario(id),
           criado_em DOUBLE PRECISION NOT NULL, atualizado_em DOUBLE PRECISION NOT NULL)""")
         con.execute("CREATE INDEX IF NOT EXISTS ix_itens_tipo ON itens(tipo)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_lote_itens_epc ON lote_itens(epc)")
 
         con.execute("""
         CREATE TABLE IF NOT EXISTS eventos_saida(
@@ -860,7 +861,10 @@ def classificar_epcs(con, epcs):
         return [], []
     placeholders = ",".join(["%s"] * len(epcs))
     cadastrados = {r["epc"]: r for r in con.execute(
-        f"SELECT epc,tipo,fabricante,tamanho,composicao,cor FROM itens WHERE epc IN ({placeholders})", epcs).fetchall()}
+        f"""SELECT i.epc, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, e.nome estado,
+                   (SELECT d.nome FROM lote_itens li JOIN transferencias t ON t.lote_id=li.lote_id
+                      JOIN destinos d ON d.id=t.destino_id WHERE li.epc=i.epc ORDER BY t.criado_em DESC LIMIT 1) localizacao
+            FROM itens i JOIN estados_inventario e ON e.id=i.estado_id WHERE i.epc IN ({placeholders})""", epcs).fetchall()}
     identificados = [cadastrados[e] for e in epcs if e in cadastrados]
     novos = [e for e in epcs if e not in cadastrados]
     return identificados, novos
@@ -917,6 +921,74 @@ def detalhe_lote(lote_id: int):
     return out
 
 
+class EstadoLoteIn(BaseModel):
+    estado_id: int
+
+
+class DivergenciaIn(BaseModel):
+    esperado: int | None = None
+    observacao: str | None = None
+
+
+@app.delete("/api/lotes/{lote_id}")
+def reiniciar_leitura(lote_id: int, _: dict = Depends(op_auth)):
+    """'Reiniciar leitura': descarta um lote que ainda não foi transferido."""
+    with closing(db()) as con:
+        lote = con.execute("SELECT status FROM lotes WHERE id=%s", (lote_id,)).fetchone()
+        if not lote:
+            raise HTTPException(404, "lote não encontrado")
+        if lote["status"] != "aguardando":
+            raise HTTPException(409, "lote já transferido não pode ser descartado")
+        con.execute("DELETE FROM lote_itens WHERE lote_id=%s", (lote_id,))
+        con.execute("DELETE FROM lotes WHERE id=%s", (lote_id,))
+        con.commit()
+    return {"ok": True}
+
+
+@app.post("/api/lotes/{lote_id}/estado")
+def definir_estado_lote(lote_id: int, payload: EstadoLoteIn, _: dict = Depends(op_auth)):
+    """'Definir estado' em lote: aplica o estado a todos os itens cadastrados do lote."""
+    with closing(db()) as con:
+        if not con.execute("SELECT 1 FROM lotes WHERE id=%s", (lote_id,)).fetchone():
+            raise HTTPException(404, "lote não encontrado")
+        est = con.execute("SELECT nome FROM estados_inventario WHERE id=%s", (payload.estado_id,)).fetchone()
+        if not est:
+            raise HTTPException(400, "estado inválido")
+        n = con.execute("""UPDATE itens SET estado_id=%s, atualizado_em=%s
+                           WHERE epc IN (SELECT epc FROM lote_itens WHERE lote_id=%s)""",
+                        (payload.estado_id, time.time(), lote_id)).rowcount
+        con.commit()
+    return {"ok": True, "itens": n, "estado": est["nome"]}
+
+
+@app.post("/api/lotes/{lote_id}/divergencia")
+def avisar_divergencia(lote_id: int, payload: DivergenciaIn, user: dict = Depends(op_auth)):
+    """'Clique aqui para nos avisar': manda a divergência de quantidade pelo WhatsApp aos destinatários ativos."""
+    with closing(db()) as con:
+        lote = con.execute("SELECT quantidade FROM lotes WHERE id=%s", (lote_id,)).fetchone()
+        if not lote:
+            raise HTTPException(404, "lote não encontrado")
+    esp = f", esperado {payload.esperado}" if payload.esperado is not None else ""
+    obs = f" Obs.: {payload.observacao.strip()}" if (payload.observacao or "").strip() else ""
+    r = notificar("divergencia", f"⚠️ Cabine RFID: divergência na leitura do lote #{lote_id} — detectado {lote['quantidade']}{esp}. Informado por {user['usuario']}.{obs}")
+    if not r:
+        raise HTTPException(400, "nenhum destinatário ativo cadastrado em Alertas WhatsApp")
+    return {"ok": True, "enviados": sum(1 for x in r if not x["erro"]), "falhas": sum(1 for x in r if x["erro"])}
+
+
+@app.get("/api/transferencias/{transf_id}/comprovante", dependencies=[Depends(ui_auth)])
+def comprovante_transferencia(transf_id: int):
+    with closing(db()) as con:
+        t = con.execute("""SELECT t.id, t.lote_id, t.criado_em, t.usuario, t.observacao, d.nome destino
+                           FROM transferencias t JOIN destinos d ON d.id=t.destino_id WHERE t.id=%s""", (transf_id,)).fetchone()
+        if not t:
+            raise HTTPException(404, "transferência não encontrada")
+        itens = con.execute("""SELECT COALESCE(i.tipo,'Sem cadastro') tipo, COUNT(*) qtd
+                               FROM lote_itens li LEFT JOIN itens i ON i.epc=li.epc
+                               WHERE li.lote_id=%s GROUP BY 1 ORDER BY 1""", (t["lote_id"],)).fetchall()
+    return {**t, "itens": itens, "total": sum(x["qtd"] for x in itens)}
+
+
 @app.post("/api/lotes/{lote_id}/transferir")
 def transferir_lote(lote_id: int, payload: TransferenciaIn, user: dict = Depends(op_auth)):
     now = time.time()
@@ -930,13 +1002,13 @@ def transferir_lote(lote_id: int, payload: TransferenciaIn, user: dict = Depends
         if not destino:
             raise HTTPException(400, "destino inválido ou inativo")
         try:
-            con.execute("INSERT INTO transferencias(lote_id,destino_id,observacao,criado_em,usuario) VALUES(%s,%s,%s,%s,%s)",
-                        (lote_id, payload.destino_id, (payload.observacao or "").strip() or None, now, user["usuario"]))
+            transf_id = con.execute("INSERT INTO transferencias(lote_id,destino_id,observacao,criado_em,usuario) VALUES(%s,%s,%s,%s,%s) RETURNING id",
+                        (lote_id, payload.destino_id, (payload.observacao or "").strip() or None, now, user["usuario"])).fetchone()["id"]
         except psycopg.errors.UniqueViolation:
             raise HTTPException(409, "lote já foi transferido")
         con.execute("UPDATE lotes SET status='transferido' WHERE id=%s", (lote_id,))
         con.commit()
-    return {"ok": True, "lote_id": lote_id, "destino": destino["nome"], "criado_em": now}
+    return {"ok": True, "lote_id": lote_id, "transferencia_id": transf_id, "destino": destino["nome"], "criado_em": now}
 
 
 @app.get("/api/destinos", dependencies=[Depends(ui_auth)])

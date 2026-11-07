@@ -222,3 +222,38 @@ def test_alerta_nao_dispara_logo_apos_restart(client):
     assert main.avaliar_alertas(agora, agora - 3600, 0, main.CFG_PADRAO, inicio=agora - 5) == []
     assert main.avaliar_alertas(agora + 70, agora - 3600, 0, main.CFG_PADRAO, inicio=agora - 5)[0][0] == "sem_sinal"
     main.state["alertas"].clear()
+
+
+def test_movimentacao_cabine_completa(client, monkeypatch):
+    client.post("/api/itens", json={"epc": "AA11", "tipo": "Toalha piscina", "cor": "Branco"})
+    client.post("/api/itens", json={"epc": "BB22", "tipo": "Toalha piscina"})
+    client.post("/api/destinos", json={"tipo": "setor", "nome": "Piscina"})
+    did = next(d["id"] for d in client.get("/api/destinos").json() if d["nome"] == "Piscina")
+    ingest(client, "AA11", "BB22", "CC33")
+    lote = client.post("/api/lotes/registrar?janela_segundos=60").json()
+    assert len(lote["identificados"]) == 2 and lote["novos"] == ["CC33"]
+    assert lote["identificados"][0]["estado"] and lote["identificados"][0]["localizacao"] is None
+    # definir estado em lote
+    est = next(e for e in client.get("/api/estados").json() if not e["padrao"])
+    r = client.post(f"/api/lotes/{lote['id']}/estado", json={"estado_id": est["id"]}).json()
+    assert r["itens"] == 2 and r["estado"] == est["nome"]
+    assert client.post(f"/api/lotes/{lote['id']}/estado", json={"estado_id": 9999}).status_code == 400
+    # divergência sem destinatário -> 400; com destinatário -> envia
+    assert client.post(f"/api/lotes/{lote['id']}/divergencia", json={"esperado": 5}).status_code == 400
+    enviados = []
+    monkeypatch.setattr(main, "enviar_um", lambda c, n, t: enviados.append(t) or None)
+    client.post("/api/alertas/destinatarios", json={"nome": "Ana", "whatsapp": "5511999990001"})
+    assert client.post(f"/api/lotes/{lote['id']}/divergencia", json={"esperado": 5}).json()["enviados"] == 1
+    assert "detectado 3, esperado 5" in enviados[0]
+    # movimentar + comprovante + localização
+    t = client.post(f"/api/lotes/{lote['id']}/transferir", json={"destino_id": did}).json()
+    comp = client.get(f"/api/transferencias/{t['transferencia_id']}/comprovante").json()
+    assert comp["destino"] == "Piscina" and comp["total"] == 3
+    assert {i["tipo"]: i["qtd"] for i in comp["itens"]} == {"Toalha piscina": 2, "Sem cadastro": 1}
+    assert client.get(f"/api/lotes/{lote['id']}").json()["identificados"][0]["localizacao"] == "Piscina"
+    # lote transferido não pode ser descartado; lote novo pode (reiniciar leitura)
+    assert client.delete(f"/api/lotes/{lote['id']}").status_code == 409
+    ingest(client, "AA11")
+    novo = client.post("/api/lotes/registrar?janela_segundos=60").json()
+    assert client.delete(f"/api/lotes/{novo['id']}").status_code == 200
+    assert client.get(f"/api/lotes/{novo['id']}").status_code == 404

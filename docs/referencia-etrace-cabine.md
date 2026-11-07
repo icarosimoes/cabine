@@ -17,15 +17,15 @@ Observado em 2026-11-07 no eTrace (Fera Palace Hotel), tela `/cabin`, usuario ju
 9. **Imprimir**: comprovante em formato de cupom: "Movimentacao de Itens para <destino>", data, **Responsavel**, tabela Quantidade | Itens,
    **Total de pecas**, linha de **Assinatura**. (Chrome > salvar como PDF/imprimir.)
 
-## Comparacao com o Cabine RFID (o que ja temos x falta)
+## Comparacao com o Cabine RFID (implementado em 2026-11-07)
 
 | eTrace | Cabine RFID |
 |---|---|
-| Ler cabine / identificados x novos | Feito (Registrar leitura, lote, abas) |
-| Total por tipo + ultima localizacao | Parcial: falta coluna **ultima localizacao** e agrupamento por tipo |
-| Reiniciar leitura | Falta (hoje e so registrar outra leitura) |
-| Confirmacao antes de movimentar | Falta |
-| Definir estado / Editar em lote | Falta na tela da cabine (existe no Inventario) |
-| Usuario na movimentacao | Existe `usuario` em transferencias; falta exibir no detalhe |
-| Detalhes da movimentacao + Imprimir comprovante com assinatura | Falta |
-| "Clique aqui para nos avisar" (divergencia) | Falta (poderia disparar o alerta WhatsApp) |
+| Ler cabine / identificados x novos | Feito (Registrar leitura, abas Identificados/Novos) |
+| Total por tipo + ultima localizacao | Feito: lista agrupada (qtd, tipo, atributos, estado, **ultima localizacao**) |
+| Reiniciar leitura | Feito: `DELETE /api/lotes/{id}` (so lote aguardando) e nova leitura |
+| Confirmacao antes de movimentar | Feito (dialogo) |
+| Definir estado em lote | Feito: `POST /api/lotes/{id}/estado` |
+| Detalhes da movimentacao + Imprimir (cupom com assinatura) | Feito: `GET /api/transferencias/{id}/comprovante`; botao Comprovante tambem em Transferencias |
+| "Clique aqui para nos avisar" (divergencia) | Feito: `POST /api/lotes/{id}/divergencia` envia WhatsApp aos destinatarios ativos |
+| Editar itens em lote | Pendente (existe no Inventario, item a item) |
