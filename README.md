@@ -7,16 +7,20 @@ o Uptime Kuma.
 **Documentacao completa em [`docs/`](docs/README.md)** (mapa, memoria, registro, backlog, deploy, skills).
 
 - Webhook: `POST https://cabine.solidsd.com.br/ingest` (basic auth `WEBHOOK_USER`/`WEBHOOK_PASS`)
-- Painel: `https://cabine.solidsd.com.br/` (basic auth `UI_USER`/`UI_PASS`)
+- Painel: `https://cabine.solidsd.com.br/` (login com usuarios e perfis: `painel` so dashboard, `leitura`, `operador`, `admin`; o par `UI_USER`/`UI_PASS` e admin de ambiente). Instalavel como PWA.
+- Agente do hotel (Go, Windows): monitora os radios da LAN e conversa com o servidor; ver [`docs/infra/agente-hotel.md`](docs/infra/agente-hotel.md)
+- Alertas por WhatsApp (Evolution API): configurados no painel (Alertas WhatsApp)
 - Producao: VPS principal (Swarm, stack `impinj`) — passos em [`docs/infra/deploy.md`](docs/infra/deploy.md)
 
 ## Rodar localmente
 
 ```bash
 docker run -d --name pg -e POSTGRES_USER=impinj -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=impinj -p 5432:5432 postgres:16-alpine
-pip install fastapi==0.115.6 "uvicorn[standard]==0.34.0" "psycopg[binary]"
+pip install fastapi==0.120.4 starlette==0.49.3 "uvicorn[standard]==0.34.0" "psycopg[binary]"
 DATABASE_URL=postgresql://impinj:dev@localhost:5432/impinj WEBHOOK_USER=w WEBHOOK_PASS=w \
-  UI_USER=u UI_PASS=u SAIDA_USER=s SAIDA_PASS=s uvicorn app.main:app --port 8000
+  UI_USER=u UI_PASS=u SAIDA_USER=s SAIDA_PASS=s SESSION_SECRET=$(openssl rand -hex 32) uvicorn app.main:app --port 8000
+# SESSION_SECRET e obrigatorio (>= 32 caracteres); o app nao sobe sem ele.
+# Testes: DATABASE_URL apontando para um Postgres DESCARTAVEL (apagam as tabelas) -> pytest -q
 ```
 
 Dados de exemplo: `scripts/seed_exemplo.py`. Config do leitor: Enable Webhook Output, Server URL
@@ -24,8 +28,8 @@ Dados de exemplo: `scripts/seed_exemplo.py`. Config do leitor: Enable Webhook Ou
 
 ## API
 
-Rotas em [`docs/mapa.md`](docs/mapa.md); detalhes em [`docs/api.md`](docs/api.md). Todas exigem basic auth `UI_*`, exceto
-`/ingest` (`WEBHOOK_*`), `POST /api/saida` (`SAIDA_*`) e `/health`.
+Rotas em [`docs/mapa.md`](docs/mapa.md); detalhes em [`docs/api.md`](docs/api.md). Exigem login (cookie ou Basic) com o papel da rota, exceto
+`/ingest` (`WEBHOOK_*`), `POST /api/saida` (`SAIDA_*`), `/api/agente/*` (`X-Agent-Token`), `/health`, `/login` e os arquivos do PWA.
 
 ## Aviso
 

@@ -6,7 +6,7 @@ Legenda: **[código]** = li no arquivo; **[VPS]** = observado por comando; **[in
 
 ## Status das correcoes (atualizado no fim do dia)
 
-Corrigidos e em producao: #1 Starlette 0.49.3/FastAPI 0.120.4, #2 `SESSION_SECRET` obrigatorio (>=32), #3 rate limit (ultimo hop do XFF; Basic, webhook e saida incluidos; expurgo), #6 container uid 10001, parte do #5 (tray so abre http/https; 0.1.5+).
+Corrigidos e em producao (08/11): #1 Starlette 0.49.3/FastAPI 0.120.4, #2 `SESSION_SECRET` obrigatorio (>=32), #3 rate limit (ultimo hop do XFF; Basic, webhook e saida incluidos; expurgo), #6 container uid 10001, parte do #5 (tray so abre http/https; agente 0.1.5+). Depois da auditoria: perfil `painel` fechado por padrao (teste percorre as rotas), PWA sem cache de API.
 Abertos: #4 backup do banco do Cabine, #5 ACL da pasta publica do agente, #7 `wa_url` (https/IP publico), #8 revogacao de sessao, #9 assinatura do instalador; `govulncheck` nao rodado.
 Obs.: ao diagnosticar o deploy, o fim do `.env` apareceu numa saida de comando (~38 caracteres de uma senha); trocar essa senha se quiser.
 

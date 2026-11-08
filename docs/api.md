@@ -177,3 +177,56 @@ possível evasão não documentada.
   detecta sozinho início/fim de sessão por cabine, classifica resultado — inclusive "leitor sem
   comunicação" — e mantém histórico de sessões). Migrar pra esse modelo é mudança de arquitetura, não
   feita ainda; ver conversa do projeto antes de decidir se vale a pena.
+
+## Perfis, painel, agentes, alertas e PWA (adicionado em 2026-11-08)
+
+### Perfis de acesso
+
+`painel` < `leitura` < `operador` < `admin` (`PAPEIS` em `app/main.py`). `painel_auth` (qualquer usuario logado) vale so para `GET /api/dashboard`,
+`/api/summary` e `/api/me`; `ui_auth` exige >= `leitura` (403 "seu perfil so acessa o Painel" para `painel`), `op_auth` >= `operador`, `admin_auth` = `admin`.
+Rota nova em `/api/*` deve usar uma dessas dependencias; o teste `test_nenhuma_rota_get_da_api_abre_para_o_perfil_painel` falha se alguma rota GET abrir para o `painel`.
+O papel vale na hora (lido do banco a cada requisicao); desativar o usuario derruba a sessao. Login: `POST /api/login` (cookie `cabine_sessao`, HMAC com `SESSION_SECRET`, 12 h) ou HTTP Basic.
+
+### `GET /api/dashboard`
+
+Uma chamada para o Painel: `antenas[]` (`nome, descricao, modelo, ip, ambiente, evasao, alerta, online` = `true|false|null` (null = sem informacao recente do agente),
+`latencia_ms, detalhe, verificado_em, agente, extra` so com campos seguros: `firmware, uptime, serial, preset, webhook`), `agentes[]` (`online, versao, host, visto_em`),
+`resumo` (contagens e `problemas[]`), `alertas` (`ativos`, `enviados_24h`, `falhas_24h`, `ultimos[]` sem numero de telefone), `cabine` (lotes/pecas aguardando, transferencias e pecas de hoje, ultimas),
+`evasao` (24 h), `inventario` (total e por estado), `conferencia` (ultima). "Hoje" usa `TZ_OFFSET_HOURS`.
+
+### Leitura sob demanda
+
+O `/ingest` responde 200 sempre, mas so **grava** em `events` com leitura armada (`POST /api/leitura/armar?segundos=N`, usado por "Registrar leitura") ou conferencia em andamento
+(`stored:0` caso contrario). Mesmo sem gravar, guarda o "ultimo sinal" em memoria (indicador "radio: enviando sinal" e alerta de sem sinal).
+
+### Agente do hotel
+
+- Admin cria o agente (`POST /api/agentes {nome}`): devolve o token **uma unica vez**; o servidor guarda so o SHA-256. Varios agentes podem existir; `DELETE /api/agentes/{id}` remove.
+- `GET /api/agente/config` (header `X-Agent-Token`): intervalo, antenas com IP/porta/modelo/`evasao`. `POST /api/agente/status`: o agente envia `versao, host` e o estado de cada antena
+  (`id, online, latencia_ms, detalhe, extra`) e recebe os comandos pendentes. Regra com varios agentes: o "online" de um agente em dia nao e sobrescrito pelo "offline" de outro;
+  o offline so vale se o registro atual for do mesmo agente, ja offline, sem dono ou mais velho que `AGENTE_SEM_CONTATO_SEGUNDOS` (120).
+- Comandos ao radio: `POST /api/antenas/{id}/comandos {metodo GET|PUT|POST, caminho /api/v1/..., corpo JSON}` (admin; caminho validado, sem `..`), o agente executa na LAN e devolve em
+  `POST /api/agente/comandos/{id}/resultado`; consulta em `GET /api/comandos/{id}` (`pendente|enviado|ok|erro|expirado`; expira em 120 s). O agente revalida o allowlist.
+- Checagem do agente: R700 = `GET /api/v1/status` (credencial `root`/senha configurada no agente); Acura EDGE30R = pagina de status na porta 80 (firmware, uptime, status). **A porta de dados (8080) nao e sondada**
+  (o Acura aceita so 2 clientes). Online = o host responde na rede. Detalhes e testes: [infra/agente-hotel.md](infra/agente-hotel.md).
+
+### Alertas por WhatsApp (Evolution API)
+
+- Config no painel (admin): `GET/PUT /api/config/alertas` (`wa_url, wa_instance, wa_apikey` so de escrita, `ativo, sem_sinal_seg, falhas, repetir_min`; os padroes vem das variaveis `WHATSAPP_*` e `ALERTA_*`).
+  Destinatarios (pessoa ou grupo `...@g.us`) em `/api/alertas/destinatarios` (+ `/{id}/teste`), busca de grupos em `/api/alertas/grupos` (+ `/atualizar`, em segundo plano), historico em `/api/alertas/envios`.
+- Tipos: `sem_sinal`, `falhas` (so memoria), `antena_offline` (inclui a retomada "voltou"), `antena_online` (retomada de cobertura), `agente_offline`, `webhook_falha`, divergencia de movimentacao.
+  Antenas de evasao: prefixo "🚨 EVASAO", 1 falha ja marca offline, alertam mesmo com o alerta desligado. Lembrete a cada `repetir_min`.
+- Estado: `state["alertas"]` (memoria) espelhado em `alerta_estado` para as chaves `antena:`, `webhook:`, `agente:`, `cobertura:` — restart/deploy nao reenvia. Sem dado fresco do agente o estado e preservado
+  (nada de "voltou" falso). `cobertura:ID` marca antena que ficou sem nenhum agente; quando algum volta a ve-la online sai "antena X esta ONLINE (agente Y)".
+- "enviado" em `alerta_envios` significa que a Evolution aceitou a mensagem (nao garante leitura).
+
+### PWA
+
+Arquivos publicos em `app/static/`: `manifest.webmanifest` (standalone, start `/#painel`), `sw.js` (escopo `/`, `no-cache`), `offline.html`, `icons/` (`scripts/gerar_icones.py`).
+O service worker **nao** guarda API nem paginas do painel — so icones e a pagina offline. Mudou o SW: incremente `VERSAO` em `sw.js`.
+
+### Variaveis de ambiente (resumo)
+
+Obrigatorias: `DATABASE_URL`, `WEBHOOK_USER/PASS`, `UI_USER/PASS`, `SAIDA_USER/PASS`, `SESSION_SECRET` (>= 32). Opcionais: `SESSION_HORAS`, `RETENTION_DAYS`, `TZ_OFFSET_HOURS`, `STALE_MINUTES`,
+`KUMA_PUSH_URL`, `SAIDA_JANELA_MINUTOS`, `SESSAO_AUTO`, `WHATSAPP_API_URL/INSTANCE/APIKEY`, `ALERTA_SEM_SINAL_SEGUNDOS`, `ALERTA_FALHAS_INGEST`, `ALERTA_REPETIR_MINUTOS`, `AGENTE_SEM_CONTATO_SEGUNDOS`, `AGENTE_DIST`.
+No `impinj-stack.yml` nao use parenteses nem espacos extras no texto de `${VAR:?mensagem}` (quebra a interpolacao do `docker stack deploy`).
