@@ -13,7 +13,7 @@ import psycopg  # noqa: E402
 from app import main  # noqa: E402
 
 TABELAS = ["conferencia_itens", "conferencias", "eventos_saida", "transferencias", "lote_itens", "lotes",
-           "acomodacao_itens", "acomodacoes", "antenas", "itens", "estados_inventario", "destinos", "usuarios", "events", "sessoes", "leituras_hora", "config", "alerta_envios", "alerta_destinatarios", "comandos", "antena_status", "agentes", "alerta_estado", "auditoria_login", "auditoria_acoes", "perfis"]
+           "acomodacao_itens", "acomodacoes", "antenas", "itens", "estados_inventario", "destinos", "usuarios", "events", "sessoes", "leituras_hora", "config", "alerta_envios", "alerta_destinatarios", "comandos", "antena_status", "agentes", "alerta_estado", "auditoria_login", "auditoria_acoes", "perfis", "monitor_checagens"]
 
 
 @pytest.fixture()
@@ -23,6 +23,7 @@ def client():
             con.execute(f"DROP TABLE IF EXISTS {t} CASCADE")
     main.init_db()
     main._falhas.clear()
+    main._ult_chk.clear()
     with TestClient(main.app) as c:
         c.auth = ("admin", "admin-pass")
         yield c

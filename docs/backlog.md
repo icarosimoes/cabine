@@ -26,13 +26,15 @@
 ## Dashboard (2026-11-07)
 
 - Feito: monitoramento das antenas/agentes, alertas recentes, inventario por estado, cabine e conferencia (`GET /api/dashboard`).
-- Feito: perfil de acesso `painel` (so dashboard). Ideia: esconder IPs/hosts para esse perfil se for dado a terceiros; mais perfis (ex.: lavanderia so ve transferencias).
-- Ideias: grafico de leituras por hora no Painel; historico de disponibilidade das antenas (hoje so ha o ultimo estado; precisaria de tabela de checagens para "uptime %"); temperatura do Acura/R700; itens parados ha X dias fora da lavanderia; ranking de tipos com maior perda/divergencia; link do card de antena para "Configurar radio".
+- Feito: perfil de acesso `painel` (so dashboard). Feito (2026-11-09): quem nao tem a permissao `sistema` nao recebe IP, host, versao nem detalhe tecnico no `/api/dashboard`. Ideia: mais perfis (ex.: lavanderia so ve transferencias; ja da para criar na tela Usuarios).
+- Feito (2026-11-09): "Pecas paradas na lavanderia" (ultima transferencia para lavanderia ha mais de `PARADO_DIAS`, padrao 7, e nao devolvidas) e "Mais nao encontrados na conferencia" (30 dias). Divergencia da cabine nao e gravada (so avisa por WhatsApp), entao o ranking usa as conferencias.
+- Ideias: grafico de leituras por hora no Painel; historico de disponibilidade das antenas (hoje so ha o ultimo estado; precisaria de tabela de checagens para "uptime %"); temperatura do Acura/R700; link do card de antena para "Configurar radio"; gravar divergencias da cabine para ranking.
+- Feito (2026-11-09): tela **Monitoramento** (uptime das antenas, quedas, latencia, agentes, radio, comandos, alertas, banco, seguranca). Ideias para ela: status da instancia Evolution (conectada/desconectada), alerta quando o uptime 24h cair abaixo de X%, temperatura do R700/Acura (depende de validar a API no hardware).
 
 ## Responsivo e PWA (2026-11-07)
 
 - Feito: PWA instalavel (manifest, service worker so de icones/offline, icones) e Painel responsivo (cartoes no celular).
-- **Proximo: tornar o restante responsivo**, uma tela por vez, na ordem de uso em celular/tablet: Leitura da cabine (botao grande de registrar leitura, lista agrupada), Alertas de evasao, Transferencias, Conferencia, Antenas, Inventario/Catalogo. Reusar `table.rt` (+ `data-l` nas celulas) e os dialogos `<dialog>` em tela cheia no celular.
+- [x] **Restante das telas responsivo (2026-11-09)**: todas as tabelas viram cartoes no celular (rotulos automaticos pelo cabecalho), botao grande de Registrar leitura/Movimentar/Transferir, formularios em largura total, catalogo com selecao no canto do cartao. Atalhos do PWA: Dashboard, Leitura da cabine, Conferencia. (Texto original do item:) tornar o restante responsivo, uma tela por vez, na ordem de uso em celular/tablet: Leitura da cabine (botao grande de registrar leitura, lista agrupada), Alertas de evasao, Transferencias, Conferencia, Antenas, Inventario/Catalogo. Reusar `table.rt` (+ `data-l` nas celulas) e os dialogos `<dialog>` em tela cheia no celular.
 - Ideias PWA: notificacoes push (Web Push com VAPID) para os mesmos alertas do WhatsApp; atalho "Leitura da cabine" no manifest; cache de leitura do Painel com carimbo "dados de HH:MM" (hoje sem rede mostra so a pagina offline, de proposito).
 - Fora do escopo: app nativo; PWA nao substitui o agente Windows (que fala com os radios na LAN).
 
@@ -51,7 +53,7 @@
 - (2026-11-07) `/ingest` so grava eventos durante leitura solicitada (`POST /api/leitura/armar` ou conferencia em
   andamento); fora disso descarta e guarda so o "ultimo sinal" em memoria (indicador "radio: enviando sinal").
   Consequencia: Tags lidas, Eventos ao vivo e Leituras por hora refletem apenas leituras solicitadas.
-  Pendente: botao "Capturar" na tela Eventos ao vivo e validar `/ingest` com leitor real.
+  Feito (2026-11-09): botao "Capturar" (30 s a 10 min) na tela Eventos ao vivo. Pendente: validar `/ingest` com leitor real.
 
 ## Agente do hotel (2026-11-07)
 

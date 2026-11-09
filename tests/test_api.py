@@ -705,3 +705,67 @@ def test_auditoria_de_acoes_registra_quem_fez_e_tentativas_negadas(client):
     assert client.get("/api/auditoria/acoes?usuario=zzz").json()["acoes"] == []
     assert "Criou perfil" in client.get("/api/auditoria/acoes.csv").text
     assert ana.get("/api/auditoria/acoes").status_code == 403  # só quem tem a permissão 'auditoria'
+
+
+def test_dashboard_parados_ranking_e_painel_sem_ip(client):
+    client.post("/api/antenas", json={"nome": "r700", "modelo": "ImpinjR700", "ip": "10.0.0.1", "porta": 443, "alerta": True})
+    client.post("/api/itens", json={"epc": "AA11", "tipo": "Roupão"})
+    client.post("/api/itens", json={"epc": "BB22", "tipo": "Toalha"})
+    now = time.time()
+    with main_db() as con:
+        dest = con.execute("INSERT INTO destinos(tipo,nome,criado_em) VALUES('lavanderia','Lav X',%s) RETURNING id", (now,)).fetchone()["id"]
+        lid = con.execute("INSERT INTO lotes(criado_em,janela_segundos,quantidade,status) VALUES(%s,15,1,'transferido') RETURNING id", (now - 10 * 86400,)).fetchone()["id"]
+        con.execute("INSERT INTO lote_itens(lote_id,epc) VALUES(%s,'AA11')", (lid,))
+        con.execute("INSERT INTO transferencias(lote_id,destino_id,criado_em) VALUES(%s,%s,%s)", (lid, dest, now - 10 * 86400))
+        cid = con.execute("INSERT INTO conferencias(filtros_desc,iniciada_em,finalizada_em,status,esperados,conferidos) VALUES('x',%s,%s,'finalizada',2,1) RETURNING id", (now - 60, now - 30)).fetchone()["id"]
+        con.execute("INSERT INTO conferencia_itens(conferencia_id,epc,tipo,conferido_em) VALUES(%s,'AA11','Roupão',%s)", (cid, now - 40))
+        con.execute("INSERT INTO conferencia_itens(conferencia_id,epc,tipo,conferido_em) VALUES(%s,'BB22','Toalha',NULL)", (cid,))
+        con.commit()
+    d = client.get("/api/dashboard").json()
+    assert d["inventario"]["parados"][0]["tipo"] == "Roupão" and d["inventario"]["parados"][0]["qtd"] == 1
+    assert d["inventario"]["nao_encontrados_30d"] == [{"tipo": "Toalha", "qtd": 1}]
+    assert d["antenas"][0]["ip"] == "10.0.0.1"  # admin vê o IP
+    client.post("/api/usuarios", json={"usuario": "tv", "senha": "senha-forte-1", "papel": "painel"})
+    c = client.__class__(client.app)
+    assert c.post("/api/login", json={"usuario": "tv", "senha": "senha-forte-1"}).status_code == 200
+    dp = c.get("/api/dashboard").json()
+    assert dp["antenas"][0]["ip"] is None and dp["antenas"][0]["nome"] == "r700"  # painel não vê IP
+
+
+def test_monitoramento_historico_e_perfil_monitor(client):
+    client.post("/api/antenas", json={"nome": "r700", "modelo": "ImpinjR700", "ip": "10.0.0.1", "porta": 443, "alerta": True})
+    aid = client.get("/api/antenas").json()[0]["id"]
+    ag = client.post("/api/agentes", json={"nome": "hotel"}).json()
+    H = {"X-Agent-Token": ag["token"]}
+    def rep(online, lat=20):
+        assert client.post("/api/agente/status", headers=H, auth=None, json={"versao": "1", "host": "PC", "antenas": [
+            {"id": aid, "online": online, "latencia_ms": lat if online else None}]}).status_code == 200
+    rep(True); rep(False)  # mudança de estado grava na hora
+    with main_db() as con:
+        assert con.execute("SELECT COUNT(*) n FROM monitor_checagens WHERE tipo='antena'").fetchone()["n"] == 2
+        assert con.execute("SELECT COUNT(*) n FROM monitor_checagens WHERE tipo='agente'").fetchone()["n"] == 1  # agente limitado a 1 por 30s
+        # histórico antigo: 10 min online + 2 min offline há ~1h
+        base = time.time() - 3600
+        for i in range(12):
+            con.execute("INSERT INTO monitor_checagens(tipo,ref_id,quando,online,latencia_ms) VALUES('antena',%s,%s,%s,30)", (aid, base + i * 60, i < 10))
+        con.commit()
+    m = client.get("/api/monitoramento").json()
+    a = m["antenas"][0]
+    assert a["ip"] == "10.0.0.1" and a["uptime_24h"] is not None and 0 < a["uptime_24h"] < 100
+    assert len(a["quedas"]) >= 1 and a["quedas"][0]["duracao_s"] >= 60
+    assert m["sistema"]["banco"]["ms"] >= 0 and m["agentes"][0]["online"] is True
+    assert m["seguranca"] is not None and m["atividade"] is not None  # admin tem auditoria
+    # perfil monitor: só a tela Monitoramento, sem IP e sem segurança/atividade
+    assert client.get("/api/perfis").json()["perfis"][0] is not None
+    assert client.post("/api/usuarios", json={"usuario": "noc", "papel": "monitor", "senha": "senha-forte-1"}).status_code == 200
+    n = client.__class__(client.app)
+    assert n.post("/api/login", json={"usuario": "noc", "senha": "senha-forte-1"}).status_code == 200
+    assert n.get("/api/me").json()["permissoes"] == ["monitoramento"]
+    mm = n.get("/api/monitoramento")
+    assert mm.status_code == 200 and mm.json()["antenas"][0]["ip"] is None and mm.json()["seguranca"] is None and mm.json()["atividade"] is None
+    assert n.get("/api/dashboard").status_code == 403 and n.get("/api/antenas").status_code == 403 and n.get("/api/usuarios").status_code == 403
+    # o perfil painel não vê o monitoramento
+    client.post("/api/usuarios", json={"usuario": "tv", "papel": "painel", "senha": "senha-forte-1"})
+    t = client.__class__(client.app)
+    t.post("/api/login", json={"usuario": "tv", "senha": "senha-forte-1"})
+    assert t.get("/api/monitoramento").status_code == 403

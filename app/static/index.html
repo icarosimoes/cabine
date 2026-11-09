@@ -115,7 +115,19 @@ table.rt td::before{content:attr(data-l);color:var(--muted);font-size:11px;text-
 table.rt td:first-child{display:block;text-align:left;font-size:13px;padding-bottom:6px;border-bottom:1px solid var(--line);margin-bottom:2px}
 table.rt td:first-child::before{content:none}
 table.rt td[colspan]{display:block;text-align:center;color:var(--muted)}
-table.rt td[colspan]::before{content:none}}
+table.rt td[colspan]::before{content:none}
+table.rt td:empty{display:none}
+table.rt td:last-child:has(button),table.rt td:last-child:has(a){flex-wrap:wrap;justify-content:flex-start}
+table.rt td:has(select),table.rt td:has(input[type=text]){flex-direction:column;align-items:stretch;text-align:left}
+table.rt td select,table.rt td input[type=text]{width:100%!important}
+table.rt-sel tr{position:relative}
+table.rt-sel td:first-child{position:absolute;top:10px;right:12px;display:block;border:0;padding:0;margin:0;width:auto}
+table.rt-sel td:first-child::before{content:none}
+table.rt-sel td:nth-child(2){display:block;text-align:left;font-size:13px;padding-bottom:6px;border-bottom:1px solid var(--line);margin-bottom:2px;padding-right:34px}
+table.rt-sel td:nth-child(2)::before{content:none}
+#registrar,#movimentar,.transferirBtn{width:100%;min-height:52px;font-size:16px}
+.row{flex-wrap:wrap}
+.row>input:not([type=checkbox]),.row>select,.row>textarea{flex:1 1 44%;min-width:0;width:auto!important}}
 @media(display-mode:standalone){body{overscroll-behavior-y:contain}}
 @media(max-width:360px){.cards{grid-template-columns:1fr}}
 @media print{
@@ -133,6 +145,7 @@ table.rt td[colspan]::before{content:none}}
   <div class="brand-row"><div class="brand-mark">C</div><div><strong>Cabine RFID</strong><span>Solid · enxoval</span></div></div>
   <nav class="nav-list">
     <a class="nav-item nav-solo" href="#painel" data-nav="painel">Dashboard</a>
+    <a class="nav-item nav-solo" href="#monitoramento" data-nav="monitoramento">Monitoramento</a>
     <div class="nav-group" data-grupo="Operação">
       <button type="button" class="nav-section" aria-expanded="true"><span>Operação</span><i class="chev" aria-hidden="true"></i></button>
       <div class="nav-sub">
@@ -222,6 +235,14 @@ table.rt td[colspan]::before{content:none}}
     <div id="dEstados" style="padding:8px 0"></div>
   </section>
   <section>
+    <h2><span>Peças paradas na lavanderia</span><span class="mut" id="dParadosInfo"></span></h2>
+    <div class="scroll"><table class="rt"><thead><tr><th>Tipo</th><th>Peças</th><th>Mais antiga enviada</th></tr></thead><tbody id="dParadosTb"></tbody></table></div>
+  </section>
+  <section>
+    <h2><span>Mais não encontrados na conferência</span><span class="mut">últimos 30 dias</span></h2>
+    <div class="scroll"><table class="rt"><thead><tr><th>Tipo</th><th>Não encontrados</th></tr></thead><tbody id="dPerdasTb"></tbody></table></div>
+  </section>
+  <section>
     <h2><span>Cabine — últimas transferências</span><span class="mut" id="dCabineInfo"></span></h2>
     <div class="scroll"><table class="rt"><thead><tr><th>Quando</th><th>Destino</th><th>Peças</th></tr></thead><tbody id="dTransfTb"></tbody></table></div>
     <p class="mut" id="dConf" style="margin:0;padding:8px 16px"></p>
@@ -233,6 +254,60 @@ table.rt td[colspan]::before{content:none}}
   <div class="card"><b id="c3">–</b><span>tags distintas (1h)</span></div>
   <div class="card"><b id="c4">–</b><span>tags distintas (24h)</span></div>
   <div class="card"><b id="c5">–</b><span>eventos guardados</span></div>
+</div>
+</div>
+<div class="view" data-view="monitoramento" hidden>
+<div class="banner" id="mBanner">carregando…</div>
+<div class="cards">
+  <div class="card"><b id="mAntenas">–</b><span>antenas online</span></div>
+  <div class="card"><b id="mAgentes">–</b><span>agentes online</span></div>
+  <div class="card"><b id="mRadio">–</b><span>último sinal do rádio</span></div>
+  <div class="card"><b id="mEv1h">–</b><span>eventos na última hora</span></div>
+  <div class="card"><b id="mBanco">–</b><span>resposta do banco</span></div>
+  <div class="card"><b id="mUp">–</b><span>app no ar há</span></div>
+</div>
+<section>
+  <h2><span>Antenas — disponibilidade</span><span class="mut" id="mAntInfo"></span></h2>
+  <div class="scroll"><table class="rt"><thead><tr><th>Antena</th><th>Status</th><th>Uptime 24h</th><th>Uptime 7d</th><th>Latência (24h)</th><th>Últimas quedas</th></tr></thead><tbody id="mAntTb"></tbody></table></div>
+</section>
+<section>
+  <h2><span>Agentes do hotel</span></h2>
+  <div class="scroll"><table class="rt"><thead><tr><th>Agente</th><th>Status</th><th>Fora (24h)</th><th>Fora (7d)</th><th>Últimas quedas</th></tr></thead><tbody id="mAgTb"></tbody></table></div>
+</section>
+<div class="grid2">
+  <section>
+    <h2><span>Rádio e ingestão</span></h2>
+    <div class="scroll"><table class="rt"><tbody id="mRadioTb"></tbody></table></div>
+  </section>
+  <section>
+    <h2><span>Fila de comandos ao rádio</span><span class="mut">24h</span></h2>
+    <div class="scroll"><table class="rt"><tbody id="mCmdTb"></tbody></table></div>
+  </section>
+  <section>
+    <h2><span>Alertas por dia</span><span class="mut">7 dias</span></h2>
+    <div class="scroll"><table class="rt"><thead><tr><th>Dia</th><th>Enviados</th><th>Falhas</th></tr></thead><tbody id="mAlDiaTb"></tbody></table></div>
+    <p class="mut" id="mAlFalham" style="margin:0;padding:8px 16px"></p>
+  </section>
+  <section>
+    <h2><span>Banco de dados</span><span class="mut" id="mBancoInfo"></span></h2>
+    <div class="scroll"><table class="rt"><thead><tr><th>Tabela</th><th>Tamanho</th><th>Linhas (aprox.)</th></tr></thead><tbody id="mTabTb"></tbody></table></div>
+  </section>
+</div>
+<div id="mSeg" hidden>
+  <div class="grid2">
+    <section>
+      <h2><span>Segurança</span><span class="mut">24h</span></h2>
+      <div class="scroll"><table class="rt"><tbody id="mSegTb"></tbody></table></div>
+    </section>
+    <section>
+      <h2><span>Atividade de usuários</span><span class="mut">hoje</span></h2>
+      <div class="scroll"><table class="rt"><thead><tr><th>Usuário</th><th>Ações</th><th>Última</th></tr></thead><tbody id="mAtivTb"></tbody></table></div>
+    </section>
+  </div>
+  <section>
+    <h2><span>Mudanças recentes</span><span class="mut">usuários, perfis, configuração, antenas…</span></h2>
+    <div class="scroll"><table class="rt"><thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th></tr></thead><tbody id="mMudTb"></tbody></table></div>
+  </section>
 </div>
 </div>
 <div class="view" data-view="leitura" hidden>
@@ -256,22 +331,22 @@ table.rt td[colspan]::before{content:none}}
         <select id="estLote"></select>
         <button id="definirEstado" type="button">Definir estado</button>
       </div>
-      <div class="scroll"><table><thead><tr><th>Total de peças</th><th>Tipo</th><th>Atributos</th><th>Estado</th><th>Última localização</th></tr></thead><tbody id="loteIdentificados"></tbody></table></div>
+      <div class="scroll"><table class="rt"><thead><tr><th>Total de peças</th><th>Tipo</th><th>Atributos</th><th>Estado</th><th>Última localização</th></tr></thead><tbody id="loteIdentificados"></tbody></table></div>
     </div>
     <div id="abaNovos" hidden>
       <div class="row" style="padding-top:0"><b>Tags novas — cadastre pra identificar</b></div>
-      <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th></th></tr></thead><tbody id="loteNovos"></tbody></table></div>
+      <div class="scroll"><table class="rt"><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th></th></tr></thead><tbody id="loteNovos"></tbody></table></div>
     </div>
   </div>
 </section>
 <section>
   <h2><span>Sessões de leitura automáticas</span><span id="sessaoEstado" class="mut"></span></h2>
-  <div class="scroll"><table><thead><tr><th>Início</th><th>Fim</th><th>Tags</th><th>Lote</th><th>Status</th></tr></thead><tbody id="sessoes"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Início</th><th>Fim</th><th>Tags</th><th>Lote</th><th>Status</th></tr></thead><tbody id="sessoes"></tbody></table></div>
 </section>
 
 <section>
   <h2><span>Lotes aguardando transferência <span id="pendCount" class="mut"></span></span><span><button id="excluirTodosLotes" hidden>Excluir todos</button></span></h2>
-  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th></th></tr></thead><tbody id="pendentes"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th></th></tr></thead><tbody id="pendentes"></tbody></table></div>
 </section>
 </div>
 <dialog id="dlg" style="margin:auto;padding:24px;border:1px solid var(--line);border-radius:12px;background:var(--navy-mid);color:var(--text);min-width:340px;max-width:560px">
@@ -289,7 +364,7 @@ table.rt td[colspan]::before{content:none}}
     <button id="fAplicar">filtrar</button>
     <button id="fLimpar">limpar</button>
   </div>
-  <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Usuário</th><th>Obs.</th><th>EPCs</th><th></th></tr></thead><tbody id="transf"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Usuário</th><th>Obs.</th><th>EPCs</th><th></th></tr></thead><tbody id="transf"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="evasao" hidden>
@@ -303,7 +378,7 @@ table.rt td[colspan]::before{content:none}}
     <button id="evAplicar">filtrar</button>
     <button id="evLimpar">limpar</button>
   </div>
-  <div class="scroll"><table><thead><tr><th>Data</th><th>EPC</th><th>Destino</th><th>Status</th></tr></thead><tbody id="evasoes"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Data</th><th>EPC</th><th>Destino</th><th>Status</th></tr></thead><tbody id="evasoes"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="inventario" hidden>
@@ -321,7 +396,7 @@ table.rt td[colspan]::before{content:none}}
   <div class="row" style="justify-content:flex-end;padding-bottom:0"><button class="acc" id="iniciarConf">Iniciar conferência de inventário</button></div>
   <div id="confMsg" class="msg"></div>
   <div class="row" style="padding-top:0"><b id="invResumo">Resumo — carregando…</b></div>
-  <div class="scroll"><table><thead><tr><th>Tipo</th><th>Quantidade</th><th>Esperado</th><th>Diferença</th></tr></thead><tbody id="invTabela"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Tipo</th><th>Quantidade</th><th>Esperado</th><th>Diferença</th></tr></thead><tbody id="invTabela"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="catalogo" hidden>
@@ -353,7 +428,7 @@ table.rt td[colspan]::before{content:none}}
     <button class="acc" id="catLoteAplicar">Aplicar</button> <button id="catLoteLimpar">limpar seleção</button>
   </div>
   <div id="catLoteMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th><input type="checkbox" id="catTodos" title="selecionar todos os exibidos"></th><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th>Compra</th><th>Localização</th><th>Estado</th><th></th></tr></thead><tbody id="catalogo"></tbody></table></div>
+  <div class="scroll"><table class="rt rt-sel"><thead><tr><th><input type="checkbox" id="catTodos" title="selecionar todos os exibidos"></th><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th>Compra</th><th>Localização</th><th>Estado</th><th></th></tr></thead><tbody id="catalogo"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="manual" hidden>
@@ -444,7 +519,7 @@ table.rt td[colspan]::before{content:none}}
     <button class="acc" id="novoDestino">Cadastrar</button>
   </div>
   <div id="destinoMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th>Nome</th><th>Tipo</th><th>Alerta</th><th>Status</th><th></th></tr></thead><tbody id="destinos"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Nome</th><th>Tipo</th><th>Alerta</th><th>Status</th><th></th></tr></thead><tbody id="destinos"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="estados" hidden>
@@ -457,27 +532,28 @@ table.rt td[colspan]::before{content:none}}
     <button class="acc" id="novoEstado">Cadastrar</button>
   </div>
   <div id="estadoMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th>Nome</th><th>Descrição</th><th>Comportamento</th><th>Padrão</th></tr></thead><tbody id="estados"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Nome</th><th>Descrição</th><th>Comportamento</th><th>Padrão</th></tr></thead><tbody id="estados"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="tags" hidden>
 <section>
   <h2><span>Tags <span id="filtro" style="color:var(--muted)"></span></span>
     <span><select id="hours"><option value="1">1h</option><option value="24" selected>24h</option><option value="168">7 dias</option></select></span></h2>
-  <div class="scroll"><table><thead><tr><th>EPC</th><th>Item</th><th>Leituras</th><th>Última</th><th>Antenas</th><th>Melhor RSSI</th></tr></thead><tbody id="tags"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>EPC</th><th>Item</th><th>Leituras</th><th>Última</th><th>Antenas</th><th>Melhor RSSI</th></tr></thead><tbody id="tags"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="eventos" hidden>
 <section>
-  <h2><span>Eventos ao vivo</span><button id="limpar" hidden>limpar filtro</button></h2>
-  <div class="scroll"><table><thead><tr><th>Data e hora</th><th>EPC</th><th>Item</th><th>Antena</th><th>RSSI</th></tr></thead><tbody id="evs"></tbody></table></div>
+  <h2><span>Eventos ao vivo</span><span><button id="limpar" hidden>limpar filtro</button> <select id="capSeg" title="duração da captura"><option value="30">30 s</option><option value="60" selected>1 min</option><option value="300">5 min</option><option value="600">10 min</option></select> <button class="acc" id="capturar" title="o leitor só grava durante a captura">Capturar</button></span></h2>
+  <div id="capMsg" class="msg"></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Data e hora</th><th>EPC</th><th>Item</th><th>Antena</th><th>RSSI</th></tr></thead><tbody id="evs"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="conferencia" hidden>
 <section>
   <h2><span>Conferências de estoque</span></h2>
   <div class="mut" style="padding:10px 16px 0">Para iniciar uma conferência, use o botão em Inventário (respeita os filtros escolhidos). Conferido = tag lida pelo leitor depois do início.</div>
-  <div class="scroll"><table><thead><tr><th>Início</th><th>Usuário</th><th>Filtros aplicados</th><th>Esperados</th><th>Status</th><th></th></tr></thead><tbody id="confLista"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Início</th><th>Usuário</th><th>Filtros aplicados</th><th>Esperados</th><th>Status</th><th></th></tr></thead><tbody id="confLista"></tbody></table></div>
 </section>
 <section id="confDetalhe" hidden>
   <h2><span id="confTitulo">Detalhes da conferência</span><span><a id="cfCsv" class="nav-item" style="width:auto;display:inline-block;border:1px solid var(--line)" href="#">Exportar CSV</a> <button id="cfImprimir">Imprimir</button> <button id="confFinalizar" class="acc">Finalizar conferência</button> <button id="confFechar">fechar</button></span></h2>
@@ -488,7 +564,7 @@ table.rt td[colspan]::before{content:none}}
     <div class="card"><b id="cfPct" style="color:var(--teal)">–</b><span>percentual · <span id="cfDur">–</span> min</span></div>
   </div>
   <div class="row"><span class="mut" id="cfInfo"></span><label class="mut"><input type="checkbox" id="cfSoNao"> exibir só não conferidos</label></div>
-  <div class="scroll"><table><thead><tr><th>Status</th><th>Tag RFID</th><th>Item</th><th>Conferido em</th></tr></thead><tbody id="cfItens"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Status</th><th>Tag RFID</th><th>Item</th><th>Conferido em</th></tr></thead><tbody id="cfItens"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="alertaswa" hidden>
@@ -518,9 +594,9 @@ table.rt td[colspan]::before{content:none}}
     <button class="acc" id="wdSalvar">Cadastrar</button><button id="wdCancelar" type="button" hidden>Cancelar edição</button>
   </div>
   <div id="wdMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th>Nome</th><th>WhatsApp</th><th>Sem sinal</th><th>Falhas</th><th>Ativo</th><th></th></tr></thead><tbody id="wdLista"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Nome</th><th>WhatsApp</th><th>Sem sinal</th><th>Falhas</th><th>Ativo</th><th></th></tr></thead><tbody id="wdLista"></tbody></table></div>
   <h2 style="margin-top:12px"><span>Últimos envios</span></h2>
-  <div class="scroll"><table><thead><tr><th>Quando</th><th>Destinatário</th><th>Tipo</th><th>Status</th><th>Detalhe</th></tr></thead><tbody id="wdEnvios"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Quando</th><th>Destinatário</th><th>Tipo</th><th>Status</th><th>Detalhe</th></tr></thead><tbody id="wdEnvios"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="usuarios" hidden>
@@ -535,7 +611,7 @@ table.rt td[colspan]::before{content:none}}
   </div>
   <div id="usMsg" class="msg"></div>
   <div class="mut" style="padding:0 16px 8px">O que cada usuário pode fazer vem do <b>perfil</b> dele (veja e edite os perfis logo abaixo). O perfil <b>admin</b> é fixo e tem todas as permissões.</div>
-  <div class="scroll"><table><thead><tr><th>Login</th><th>Nome</th><th>Papel</th><th>Senha</th><th>Status</th><th></th></tr></thead><tbody id="usuarios"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Login</th><th>Nome</th><th>Papel</th><th>Senha</th><th>Status</th><th></th></tr></thead><tbody id="usuarios"></tbody></table></div>
 </section>
 <section>
   <h2><span>Perfis de acesso</span></h2>
@@ -557,7 +633,7 @@ table.rt td[colspan]::before{content:none}}
 </section>
 <section>
   <h2><span>Leituras por hora <span class="mut">(últimos 7 dias; o resumo é mantido mesmo depois que os eventos brutos expiram)</span></span></h2>
-  <div class="scroll"><table><thead><tr><th>Hora</th><th>Leituras</th><th>Tags distintas</th></tr></thead><tbody id="horas"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Hora</th><th>Leituras</th><th>Tags distintas</th></tr></thead><tbody id="horas"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="antenas" hidden>
@@ -578,7 +654,7 @@ table.rt td[colspan]::before{content:none}}
     <button class="acc" id="anSalvar">Salvar</button><button id="anCancelar" type="button" hidden>Cancelar edição</button>
   </div>
   <div id="antenaMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th>Nome</th><th>Descrição</th><th>Modelo</th><th>Localização</th><th>Modo</th><th>Alerta</th><th>IP:porta</th><th>Status (agente)</th><th></th></tr></thead><tbody id="antenas"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Nome</th><th>Descrição</th><th>Modelo</th><th>Localização</th><th>Modo</th><th>Alerta</th><th>IP:porta</th><th>Status (agente)</th><th></th></tr></thead><tbody id="antenas"></tbody></table></div>
 </section>
 <section id="secAgentes" hidden>
   <h2><span>Agente do hotel (Windows)</span></h2>
@@ -590,7 +666,7 @@ table.rt td[colspan]::before{content:none}}
     <span class="mut">— baixe os dois primeiros na mesma pasta do PC do hotel</span></div>
   <div class="row"><input id="agNome" type="text" placeholder="nome (ex.: PC Recepção Fera)" style="width:240px"><button class="acc" id="agCriar">Gerar token</button></div>
   <div id="agMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th>Agente</th><th>Último contato</th><th>Versão</th><th>Computador</th><th></th></tr></thead><tbody id="agentes"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Agente</th><th>Último contato</th><th>Versão</th><th>Computador</th><th></th></tr></thead><tbody id="agentes"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="acomodacoes" hidden>
@@ -603,7 +679,7 @@ table.rt td[colspan]::before{content:none}}
   <div class="row" style="padding-top:0"><textarea id="acItens" rows="4" style="flex:1;min-width:260px;font:inherit;font-size:12px;background:var(--navy-light);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px" placeholder="um item por linha: tipo;qtd por UH;fluxo   (ex. Toalha rosto;2;3)"></textarea>
     <button class="acc" id="acSalvar">Salvar</button></div>
   <div id="acMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th>Acomodação</th><th>UHs</th><th>Item</th><th>Qtd/UH</th><th>Fluxo</th></tr></thead><tbody id="acomodacoes"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Acomodação</th><th>UHs</th><th>Item</th><th>Qtd/UH</th><th>Fluxo</th></tr></thead><tbody id="acomodacoes"></tbody></table></div>
 </section>
 </div>
 </main>
@@ -622,11 +698,12 @@ async function j(u,opts){
 const itemTipo=t=>t?esc(t):'<span class="mut">não cadastrada</span>';
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
-const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Dashboard',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
+const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Dashboard',monitoramento:'Monitoramento',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
   inventario:'Inventário',catalogo:'Catálogo de itens',manual:'Leitor manual',auditoria:'Auditoria de logins',acoes:'Auditoria de ações',revisao:'Revisão do inventário',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
 let view='painel';
 const LOADERS={
   painel:()=>carregarDashboard(),
+  monitoramento:()=>carregarMonitoramento(),
   leitura:async()=>{await carregarPendentes();await carregarSessoes()},
   relatorios:()=>carregarHoras(),
   transferencias:async()=>{await carregarDestinos();await carregarTransferencias()},
@@ -676,10 +753,64 @@ async function carregarDashboard(){
   $('dAlertasTb').innerHTML=d.alertas.ultimos.map(a=>`<tr><td>${ha(a.quando)}</td><td data-l="Tipo">${esc(ROTULO_ALERTA[a.tipo]||a.tipo||'–')}</td><td data-l="Envio">${a.status==='enviado'?pill('ok')+' enviado':pill('alerta')+' '+esc(a.status)}</td></tr>`).join('')||'<tr><td colspan=3>nenhum alerta enviado ainda</td></tr>';
   const max=Math.max(1,...d.inventario.por_estado.map(e=>e.qtd));
   $('dEstados').innerHTML=d.inventario.por_estado.map(e=>`<div class="barra"><span class="rot" title="${esc(e.estado)}">${esc(e.estado)}</span><span class="tr"><i class="${e.comportamento==='ativo'?'':'inat'}" style="width:${Math.round(e.qtd*100/max)}%"></i></span><b>${e.qtd}</b></div>`).join('')||'<p class="mut" style="padding:8px 16px">nenhum item</p>';
+  $('dParadosInfo').textContent=`enviadas há mais de ${d.inventario.parado_dias} dia(s) e não devolvidas`;
+  $('dParadosTb').innerHTML=d.inventario.parados.map(p=>`<tr><td>${esc(p.tipo)}</td><td data-l="Peças">${p.qtd}</td><td data-l="Mais antiga enviada">${ha(p.desde)}</td></tr>`).join('')||'<tr><td colspan=3>nenhuma peça parada</td></tr>';
+  $('dPerdasTb').innerHTML=d.inventario.nao_encontrados_30d.map(p=>`<tr><td>${esc(p.tipo)}</td><td data-l="Não encontrados">${p.qtd}</td></tr>`).join('')||'<tr><td colspan=2>nenhuma falta registrada</td></tr>';
   $('dCabineInfo').textContent=`${d.cabine.transferencias_hoje} hoje · ${d.cabine.pecas_aguardando} peça(s) aguardando`;
   $('dTransfTb').innerHTML=d.cabine.ultimas.map(t=>`<tr><td>${dt(t.criado_em)}</td><td data-l="Destino">${esc(t.destino)}</td><td data-l="Peças">${t.quantidade}</td></tr>`).join('')||'<tr><td colspan=3>nenhuma transferência</td></tr>';
   const c=d.conferencia;
   $('dConf').textContent=c?`Última conferência #${c.id}: ${c.status==='andamento'?'em andamento':'finalizada'} — ${c.conferidos??0} de ${c.esperados} item(ns) conferidos (${ha(c.iniciada_em)})`:'Nenhuma conferência de estoque realizada.';
+}
+
+const dur=sg=>sg==null?'–':sg<90?Math.round(sg)+' s':sg<5400?Math.round(sg/60)+' min':sg<172800?(sg/3600).toFixed(1).replace('.0','')+' h':Math.round(sg/86400)+' d';
+const tam=b=>b==null?'–':b<1048576?Math.round(b/1024)+' KB':b<1073741824?(b/1048576).toFixed(1)+' MB':(b/1073741824).toFixed(2)+' GB';
+const pctCls=v=>v==null?'cinza':v>=99?'ok':v>=95?'cinza':'alerta';
+const pctPill=v=>`<span class="pill ${pctCls(v)}">${v==null?'sem dados':v.toFixed(2).replace(/\.?0+$/,'')+'%'}</span>`;
+function spark(v){if(!v||v.length<2)return '';const w=90,h=22,mx=Math.max(...v),mn=Math.min(...v),r=Math.max(1,mx-mn);
+  const pts=v.map((y,i)=>(i*w/(v.length-1)).toFixed(1)+','+(h-2-(y-mn)*(h-4)/r).toFixed(1)).join(' ');
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true" style="vertical-align:middle"><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>`}
+const quedasTxt=q=>q.length?q.map(x=>`${dt(x.inicio)} · ${x.fim?dur(x.duracao_s):'<b>em andamento</b> ('+dur(x.duracao_s)+')'}`).join('<br>'):'<span class="mut">nenhuma</span>';
+let _mon=0;
+async function carregarMonitoramento(){
+  if(Date.now()-_mon<30000)return; // a tela atualiza a cada 30 s (o tick geral roda a cada 3 s)
+  _mon=Date.now();
+  let m;try{m=await j('/api/monitoramento')}catch(e){_mon=0;throw e}
+  const on=m.antenas.filter(a=>a.online).length,ag=m.agentes.filter(a=>a.online).length;
+  const b=$('mBanner');b.className='banner '+(m.problemas.length?'bad':'ok');
+  b.textContent=m.problemas.length?`⚠ ${m.problemas.length} problema(s): ${m.problemas.join(', ')}`:`✓ Tudo certo: ${on} de ${m.antenas.length} antenas e ${ag} de ${m.agentes.length} agente(s) online`;
+  const set=(id,v,cls)=>{const e=$(id);e.textContent=v;e.className=cls||''};
+  set('mAntenas',`${on}/${m.antenas.length}`,on<m.antenas.length?'ruim':'bom');
+  set('mAgentes',m.agentes.length?`${ag}/${m.agentes.length}`:'–',ag<m.agentes.length?'ruim':'bom');
+  const r=m.radio;set('mRadio',r.sem_sinal_s==null?'sem sinal':dur(r.sem_sinal_s)+' atrás',r.sem_sinal_s==null||r.sem_sinal_s>r.limite_s?'ruim':'bom');
+  set('mEv1h',r.eventos_1h);set('mBanco',m.sistema.banco.ms+' ms',m.sistema.banco.ms>500?'ruim':'');set('mUp',dur(m.sistema.uptime_s));
+  $('mAntInfo').textContent='uptime = minutos em que algum agente viu a antena online';
+  $('mAntTb').innerHTML=m.antenas.map(a=>`<tr><td><b>${esc(a.nome)}</b>${a.evasao?' <span class="pill alerta">evasão</span>':''}<br><span class="mut">${esc(a.descricao||'')}${a.ip?' · '+esc(a.ip):''}</span></td>
+    <td data-l="Status">${pillStatus(a.online)}</td><td data-l="Uptime 24h">${pctPill(a.uptime_24h)}</td>
+    <td data-l="Uptime 7d">${pctPill(a.uptime_7d)}${a.cobertura_7d!=null&&a.cobertura_7d<90?`<br><span class="mut">cobertura ${a.cobertura_7d}%</span>`:''}</td>
+    <td data-l="Latência">${a.latencia_media!=null?`${spark(a.latencia_serie)}<br><span class="mut">média ${a.latencia_media} ms · máx ${a.latencia_max} ms</span>`:'–'}</td>
+    <td data-l="Últimas quedas">${quedasTxt(a.quedas)}</td></tr>`).join('')||'<tr><td colspan=6>nenhuma antena cadastrada</td></tr>';
+  $('mAgTb').innerHTML=m.agentes.map(a=>`<tr><td><b>${esc(a.nome)}</b><br><span class="mut">${esc([a.host,a.versao].filter(Boolean).join(' · '))}</span></td>
+    <td data-l="Status">${pillStatus(a.online)}<br><span class="mut">${ha(a.visto_em)}</span></td><td data-l="Fora 24h">${dur(a.fora_24h_s)}</td><td data-l="Fora 7d">${dur(a.fora_7d_s)}</td>
+    <td data-l="Últimas quedas">${quedasTxt(a.quedas)}</td></tr>`).join('')||'<tr><td colspan=5>nenhum agente cadastrado</td></tr>';
+  const linha=(k,v)=>`<tr><td>${k}</td><td data-l="${k}">${v}</td></tr>`;
+  $('mRadioTb').innerHTML=[linha('Último sinal',r.ultimo_sinal?dt(r.ultimo_sinal):'nunca'),linha('Limite de "sem sinal"',r.limite_s+' s'),
+    linha('Gravando agora',r.gravando?'sim'+(r.armado_ate?' (até '+new Date(r.armado_ate*1000).toLocaleTimeString('pt-BR')+')':''):'não (só grava em leitura solicitada)'),
+    linha('Falhas no /ingest (10 min)',r.falhas_ingest_10min),linha('Alertas ativos agora',r.alertas_ativos)].join('');
+  const c=m.comandos,st=c.por_status_24h;
+  $('mCmdTb').innerHTML=[linha('Pendentes / enviados',(st.pendente||0)+' / '+(st.enviado||0)),linha('Concluídos com sucesso',st.ok||0),linha('Com erro',st.erro||0),linha('Expirados',st.expirado||0),
+    linha('Comando aberto mais antigo',c.mais_antigo_aberto_s==null?'nenhum':dur(c.mais_antigo_aberto_s))].join('')+
+    c.erros_recentes.map(e=>`<tr><td>${dt(e.criado_em)}</td><td data-l="Falha">${esc(e.antena)} · ${esc(e.metodo)} ${esc(e.caminho)} <span class="pill alerta">${esc(e.status)}${e.http_status?' '+e.http_status:''}</span></td></tr>`).join('');
+  $('mAlDiaTb').innerHTML=m.alertas.por_dia.map(x=>`<tr><td>${new Date(x.dia*1000).toLocaleDateString('pt-BR')}</td><td data-l="Enviados">${x.enviados}</td><td data-l="Falhas">${x.falhas?'<b class="ruim">'+x.falhas+'</b>':0}</td></tr>`).join('')||'<tr><td colspan=3>nenhum alerta nos últimos 7 dias</td></tr>';
+  $('mAlFalham').textContent=m.alertas.falham_7d.length?'Destinatários com falha de envio (7 dias): '+m.alertas.falham_7d.map(x=>`${x.nome} (${x.n})`).join(', '):'';
+  $('mBancoInfo').textContent='total '+tam(m.sistema.banco.tamanho);
+  $('mTabTb').innerHTML=m.sistema.banco.tabelas.map(t=>`<tr><td>${esc(t.nome)}</td><td data-l="Tamanho">${tam(t.tamanho)}</td><td data-l="Linhas">${t.linhas<0?'–':t.linhas}</td></tr>`).join('');
+  $('mSeg').hidden=!m.seguranca;
+  if(m.seguranca){const sg=m.seguranca;
+    $('mSegTb').innerHTML=[linha('Logins com sucesso',sg.logins_ok_24h),linha('Logins com falha',sg.logins_falha_24h?'<b class="ruim">'+sg.logins_falha_24h+'</b>':0),linha('Logins bloqueados',sg.logins_bloqueados_24h?'<b class="ruim">'+sg.logins_bloqueados_24h+'</b>':0),
+      linha('Ações negadas (403)',sg.acoes_negadas_24h),linha('IPs com mais falhas',sg.ips_com_falha.map(x=>`${esc(x.ip)} (${x.n})`).join(', ')||'nenhum')].join('');
+    $('mAtivTb').innerHTML=m.atividade.map(x=>`<tr><td>${esc(x.usuario)}</td><td data-l="Ações">${x.acoes}</td><td data-l="Última">${ha(x.ultima)}</td></tr>`).join('')||'<tr><td colspan=3>nenhuma ação hoje</td></tr>';
+    $('mMudTb').innerHTML=m.mudancas.map(x=>`<tr><td>${dt(x.criado_em)}</td><td data-l="Usuário">${esc(x.usuario||'–')}</td><td data-l="Ação">${esc(x.acao)}</td></tr>`).join('')||'<tr><td colspan=3>nenhuma mudança registrada</td></tr>';
+  }
 }
 async function tick(){
   try{
@@ -1047,9 +1178,26 @@ $('confFinalizar').onclick=async()=>{
   if(!confId||!confirm('Finalizar a conferência? Os itens não lidos até agora ficam como não conferidos.'))return;
   try{await j('/api/conferencias/'+confId+'/finalizar',{method:'POST'});await carregarConferencias()}catch(e){alert(e.message)}
 };
+function rotulaTabelas(){
+  document.querySelectorAll('table.rt').forEach(t=>{
+    const ths=[...t.querySelectorAll('thead th')].map(h=>h.textContent.trim());
+    t.querySelectorAll('tbody tr:not([data-rt])').forEach(tr=>{
+      tr.dataset.rt='1';
+      [...tr.children].forEach((td,i)=>{if(td.tagName==='TD'&&!td.hasAttribute('data-l')&&!td.hasAttribute('colspan'))td.setAttribute('data-l',ths[i]||'')});
+    });
+  });
+}
+new MutationObserver(rotulaTabelas).observe(document.body,{childList:true,subtree:true});
+rotulaTabelas();
+$('capturar').onclick=async()=>{
+  const m=$('capMsg'),seg=Number($('capSeg').value);
+  try{await j('/api/leitura/armar?segundos='+seg,{method:'POST'});m.className='msg ok';m.textContent=`capturando por ${seg>=60?seg/60+' min':seg+' s'}: as leituras aparecem abaixo`;
+    const ate=Date.now()+seg*1000;clearInterval(window._capT);window._capT=setInterval(()=>{if(Date.now()>=ate){clearInterval(window._capT);m.textContent='captura encerrada'}},1000)}
+  catch(e){m.className='msg bad';m.textContent=e.message}
+};
 let eu=null;
 const tem=p=>!eu||(eu.permissoes||[]).includes(p);
-const NAV_PERM={painel:'dashboard',usuarios:'usuarios',alertaswa:'alertas_whatsapp',auditoria:'auditoria',acoes:'auditoria'};
+const NAV_PERM={painel:'dashboard',monitoramento:'monitoramento',usuarios:'usuarios',alertaswa:'alertas_whatsapp',auditoria:'auditoria',acoes:'auditoria'};
 const podeVer=h=>tem(NAV_PERM[h]||'consultar');
 function aplicaPermissoes(){
   document.querySelectorAll('[data-nav]').forEach(a=>a.hidden=!podeVer(a.dataset.nav));

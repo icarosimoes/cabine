@@ -50,11 +50,13 @@ PERMISSOES = {
     "usuarios": "Gerenciar usuários e perfis",
     "auditoria": "Ver a auditoria",
     "sistema": "Agentes do hotel, comandos ao rádio e download do agente",
+    "monitoramento": "Ver a tela Monitoramento (saúde do sistema, antenas, agentes, rádio, alertas); segurança e atividade de usuários exigem também 'auditoria', IPs exigem 'sistema'",
 }
 PERFIS_PADRAO = {  # criados só na primeira vez; depois podem ser editados ou excluídos (menos o admin)
     "operador": ("Opera a cabine e edita o catálogo", ["dashboard", "consultar", "exportar", "operar_cabine", "excluir_lotes", "catalogo_editar", "conferencia"]),
     "leitura": ("Só consulta e exporta", ["dashboard", "consultar", "exportar"]),
     "painel": ("Só o Dashboard", ["dashboard"]),
+    "monitor": ("Só a tela Monitoramento", ["monitoramento"]),
 }
 
 ITENS_VIEW_SQL = """
@@ -189,6 +191,10 @@ def init_db():
         if not con.execute("SELECT 1 FROM perfis LIMIT 1").fetchone():  # só semeia na primeira vez (senão um perfil excluído voltaria)
             for nome, (desc, perms) in PERFIS_PADRAO.items():
                 con.execute("INSERT INTO perfis(nome,descricao,permissoes,criado_em) VALUES(%s,%s,%s,%s)", (nome, desc, json.dumps(perms), time.time()))
+        if not con.execute("SELECT 1 FROM config WHERE chave='perfil_monitor_semeado'").fetchone():  # banco já existente: cria o perfil novo uma única vez
+            con.execute("INSERT INTO perfis(nome,descricao,permissoes,criado_em) VALUES('monitor',%s,%s,%s) ON CONFLICT(nome) DO NOTHING",
+                        (PERFIS_PADRAO["monitor"][0], json.dumps(PERFIS_PADRAO["monitor"][1]), time.time()))
+            con.execute("INSERT INTO config(chave,valor) VALUES('perfil_monitor_semeado','1') ON CONFLICT(chave) DO NOTHING")
         con.execute("""INSERT INTO perfis(nome,descricao,permissoes,criado_em) VALUES('admin','Acesso total (fixo)',%s,%s)
                        ON CONFLICT(nome) DO UPDATE SET permissoes=excluded.permissoes""", (json.dumps(list(PERMISSOES)), time.time()))  # admin sempre com todas, inclusive as novas
         con.execute("""
@@ -256,6 +262,12 @@ def init_db():
           antena_id INTEGER PRIMARY KEY REFERENCES antenas(id) ON DELETE CASCADE,
           online BOOLEAN NOT NULL, latencia_ms INTEGER, detalhe TEXT, extra TEXT,
           verificado_em DOUBLE PRECISION NOT NULL, agente_id INTEGER REFERENCES agentes(id) ON DELETE SET NULL)""")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS monitor_checagens(
+          tipo TEXT NOT NULL, ref_id INTEGER NOT NULL, quando DOUBLE PRECISION NOT NULL,
+          online BOOLEAN NOT NULL, latencia_ms INTEGER)""")  # histórico das checagens (antena: o que o agente mediu; agente: cada contato). Retenção 30 dias
+        con.execute("CREATE INDEX IF NOT EXISTS ix_monitor_chk ON monitor_checagens(tipo, ref_id, quando)")
+        con.execute("DELETE FROM monitor_checagens WHERE quando < %s", (time.time() - 30 * 86400,))
         con.execute("""
         CREATE TABLE IF NOT EXISTS comandos(
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -427,6 +439,7 @@ def exige(perm: str):
 P_DASH, P_CONSULTAR, P_OPERAR, P_EXCLUIR = exige("dashboard"), exige("consultar"), exige("operar_cabine"), exige("excluir_lotes")
 P_CATALOGO, P_CONF, P_CADASTROS, P_EXPORTAR = exige("catalogo_editar"), exige("conferencia"), exige("cadastros"), exige("exportar")
 P_WHATSAPP, P_USUARIOS, P_AUDITORIA, P_SISTEMA = exige("alertas_whatsapp"), exige("usuarios"), exige("auditoria"), exige("sistema")
+P_MONITOR = exige("monitoramento")
 
 
 def first(d: dict, *keys):
@@ -797,6 +810,7 @@ async def background():
             def purge():
                 with closing(db()) as con:
                     con.execute("DELETE FROM events WHERE received_at<%s", (cutoff,))
+                    con.execute("DELETE FROM monitor_checagens WHERE quando<%s", (time.time() - 30 * 86400,))
                     con.commit()
             await asyncio.to_thread(purge)
 
@@ -1060,9 +1074,13 @@ def _extra_publico(extra) -> dict:
     return out
 
 
-@app.get("/api/dashboard", dependencies=[Depends(P_DASH)])
-def dashboard():
-    """Visão geral para o Painel: monitoramento das antenas/agentes, alertas e números da operação."""
+PARADO_DIAS = int(os.environ.get("PARADO_DIAS", "7"))  # peça na lavanderia há mais que isso aparece como "parada"
+
+
+@app.get("/api/dashboard")
+def dashboard(user: dict = Depends(P_DASH)):
+    """Visão geral para o Painel: monitoramento das antenas/agentes, alertas e números da operação.
+    Quem não tem a permissão `sistema` (ex.: perfil painel dado a terceiros) não recebe IP, host nem detalhe técnico."""
     now = time.time()
     dia = now - 86400
     hoje = now - (now + TZ_OFFSET) % 86400  # 00:00 local de hoje
@@ -1088,6 +1106,22 @@ def dashboard():
         conf = con.execute("""SELECT id, status, esperados, conferidos, iniciada_em, finalizada_em FROM conferencias
                               ORDER BY iniciada_em DESC LIMIT 1""").fetchone()
         total_itens = q1("SELECT COUNT(*) FROM itens")
+        # peças cuja última transferência foi para a lavanderia há mais de PARADO_DIAS e não voltaram (estado ativo)
+        parados = con.execute("""
+            SELECT u.tipo, COUNT(*) qtd, MIN(u.quando) desde FROM (
+              SELECT i.tipo, (SELECT t.criado_em FROM lote_itens li JOIN transferencias t ON t.lote_id=li.lote_id
+                              WHERE li.epc=i.epc ORDER BY t.criado_em DESC LIMIT 1) quando,
+                     (SELECT d.tipo FROM lote_itens li JOIN transferencias t ON t.lote_id=li.lote_id JOIN destinos d ON d.id=t.destino_id
+                              WHERE li.epc=i.epc ORDER BY t.criado_em DESC LIMIT 1) dest_tipo
+              FROM itens i JOIN estados_inventario e ON e.id=i.estado_id WHERE e.comportamento='ativo') u
+            WHERE u.dest_tipo='lavanderia' AND u.quando < %s GROUP BY u.tipo ORDER BY qtd DESC, u.tipo LIMIT 10""",
+            (now - PARADO_DIAS * 86400,)).fetchall()
+        # tipos mais "não encontrados" nas conferências finalizadas dos últimos 30 dias
+        perdas = con.execute("""
+            SELECT ci.tipo, COUNT(*) qtd FROM conferencia_itens ci JOIN conferencias c ON c.id=ci.conferencia_id
+            WHERE c.status='finalizada' AND c.finalizada_em>%s AND ci.conferido_em IS NULL
+            GROUP BY ci.tipo ORDER BY qtd DESC, ci.tipo LIMIT 5""", (now - 30 * 86400,)).fetchall()
+    tecnico = "sistema" in user["perms"]
     lista = []
     for a in antenas:
         visto = a["verificado_em"]
@@ -1095,7 +1129,12 @@ def dashboard():
         lista.append({**{k: a[k] for k in ("id", "nome", "descricao", "modelo", "ip", "evasao", "alerta", "ambiente", "latencia_ms", "detalhe", "verificado_em", "agente")},
                       "online": bool(a["online"]) if fresco else None,  # None = sem informação recente do agente
                       "extra": _extra_publico(a["extra"])})
+        if not tecnico:
+            lista[-1].update(ip=None, detalhe=None, agente=None, extra={})
     ag = [{**x, "online": x["visto_em"] is not None and now - x["visto_em"] < AGENTE_SEM_CONTATO_SEG} for x in agentes]
+    if not tecnico:
+        for x in ag:
+            x["host"] = x["versao"] = None
     env24 = [e for e in envios if e["quando"] > dia]
     problemas = [a["nome"] for a in lista if a["online"] is False] + [x["nome"] for x in ag if not x["online"]]
     return {
@@ -1110,8 +1149,136 @@ def dashboard():
         "cabine": {"lotes_aguardando": aguard["n"], "pecas_aguardando": aguard["pecas"],
                    "transferencias_hoje": transf["n"], "pecas_hoje": transf["pecas"], "ultimas": ultimas},
         "evasao": {"saidas_24h": saida["total"], "nao_documentadas_24h": saida["nao"]},
-        "inventario": {"total": total_itens, "por_estado": estados},
+        "inventario": {"total": total_itens, "por_estado": estados, "parados": parados, "parado_dias": PARADO_DIAS,
+                       "nao_encontrados_30d": perdas},
         "conferencia": conf,
+    }
+
+
+def _mescla(intervalos, folga):
+    """Junta intervalos [ini, fim] separados por no máximo `folga` segundos."""
+    out = []
+    for ini, fim in sorted(intervalos):
+        if out and ini - out[-1][1] <= folga:
+            out[-1][1] = max(out[-1][1], fim)
+        else:
+            out.append([ini, fim])
+    return out
+
+
+def _quedas_json(intervalos, now, limite=5):
+    return [{"inicio": a, "fim": b if b < now - 90 else None, "duracao_s": round(b - a)} for a, b in reversed(intervalos[-limite:])]
+
+
+@app.get("/api/monitoramento")
+def monitoramento(user: dict = Depends(P_MONITOR)):
+    """Tela de monitoramento: saúde do sistema, antenas (disponibilidade e latência), agentes, rádio, comandos e alertas.
+    Segurança/atividade de usuários só com a permissão `auditoria`; IP e host só com `sistema`."""
+    now = time.time()
+    perms = user["perms"]
+    d7, d1 = now - 7 * 86400, now - 86400
+    with closing(db()) as con:
+        t0 = time.perf_counter()
+        con.execute("SELECT 1").fetchone()
+        db_ms = round((time.perf_counter() - t0) * 1000, 1)
+        banco = {"ms": db_ms, "tamanho": list(con.execute("SELECT pg_database_size(current_database()) t").fetchone().values())[0],
+                 "tabelas": [{"nome": r["relname"], "tamanho": r["tam"], "linhas": r["linhas"]} for r in con.execute(
+                     """SELECT c.relname, pg_total_relation_size(c.oid) tam, COALESCE(st.n_live_tup, 0) linhas FROM pg_class c
+                        JOIN pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_stat_user_tables st ON st.relid=c.oid
+                        WHERE c.relkind='r' AND n.nspname='public' ORDER BY tam DESC LIMIT 6""").fetchall()]}
+        # antenas: disponibilidade por minuto (online se algum agente viu online naquele minuto)
+        antenas = con.execute("""SELECT a.id, a.nome, a.descricao, a.ip, a.evasao, s.online, s.latencia_ms, s.verificado_em
+                                 FROM antenas a LEFT JOIN antena_status s ON s.antena_id=a.id ORDER BY a.evasao, a.nome""").fetchall()
+        disp = {r["ref_id"]: r for r in con.execute("""
+            SELECT ref_id, COUNT(*) total, COUNT(*) FILTER (WHERE ok) ok,
+                   COUNT(*) FILTER (WHERE quando_min>=%s) total1, COUNT(*) FILTER (WHERE ok AND quando_min>=%s) ok1, MIN(quando_min) primeiro
+            FROM (SELECT ref_id, FLOOR(quando/60)*60 quando_min, BOOL_OR(online) ok FROM monitor_checagens
+                  WHERE tipo='antena' AND quando>=%s GROUP BY ref_id, FLOOR(quando/60)) m GROUP BY ref_id""", (d1, d1, d7)).fetchall()}
+        off_min = {}
+        for r in con.execute("""SELECT ref_id, FLOOR(quando/60)*60 m FROM monitor_checagens WHERE tipo='antena' AND quando>=%s
+                                GROUP BY ref_id, FLOOR(quando/60) HAVING NOT BOOL_OR(online) ORDER BY 1,2""", (d7,)).fetchall():
+            off_min.setdefault(r["ref_id"], []).append((r["m"], r["m"] + 60))
+        lat = {}
+        for r in con.execute("""SELECT ref_id, FLOOR(quando/1800)*1800 b, AVG(latencia_ms) l FROM monitor_checagens
+                                WHERE tipo='antena' AND online AND latencia_ms IS NOT NULL AND quando>=%s GROUP BY 1,2 ORDER BY 1,2""", (d1,)).fetchall():
+            lat.setdefault(r["ref_id"], []).append(round(float(r["l"])))
+        # agentes: contatos; queda = intervalo sem contato maior que AGENTE_SEM_CONTATO_SEG
+        agentes = con.execute("SELECT id, nome, visto_em, versao, host FROM agentes ORDER BY nome").fetchall()
+        gaps = {}
+        for r in con.execute("""SELECT ref_id, ini, quando FROM (SELECT ref_id, quando, LAG(quando) OVER (PARTITION BY ref_id ORDER BY quando) ini
+                                FROM monitor_checagens WHERE tipo='agente' AND quando>=%s) g WHERE quando-ini>%s ORDER BY ref_id, ini""",
+                              (d7, AGENTE_SEM_CONTATO_SEG)).fetchall():
+            gaps.setdefault(r["ref_id"], []).append((r["ini"], r["quando"]))
+        cmd = {r["status"]: r for r in con.execute("""SELECT status, COUNT(*) n, MIN(criado_em) mais_antigo FROM comandos
+                                                      WHERE criado_em>=%s GROUP BY status""", (d1,)).fetchall()}
+        cmd_erros = con.execute("""SELECT c.criado_em, a.nome antena, c.metodo, c.caminho, c.status, c.http_status FROM comandos c
+                                   JOIN antenas a ON a.id=c.antena_id WHERE c.status IN ('erro','expirado') AND c.criado_em>=%s
+                                   ORDER BY c.criado_em DESC LIMIT 5""", (d1,)).fetchall()
+        ultimo_ev = list(con.execute("SELECT MAX(received_at) m FROM events").fetchone().values())[0]
+        ev_1h = list(con.execute("SELECT COUNT(*) n FROM events WHERE received_at>%s", (now - 3600,)).fetchone().values())[0]
+        envios = con.execute("""SELECT FLOOR((quando+%s)/86400) dia, tipo, status, COUNT(*) n FROM alerta_envios WHERE quando>=%s
+                                GROUP BY 1,2,3 ORDER BY 1""", (TZ_OFFSET, d7)).fetchall()
+        falham = con.execute("""SELECT nome, COUNT(*) n, MAX(quando) ultimo FROM alerta_envios WHERE status<>'enviado' AND quando>=%s
+                                GROUP BY nome ORDER BY n DESC LIMIT 5""", (d7,)).fetchall()
+        seg = ativ = mudancas = None
+        if "auditoria" in perms:
+            lg = {r["resultado"]: r["n"] for r in con.execute("SELECT resultado, COUNT(*) n FROM auditoria_login WHERE criado_em>=%s GROUP BY resultado", (d1,)).fetchall()}
+            seg = {"logins_ok_24h": lg.get("ok", 0), "logins_falha_24h": lg.get("falha", 0), "logins_bloqueados_24h": lg.get("bloqueado", 0),
+                   "ips_com_falha": con.execute("""SELECT ip, COUNT(*) n FROM auditoria_login WHERE criado_em>=%s AND resultado<>'ok' AND ip IS NOT NULL
+                                                   GROUP BY ip ORDER BY n DESC LIMIT 5""", (d1,)).fetchall(),
+                   "acoes_negadas_24h": list(con.execute("SELECT COUNT(*) n FROM auditoria_acoes WHERE criado_em>=%s AND status=403", (d1,)).fetchone().values())[0]}
+            hoje = now - (now + TZ_OFFSET) % 86400
+            ativ = con.execute("""SELECT usuario, COUNT(*) acoes, MAX(criado_em) ultima FROM auditoria_acoes WHERE criado_em>=%s AND usuario IS NOT NULL
+                                  GROUP BY usuario ORDER BY acoes DESC LIMIT 10""", (hoje,)).fetchall()
+            mudancas = con.execute("""SELECT criado_em, usuario, acao, status FROM auditoria_acoes
+                                      WHERE caminho ~ '^/api/(usuarios|perfis|config|alertas|antenas|agentes|destinos|estados)' AND status<400
+                                      ORDER BY criado_em DESC LIMIT 8""").fetchall()
+    tecnico = "sistema" in perms
+    lista = []
+    for a in antenas:
+        dd = disp.get(a["id"])
+        fresco = a["verificado_em"] is not None and now - a["verificado_em"] < AGENTE_SEM_CONTATO_SEG
+        periodo7 = max(60, min(7 * 86400, now - dd["primeiro"])) if dd else None
+        lista.append({"id": a["id"], "nome": a["nome"], "descricao": a["descricao"], "evasao": a["evasao"],
+                      "ip": a["ip"] if tecnico else None,
+                      "online": bool(a["online"]) if fresco else None, "latencia_ms": a["latencia_ms"] if fresco and a["online"] else None,
+                      "uptime_24h": round(100 * dd["ok1"] / dd["total1"], 2) if dd and dd["total1"] else None,
+                      "uptime_7d": round(100 * dd["ok"] / dd["total"], 2) if dd else None,
+                      "cobertura_7d": min(100, round(100 * dd["total"] * 60 / periodo7, 1)) if dd else None,
+                      "latencia_serie": lat.get(a["id"], [])[-48:],
+                      "latencia_media": round(sum(lat[a["id"]]) / len(lat[a["id"]])) if lat.get(a["id"]) else None,
+                      "latencia_max": max(lat[a["id"]]) if lat.get(a["id"]) else None,
+                      "quedas": _quedas_json(_mescla(off_min.get(a["id"], []), 120), now)})
+    ags = []
+    for g in agentes:
+        q = gaps.get(g["id"], [])
+        if g["visto_em"] and now - g["visto_em"] > AGENTE_SEM_CONTATO_SEG:
+            q = q + [(g["visto_em"], now)]  # queda em andamento
+        fora = lambda desde: round(sum(max(0, b - max(a, desde)) for a, b in q if b > desde))
+        ags.append({"nome": g["nome"], "online": g["visto_em"] is not None and now - g["visto_em"] < AGENTE_SEM_CONTATO_SEG,
+                    "visto_em": g["visto_em"], "versao": g["versao"] if tecnico else None, "host": g["host"] if tecnico else None,
+                    "fora_24h_s": fora(d1), "fora_7d_s": fora(d7), "quedas": _quedas_json(q, now)})
+    por_dia = {}
+    for e in envios:
+        x = por_dia.setdefault(int(e["dia"]), {"dia": int(e["dia"]) * 86400 - TZ_OFFSET, "enviados": 0, "falhas": 0})
+        x["enviados" if e["status"] == "enviado" else "falhas"] += e["n"]
+    ult = state["ultimo_sinal"]
+    sinal = max(x for x in (ultimo_ev, ult, 0) if x is not None) or None
+    problemas = [a["nome"] for a in lista if a["online"] is False] + [g["nome"] for g in ags if not g["online"]]
+    return {
+        "now": now,
+        "sistema": {"iniciado_em": INICIO, "uptime_s": round(now - INICIO), "banco": banco},
+        "radio": {"ultimo_sinal": sinal, "sem_sinal_s": round(now - sinal) if sinal else None, "limite_s": int(cfg()["sem_sinal_seg"]),
+                  "gravando": gravando(), "armado_ate": state["armado_ate"] if state["armado_ate"] > now else None,
+                  "eventos_1h": ev_1h, "falhas_ingest_10min": len([t for t in state["falhas_ingest"] if now - t < 600]),
+                  "alertas_ativos": len(state["alertas"])},
+        "antenas": lista, "agentes": ags,
+        "comandos": {"por_status_24h": {k: v["n"] for k, v in cmd.items()},
+                     "mais_antigo_aberto_s": round(now - min(v["mais_antigo"] for k, v in cmd.items() if k in ("pendente", "enviado")))
+                     if any(k in cmd for k in ("pendente", "enviado")) else None, "erros_recentes": cmd_erros},
+        "alertas": {"por_dia": [por_dia[k] for k in sorted(por_dia)], "falham_7d": falham},
+        "seguranca": seg, "atividade": ativ, "mudancas": mudancas,
+        "problemas": problemas,
     }
 
 
@@ -1838,6 +2005,26 @@ class StatusIn(BaseModel):
     antenas: list[StatusAntenaIn] = []
 
 
+_ult_chk: dict = {}  # (tipo, ref, agente) -> (quando, online): limita a gravação a 1 por minuto, ou na hora em que o estado muda
+
+
+def _registra_checagens(con, now, agente_id, antenas):
+    linhas = []
+    for a in antenas:
+        k = ("antena", a.id, agente_id)
+        ult = _ult_chk.get(k)
+        if ult is None or ult[1] != a.online or now - ult[0] >= 60:
+            _ult_chk[k] = (now, a.online)
+            linhas.append(("antena", a.id, now, a.online, a.latencia_ms))
+    k = ("agente", agente_id, agente_id)
+    if k not in _ult_chk or now - _ult_chk[k][0] >= 30:
+        _ult_chk[k] = (now, True)
+        linhas.append(("agente", agente_id, now, True, None))
+    if linhas:
+        with con.cursor() as cur:
+            cur.executemany("INSERT INTO monitor_checagens(tipo,ref_id,quando,online,latencia_ms) VALUES(%s,%s,%s,%s,%s)", linhas)
+
+
 @app.post("/api/agente/status")
 def agente_status(b: StatusIn, ag: dict = Depends(agente_auth)):
     """Recebe o status das antenas e devolve os comandos pendentes (marcados como enviados)."""
@@ -1854,6 +2041,7 @@ def agente_status(b: StatusIn, ag: dict = Depends(agente_auth)):
                               OR antena_status.agente_id = EXCLUDED.agente_id OR antena_status.verificado_em < %s""",
                         (a.online, a.latencia_ms, (a.detalhe or "")[:300], json.dumps(a.extra) if a.extra else None, now, ag["id"], a.id,
                          now - AGENTE_SEM_CONTATO_SEG))
+        _registra_checagens(con, now, ag["id"], b.antenas)
         con.execute("UPDATE comandos SET status='expirado', concluido_em=%s WHERE status IN ('pendente','enviado') AND criado_em<%s",
                     (now, now - 120))
         cmds = con.execute("""UPDATE comandos SET status='enviado', enviado_em=%s WHERE status='pendente'
