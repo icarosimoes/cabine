@@ -5,13 +5,22 @@
 - Item -> `tipo`; RfidTag -> `epc` (hex maiúsculo). Só linha sem EPC é ignorada; EPC fora do padrão hex é importado e listado; sem Item vira 'Sem tipo'.
 - 'Descarte Inventário' entra no estado 'Descartado'; os demais no estado padrão ('Em uso').
 - Localização NÃO é importada: no Cabine ela é derivada de transferências reais, não é campo editável.
-- Data_Compra não tem campo no modelo. Idempotente: EPC já cadastrada não é alterada.
+- Data_Compra (DD/MM/AAAA ou AAAA-MM-DD) -> `data_compra`; data ilegível é ignorada. Idempotente: EPC já cadastrada não é alterada.
 """
-import csv, os, re, sys, time
+import csv, datetime, os, re, sys, time
 import psycopg
 
 linhas = list(csv.DictReader(open(os.environ["CSV_PATH"], encoding="latin-1").read().splitlines(), delimiter=";"))
 col = list(linhas[0].keys())
+def data_iso(v):
+    for f in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime((v or "").strip()[:10], f).date().isoformat()
+        except ValueError:
+            pass
+    return None
+
+
 ok, invalidos, vistos, fora_padrao = [], [], set(), []
 for r in linhas:
     epc, tipo, loc = r["RfidTag"].strip().upper(), r[col[0]].strip(), r[col[1]].strip()
@@ -23,7 +32,7 @@ for r in linhas:
     if epc in vistos:
         continue
     vistos.add(epc)
-    ok.append((epc, tipo, "Descartado" if loc.startswith("Descarte") else None))
+    ok.append((epc, tipo, "Descartado" if loc.startswith("Descarte") else None, data_iso(r.get("Data_Compra"))))
 
 now = time.time()
 with psycopg.connect(os.environ["DATABASE_URL"]) as con:
@@ -32,8 +41,8 @@ with psycopg.connect(os.environ["DATABASE_URL"]) as con:
     antes = con.execute("SELECT COUNT(*) FROM itens").fetchone()[0]
     with con.cursor() as cur:
         cur.executemany(
-            "INSERT INTO itens(epc,tipo,estado_id,criado_em,atualizado_em) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(epc) DO NOTHING",
-            [(e, t, estados.get(s, padrao), now, now) for e, t, s in ok])
+            "INSERT INTO itens(epc,tipo,estado_id,data_compra,criado_em,atualizado_em) VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(epc) DO NOTHING",
+            [(e, t, estados.get(s, padrao), dc, now, now) for e, t, s, dc in ok])
     depois = con.execute("SELECT COUNT(*) FROM itens").fetchone()[0]
 print(f"linhas csv: {len(linhas)}; validas: {len(ok)}; inseridas: {depois-antes}; itens antes={antes} depois={depois}", file=sys.stderr)
 print("ignoradas (sem EPC):", invalidos, file=sys.stderr)

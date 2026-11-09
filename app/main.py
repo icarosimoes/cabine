@@ -1,5 +1,5 @@
 """Receptor de webhook do leitor Impinj (R700 Event Reporting) + painel ao vivo."""
-import asyncio, re, threading, base64, csv, io, binascii, hashlib, hmac, json, os, secrets, time, urllib.parse, urllib.request
+import asyncio, datetime, re, threading, base64, csv, io, binascii, hashlib, hmac, json, os, secrets, time, urllib.parse, urllib.request
 from pathlib import Path
 
 import psycopg
@@ -41,7 +41,7 @@ PAPEIS = {"painel": 0, "leitura": 1, "operador": 2, "admin": 3}
 
 ITENS_VIEW_SQL = """
 SELECT i.epc, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, i.criado_em, i.atualizado_em,
-       d.nome AS localizacao, e.nome AS estado
+       i.data_compra, d.nome AS localizacao, e.nome AS estado
 FROM itens i
 JOIN estados_inventario e ON e.id = i.estado_id
 LEFT JOIN (
@@ -118,6 +118,7 @@ def init_db():
           fabricante TEXT, tamanho TEXT, composicao TEXT, cor TEXT,
           estado_id INTEGER NOT NULL REFERENCES estados_inventario(id),
           criado_em DOUBLE PRECISION NOT NULL, atualizado_em DOUBLE PRECISION NOT NULL)""")
+        con.execute("ALTER TABLE itens ADD COLUMN IF NOT EXISTS data_compra TEXT")  # AAAA-MM-DD
         con.execute("CREATE INDEX IF NOT EXISTS ix_itens_tipo ON itens(tipo)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_lote_itens_epc ON lote_itens(epc)")
 
@@ -404,6 +405,32 @@ def epc_hex(valor):
 def epc_manual(valor):
     """EPC digitado/importado (API, CSV): já é hex; só normaliza espaços e caixa. Nunca tenta base64."""
     return str(valor).strip().upper() if valor else None
+
+
+def epc_valido(epc):
+    """EPC válido para cadastro manual: hexadecimal, tamanho par, 4 a 64 caracteres."""
+    return bool(epc) and re.fullmatch(r"[0-9A-F]{4,64}", epc) is not None and len(epc) % 2 == 0
+
+
+def exige_epc_valido(epc):
+    if not epc_valido(epc):
+        raise HTTPException(400, f"EPC inválido ({epc[:40]}): use hexadecimal, tamanho par, de 4 a 64 caracteres")
+
+
+def data_iso(v):
+    """Aceita AAAA-MM-DD ou DD/MM/AAAA; devolve AAAA-MM-DD, None se vazio, 400 se inválida."""
+    v = (v or "").strip()
+    if not v:
+        return None
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v) or re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", v)
+    try:
+        if not m:
+            raise ValueError
+        a, b, c = m.groups()
+        d = datetime.date(int(a), int(b), int(c)) if "-" in v else datetime.date(int(c), int(b), int(a))
+        return d.isoformat()
+    except ValueError:
+        raise HTTPException(400, f"data de compra inválida: {v[:20]}")
 
 
 def parse_event(ev):
@@ -1318,6 +1345,7 @@ class ItemIn(BaseModel):
     tamanho: str | None = None
     composicao: str | None = None
     cor: str | None = None
+    data_compra: str | None = None
 
 
 @app.post("/api/itens", dependencies=[Depends(op_auth)])
@@ -1325,19 +1353,138 @@ def cadastrar_item(payload: ItemIn):
     epc, tipo = epc_manual(payload.epc) or "", payload.tipo.strip()
     if not epc or not tipo:
         raise HTTPException(400, "epc e tipo são obrigatórios")
+    exige_epc_valido(epc)
+    data_compra = data_iso(payload.data_compra)
     now = time.time()
     with closing(db()) as con:
         estado_padrao = con.execute("SELECT id FROM estados_inventario WHERE padrao=1 LIMIT 1").fetchone()["id"]
-        con.execute("""INSERT INTO itens(epc,tipo,fabricante,tamanho,composicao,cor,estado_id,criado_em,atualizado_em)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        con.execute("""INSERT INTO itens(epc,tipo,fabricante,tamanho,composicao,cor,data_compra,estado_id,criado_em,atualizado_em)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         ON CONFLICT(epc) DO UPDATE SET tipo=excluded.tipo, fabricante=excluded.fabricante,
                           tamanho=excluded.tamanho, composicao=excluded.composicao, cor=excluded.cor,
-                          atualizado_em=excluded.atualizado_em""",
-                    (epc, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor,
+                          data_compra=excluded.data_compra, atualizado_em=excluded.atualizado_em""",
+                    (epc, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor, data_compra,
                      estado_padrao, now, now))
         con.commit()
         row = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v WHERE v.epc=%s", (epc,)).fetchone()
     return row
+
+
+class LoteEdicaoIn(BaseModel):
+    epcs: list[str]
+    tipo: str | None = None
+    fabricante: str | None = None
+    tamanho: str | None = None
+    composicao: str | None = None
+    cor: str | None = None
+    data_compra: str | None = None
+    estado_id: int | None = None
+
+
+@app.post("/api/itens/editar-lote", dependencies=[Depends(op_auth)])
+def editar_itens_lote(payload: LoteEdicaoIn):
+    """Edita só os campos enviados (os ausentes não mudam; texto vazio limpa o campo, exceto `tipo`)."""
+    epcs = list(dict.fromkeys(epc_manual(e) for e in payload.epcs if e and e.strip()))
+    if not epcs or len(epcs) > 2000:
+        raise HTTPException(400, "informe de 1 a 2000 EPCs")
+    sets, args = [], []
+    for col in ("tipo", "fabricante", "tamanho", "composicao", "cor"):
+        if col in payload.model_fields_set:
+            v = (getattr(payload, col) or "").strip()
+            if col == "tipo" and not v:
+                raise HTTPException(400, "tipo não pode ficar vazio")
+            sets.append(f"{col}=%s"); args.append(v or None)
+    if "data_compra" in payload.model_fields_set:
+        sets.append("data_compra=%s"); args.append(data_iso(payload.data_compra))
+    if payload.estado_id is not None:
+        sets.append("estado_id=%s"); args.append(payload.estado_id)
+    if not sets:
+        raise HTTPException(400, "nenhum campo para alterar")
+    with closing(db()) as con:
+        if payload.estado_id is not None and not con.execute("SELECT 1 FROM estados_inventario WHERE id=%s", (payload.estado_id,)).fetchone():
+            raise HTTPException(400, "estado inválido")
+        sets.append("atualizado_em=%s"); args.append(time.time())
+        cur = con.execute(f"UPDATE itens SET {', '.join(sets)} WHERE epc = ANY(%s)", (*args, epcs))
+        alterados = cur.rowcount
+        con.commit()
+    return {"alterados": alterados, "nao_encontrados": len(epcs) - alterados}
+
+
+class ConsultaIn(BaseModel):
+    epcs: list[str]
+
+
+def _normaliza_lista(epcs):
+    lista = list(dict.fromkeys(epc_manual(e) for e in epcs if e and e.strip()))
+    if not lista or len(lista) > 2000:
+        raise HTTPException(400, "informe de 1 a 2000 EPCs")
+    return lista
+
+
+@app.post("/api/itens/consulta", dependencies=[Depends(ui_auth)])
+def consultar_itens(payload: ConsultaIn):
+    """Leitor manual: diz quais EPCs colados/digitados já estão cadastrados e quais são novos ou inválidos."""
+    lista = _normaliza_lista(payload.epcs)
+    invalidos = [e for e in lista if not epc_valido(e)]
+    validos = [e for e in lista if epc_valido(e)]
+    with closing(db()) as con:
+        identificados, novos = classificar_epcs(con, validos)
+    return {"identificados": identificados, "novos": novos, "invalidos": invalidos}
+
+
+class CadastroLoteIn(BaseModel):
+    epcs: list[str]
+    tipo: str
+    fabricante: str | None = None
+    tamanho: str | None = None
+    composicao: str | None = None
+    cor: str | None = None
+    data_compra: str | None = None
+
+
+@app.post("/api/itens/cadastrar-lote", dependencies=[Depends(op_auth)])
+def cadastrar_itens_lote(payload: CadastroLoteIn):
+    """Cadastra vários EPCs com os mesmos atributos. EPC já cadastrado não é alterado; inválido é devolvido."""
+    tipo = payload.tipo.strip()
+    if not tipo:
+        raise HTTPException(400, "tipo é obrigatório")
+    lista = _normaliza_lista(payload.epcs)
+    invalidos = [e for e in lista if not epc_valido(e)]
+    validos = [e for e in lista if epc_valido(e)]
+    data_compra = data_iso(payload.data_compra)
+    now = time.time()
+    with closing(db()) as con:
+        padrao = con.execute("SELECT id FROM estados_inventario WHERE padrao=1 LIMIT 1").fetchone()["id"]
+        antes = con.execute("SELECT COUNT(*) n FROM itens WHERE epc = ANY(%s)", (validos,)).fetchone()["n"]
+        with con.cursor() as cur:
+            cur.executemany(
+                """INSERT INTO itens(epc,tipo,fabricante,tamanho,composicao,cor,data_compra,estado_id,criado_em,atualizado_em)
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(epc) DO NOTHING""",
+                [(e, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor, data_compra, padrao, now, now)
+                 for e in validos])
+        con.commit()
+    return {"cadastrados": len(validos) - antes, "ja_existiam": antes, "invalidos": invalidos}
+
+
+@app.get("/api/inventario/revisao", dependencies=[Depends(ui_auth)])
+def revisao_inventario(dias: int = 30, limit: int = 500):
+    """Qualidade do cadastro: EPCs fora do padrão e tags lidas pelas antenas que não estão no inventário."""
+    dias = max(1, min(dias, 365))
+    limit = max(1, min(limit, 5000))
+    desde = time.time() - dias * 86400
+    with closing(db()) as con:
+        invalidos = con.execute(
+            """SELECT epc, tipo, length(epc) tamanho FROM itens
+               WHERE epc !~ '^[0-9A-F]+$' OR length(epc) <> 24 ORDER BY epc LIMIT %s""", (limit,)).fetchall()
+        total_invalidos = con.execute(
+            "SELECT COUNT(*) n FROM itens WHERE epc !~ '^[0-9A-F]+$' OR length(epc) <> 24").fetchone()["n"]
+        sem_cadastro = con.execute(
+            """SELECT ev.epc, COUNT(*) leituras, MAX(ev.received_at) ultima
+               FROM events ev LEFT JOIN itens i ON i.epc=ev.epc
+               WHERE i.epc IS NULL AND ev.epc IS NOT NULL AND ev.received_at>=%s
+               GROUP BY ev.epc ORDER BY leituras DESC LIMIT %s""", (desde, limit)).fetchall()
+    return {"dias": dias, "epcs_fora_do_padrao": invalidos, "total_fora_do_padrao": total_invalidos,
+            "lidas_sem_cadastro": sem_cadastro}
 
 
 @app.get("/api/itens", dependencies=[Depends(ui_auth)])
@@ -1444,6 +1591,7 @@ def registrar_saida(payload: SaidaIn):
     payload.epc = epc_manual(payload.epc) or ""
     if not payload.epc:
         raise HTTPException(400, "epc é obrigatório")
+    exige_epc_valido(payload.epc)
     now = time.time()
     with closing(db()) as con:
         destino = con.execute("SELECT * FROM destinos WHERE id=%s", (payload.destino_id,)).fetchone()
@@ -1845,6 +1993,14 @@ def detalhe_conferencia(cid: int, somente: str | None = None, limit: int = 5000)
     return {**c, **stats, "itens": itens[:min(limit, 10000)]}
 
 
+@app.get("/api/conferencias/{cid}/export.csv", dependencies=[Depends(ui_auth)])
+def export_conferencia(cid: int):
+    d = detalhe_conferencia(cid, None, 10000)
+    return csv_resp(f"conferencia-{cid}.csv", ["epc", "item", "situacao", "conferido_em"],
+                    [(i["epc"], i["tipo"], "conferido" if i["conferido_em"] else "nao_conferido",
+                      hora_local(i["conferido_em"]) if i["conferido_em"] else "") for i in d["itens"]])
+
+
 @app.post("/api/conferencias/{cid}/finalizar", dependencies=[Depends(op_auth)])
 def finalizar_conferencia(cid: int):
     now = time.time()
@@ -1932,9 +2088,9 @@ def export_leituras(horas: int = 168):
 def export_inventario():
     with closing(db()) as con:
         rows = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v ORDER BY v.tipo, v.epc").fetchall()
-    return csv_resp("inventario.csv", ["epc", "item", "fabricante", "tamanho", "composicao", "cor", "localizacao", "estado"],
+    return csv_resp("inventario.csv", ["epc", "item", "fabricante", "tamanho", "composicao", "cor", "data_compra", "localizacao", "estado"],
                     [(r["epc"], r["tipo"], r["fabricante"] or "", r["tamanho"] or "", r["composicao"] or "", r["cor"] or "",
-                      r["localizacao"] or "", r["estado"]) for r in rows])
+                      r["data_compra"] or "", r["localizacao"] or "", r["estado"]) for r in rows])
 
 
 @app.get("/api/export/transferencias.csv", dependencies=[Depends(ui_auth)])

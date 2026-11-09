@@ -9,12 +9,10 @@
 - **Sem heartbeat do leitor**: o Kuma avisa "sem eventos ha X min", que pode ser so ausencia de movimento.
 - **Sem backup automatico do Postgres** (so o volume `impinj_pgdata`). Definir `pg_dump` agendado.
 
-- **Inventario importado precisa de revisao** (2026-11-07): 8 EPCs fora do padrao hex (`3`, `300F`,
-  `???`, um com dois EPCs colados, truncados) e 85 tags lidas pelo leitor que nao estao no CSV
-  (aparecem como "novas" na leitura). Localizacao (`Lavanderia`, `Apartamentos`...) e `Data_Compra` do CSV
-  nao foram importadas; decidir se vale um campo de data de compra.
-- **Falta validacao do formato de EPC na API**: `/api/itens` e `/api/saida` aceitam qualquer texto; um EPC
-  digitado em minusculo ou base64 nao casa com as leituras. Considerar normalizar com `epc_hex()`.
+- **Inventario importado: revisar** (2026-11-07): 8 EPCs fora do padrao hex e 85 tags lidas que nao estao no CSV.
+  Agora ha a tela **Revisao do inventario** (EPC fora do padrao, tags lidas sem cadastro) para corrigir; `Data_Compra`
+  passou a ser importada (`data_compra`). Localizacao do CSV segue nao importada (e derivada de transferencias).
+- [x] **Validacao de EPC na API** (2026-11-08): `/api/itens` e `/api/saida` exigem hex, tamanho par, 4-64 caracteres (400 se invalido).
 
 ## Seguranca (auditoria 2026-11-07, ver `docs/auditoria-2026-11-07.md`)
 
@@ -40,9 +38,8 @@
 
 ## Aprendido com o eTrace (nao feito ainda)
 
-- Conferencia de estoque: feita (2026-11-07); falta registrar o usuario e exportar/imprimir o resultado.
-- **Usuario em cada movimentacao** e impressao de movimentacoes (precisa de login com usuarios).
-- **Leitor manual** (colar/ler tags avulsas e confirmar).
+- [x] Conferencia de estoque: usuario, exportar CSV e imprimir (2026-11-08). Usuario em cada movimentacao: feito.
+- [x] **Leitor manual** (colar EPCs, ver cadastrados/novos/invalidos e cadastrar em lote) e **edicao em lote** no Catalogo (2026-11-08).
 - **Monitor de antenas de controle ao vivo** (intervalo, som, pausa, relatorio) e uso do `alerta` do ambiente
   para disparar aviso; mapear `hostname` do evento -> antena -> ambiente.
 - **Estacoes de controle** (clientes que recebem alerta, com heartbeat) e **atributos/categorias com pai**

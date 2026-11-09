@@ -56,14 +56,14 @@ def test_saida_documentada_e_nao(client):
     client.post(f"/api/lotes/{lote['id']}/transferir", json={"destino_id": d["id"]})
     doc = client.post("/api/saida", auth=("s", "s"), json={"epc": "aa11", "destino_id": d["id"]}).json()
     assert doc["documentado"] is True  # epc normalizado para hex maiúsculo
-    assert client.post("/api/saida", auth=("s", "s"), json={"epc": "ZZ99", "destino_id": d["id"]}).json()["documentado"] is False
+    assert client.post("/api/saida", auth=("s", "s"), json={"epc": "CC99", "destino_id": d["id"]}).json()["documentado"] is False
     assert client.post("/api/saida", auth=("s", "s"), json={"epc": " ", "destino_id": d["id"]}).status_code == 400
     assert len(client.get("/api/saida?documentado=false").json()) == 1
 
 
 def test_catalogo_inventario_e_esperado(client):
-    client.post("/api/itens", json={"epc": "e2001", "tipo": "Toalha rosto"})
-    client.post("/api/itens", json={"epc": "E2002", "tipo": "Toalha rosto"})
+    client.post("/api/itens", json={"epc": "e20010", "tipo": "Toalha rosto"})
+    client.post("/api/itens", json={"epc": "E20020", "tipo": "Toalha rosto"})
     assert client.get("/api/inventario?estado=Em uso").json()["total"] == 2
     client.post("/api/acomodacoes", json={"nome": "King", "uhs": 10, "itens": [{"tipo": "Toalha rosto", "qtd": 2, "fluxo": 3}]})
     linha = client.get("/api/enxoval/esperado").json()["linhas"][0]
@@ -71,12 +71,12 @@ def test_catalogo_inventario_e_esperado(client):
 
 
 def test_conferencia_fluxo(client):
-    for e in ("A1", "A2", "A3"):
+    for e in ("A100", "A200", "A300"):
         client.post("/api/itens", json={"epc": e, "tipo": "Roupão"})
     c = client.post("/api/conferencias", json={"filtros": {"estado": "Em uso"}}).json()
     assert c["esperados"] == 3
     assert client.post("/api/conferencias", json={}).status_code == 409
-    ingest(client, "A1", "A2")
+    ingest(client, "A100", "A200")
     d = client.get(f"/api/conferencias/{c['id']}").json()
     assert (d["conferidos"], d["nao_conferidos"], d["percentual"], d["usuario"]) == (2, 1, 67, "admin")
     assert client.post(f"/api/conferencias/{c['id']}/finalizar").json()["conferidos"] == 2
@@ -98,11 +98,11 @@ def test_login_papeis_e_cookie(client):
     assert anon.post("/api/login", json={"usuario": "ana", "senha": "senha-forte-1"}).status_code == 200
     assert anon.get("/api/me").json() == {"usuario": "ana", "nome": "ana", "papel": "leitura"}
     assert anon.get("/api/summary").status_code == 200
-    assert anon.post("/api/itens", json={"epc": "Z1", "tipo": "x"}).status_code == 403  # leitura não escreve
+    assert anon.post("/api/itens", json={"epc": "AB01", "tipo": "x"}).status_code == 403  # leitura não escreve
     assert anon.get("/api/usuarios").status_code == 403
     uid = next(u["id"] for u in client.get("/api/usuarios").json() if u["usuario"] == "ana")
     client.patch(f"/api/usuarios/{uid}", json={"papel": "operador"})
-    assert anon.post("/api/itens", json={"epc": "Z1", "tipo": "x"}).status_code == 200  # papel vale na hora
+    assert anon.post("/api/itens", json={"epc": "AB01", "tipo": "x"}).status_code == 200  # papel vale na hora
     client.patch(f"/api/usuarios/{uid}", json={"ativo": False})
     assert anon.get("/api/me").status_code == 401  # desativado derruba a sessão
 
@@ -555,3 +555,58 @@ def test_retomada_de_cobertura_nao_duplica_com_o_aviso_de_offline(client, monkey
     msgs = main.avaliar_agentes(now + 510, ant(True, now + 510), [], c)  # volta online
     assert [t for t, _ in msgs] == ["antena_offline"] and "voltou" in msgs[0][1]  # só a retomada normal, sem duplicar
     main.state["alertas"].clear()
+
+
+def test_epc_manual_exige_hex_par_e_data_de_compra(client):
+    for ruim in ("Z1", "ABC", "ZZ99", "12"):
+        assert client.post("/api/itens", json={"epc": ruim, "tipo": "x"}).status_code == 400
+    assert client.post("/api/itens", json={"epc": "ab01", "tipo": "x", "data_compra": "31/02/2025"}).status_code == 400
+    r = client.post("/api/itens", json={"epc": "ab01", "tipo": "x", "data_compra": "05/03/2025"})
+    assert r.status_code == 200 and r.json()["epc"] == "AB01" and r.json()["data_compra"] == "2025-03-05"
+    assert client.post("/api/saida", auth=("s", "s"), json={"epc": "ZZ99", "destino_id": 1}).status_code == 400
+    csv = client.get("/api/export/inventario.csv").text.splitlines()
+    assert "data_compra" in csv[0] and "2025-03-05" in csv[1]
+
+
+def test_editar_lote_so_muda_campos_enviados(client):
+    for e in ("AA11", "BB22", "CC33"):
+        client.post("/api/itens", json={"epc": e, "tipo": "Roupão", "cor": "Branco", "tamanho": "M"})
+    r = client.post("/api/itens/editar-lote", json={"epcs": ["aa11", "BB22", "DD44"], "cor": "Azul", "data_compra": "2025-01-10"})
+    assert r.json() == {"alterados": 2, "nao_encontrados": 1}
+    por_epc = {i["epc"]: i for i in client.get("/api/itens?limit=10").json()}
+    assert por_epc["AA11"]["cor"] == "Azul" and por_epc["AA11"]["tamanho"] == "M" and por_epc["AA11"]["data_compra"] == "2025-01-10"
+    assert por_epc["CC33"]["cor"] == "Branco"
+    assert client.post("/api/itens/editar-lote", json={"epcs": ["AA11"], "tamanho": ""}).status_code == 200
+    assert client.post("/api/itens/editar-lote", json={"epcs": ["AA11"], "tipo": " "}).status_code == 400
+    assert client.post("/api/itens/editar-lote", json={"epcs": ["AA11"]}).status_code == 400
+    assert client.post("/api/itens/editar-lote", json={"epcs": ["AA11"], "estado_id": 99999}).status_code == 400
+
+
+def test_leitor_manual_consulta_e_cadastro_em_lote(client):
+    client.post("/api/itens", json={"epc": "AA11", "tipo": "Roupão"})
+    c = client.post("/api/itens/consulta", json={"epcs": ["aa11", "BB22", "xx", "BB22"]}).json()
+    assert [i["epc"] for i in c["identificados"]] == ["AA11"] and c["novos"] == ["BB22"] and c["invalidos"] == ["XX"]
+    r = client.post("/api/itens/cadastrar-lote", json={"epcs": ["AA11", "BB22", "CC33", "xx"], "tipo": "Lençol"}).json()
+    assert r == {"cadastrados": 2, "ja_existiam": 1, "invalidos": ["XX"]}
+    tipos = {i["epc"]: i["tipo"] for i in client.get("/api/itens?limit=10").json()}
+    assert tipos == {"AA11": "Roupão", "BB22": "Lençol", "CC33": "Lençol"}  # existente não é alterado
+    assert client.post("/api/itens/cadastrar-lote", json={"epcs": [], "tipo": "x"}).status_code == 400
+    assert client.post("/api/itens/cadastrar-lote", json={"epcs": ["AA11"], "tipo": " "}).status_code == 400
+
+
+def test_revisao_do_inventario_e_csv_da_conferencia(client):
+    import psycopg, os
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as con:  # item legado fora do padrão (importado do eTrace)
+        pad = con.execute("SELECT id FROM estados_inventario WHERE padrao=1").fetchone()[0]
+        con.execute("INSERT INTO itens(epc,tipo,estado_id,criado_em,atualizado_em) VALUES('LEGADO1','x',%s,1,1)", (pad,))
+    client.post("/api/itens", json={"epc": "AA11", "tipo": "Roupão"})
+    ingest(client, "AA11", "EE55", "EE55")
+    rev = client.get("/api/inventario/revisao").json()
+    assert rev["total_fora_do_padrao"] == 2  # LEGADO1 e AA11 (4 chars, não 24)
+    assert {i["epc"] for i in rev["epcs_fora_do_padrao"]} == {"LEGADO1", "AA11"}
+    assert [(s["epc"], s["leituras"]) for s in rev["lidas_sem_cadastro"]] == [("EE55", 2)]
+    c = client.post("/api/conferencias", json={}).json()
+    r = client.get(f"/api/conferencias/{c['id']}/export.csv")
+    assert r.status_code == 200 and "text/csv" in r.headers["content-type"]
+    assert r.text.lstrip("\ufeff").startswith("epc") and "AA11" in r.text
+    assert client.get("/api/conferencias/99999/export.csv").status_code == 404

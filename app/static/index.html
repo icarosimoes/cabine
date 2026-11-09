@@ -108,6 +108,11 @@ table.rt td[colspan]{display:block;text-align:center;color:var(--muted)}
 table.rt td[colspan]::before{content:none}}
 @media(display-mode:standalone){body{overscroll-behavior-y:contain}}
 @media(max-width:360px){.cards{grid-template-columns:1fr}}
+@media print{
+  body.imprime-conf .sidebar,body.imprime-conf .topbar,body.imprime-conf #backdrop,body.imprime-conf .view:not([data-view=conferencia]),body.imprime-conf #confLista,body.imprime-conf button,body.imprime-conf #cfCsv,body.imprime-conf #cfSoNao{display:none!important}
+  body.imprime-conf .main-content{margin:0!important;padding:0!important}
+  body.imprime-conf,body.imprime-conf *{background:#fff!important;color:#000!important}
+}
 </style>
 </head>
 <body>
@@ -130,6 +135,8 @@ table.rt td[colspan]::before{content:none}}
     <div class="nav-section">Cadastros</div>
     <a class="nav-item" href="#inventario" data-nav="inventario">Inventário</a>
     <a class="nav-item" href="#catalogo" data-nav="catalogo">Catálogo de itens</a>
+    <a class="nav-item" href="#manual" data-nav="manual">Leitor manual</a>
+    <a class="nav-item" href="#revisao" data-nav="revisao">Revisão do inventário</a>
     <a class="nav-item" href="#destinos" data-nav="destinos">Destinos</a>
     <a class="nav-item" href="#antenas" data-nav="antenas">Antenas</a>
     <a class="nav-item" href="#acomodacoes" data-nav="acomodacoes">Acomodações</a>
@@ -291,6 +298,7 @@ table.rt td[colspan]::before{content:none}}
     <input id="itTamanho" type="text" placeholder="tamanho">
     <input id="itComposicao" type="text" placeholder="composição">
     <input id="itCor" type="text" placeholder="cor">
+    <input id="itCompra" type="date" title="data de compra">
     <button class="acc" id="cadastrarItem">Cadastrar / atualizar</button>
   </div>
   <div id="itemMsg" class="msg"></div>
@@ -298,7 +306,62 @@ table.rt td[colspan]::before{content:none}}
     <input id="itBusca" type="text" placeholder="buscar por EPC ou tipo" style="flex:1;min-width:180px">
     <button id="itBuscar">buscar</button>
   </div>
-  <div class="scroll"><table><thead><tr><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th>Localização</th><th>Estado</th><th></th></tr></thead><tbody id="catalogo"></tbody></table></div>
+  <div class="row" id="catLoteBar" hidden style="padding-top:0;gap:8px;flex-wrap:wrap">
+    <b id="catSelN">0</b><span class="mut">selecionados — editar em lote (campo vazio = não altera):</span>
+    <input id="lcTipo" type="text" placeholder="tipo" style="width:140px">
+    <input id="lcFabricante" type="text" placeholder="fabricante" style="width:120px">
+    <input id="lcTamanho" type="text" placeholder="tamanho" style="width:90px">
+    <input id="lcComposicao" type="text" placeholder="composição" style="width:110px">
+    <input id="lcCor" type="text" placeholder="cor" style="width:90px">
+    <input id="lcCompra" type="date" title="data de compra">
+    <button class="acc" id="catLoteAplicar">Aplicar</button> <button id="catLoteLimpar">limpar seleção</button>
+  </div>
+  <div id="catLoteMsg" class="msg"></div>
+  <div class="scroll"><table><thead><tr><th><input type="checkbox" id="catTodos" title="selecionar todos os exibidos"></th><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th>Compra</th><th>Localização</th><th>Estado</th><th></th></tr></thead><tbody id="catalogo"></tbody></table></div>
+</section>
+</div>
+<div class="view" data-view="manual" hidden>
+<section>
+  <h2><span>Leitor manual</span></h2>
+  <div class="mut" style="padding:10px 16px 0">Cole ou digite EPCs (um por linha, ou separados por espaço, vírgula ou ponto e vírgula) para ver o que já está cadastrado e cadastrar os novos de uma vez.</div>
+  <div class="row"><textarea id="mnEpcs" rows="6" style="flex:1;min-width:240px;font-family:ui-monospace,monospace" placeholder="E2801160600002..."></textarea></div>
+  <div class="row" style="padding-top:0"><button class="acc" id="mnConsultar">Consultar</button> <button id="mnLimpar">limpar</button> <span class="mut" id="mnResumo"></span></div>
+  <div id="mnMsg" class="msg"></div>
+</section>
+<section id="mnNovosBox" hidden>
+  <h2><span>Cadastrar os <span id="mnNovosN">0</span> EPCs novos</span></h2>
+  <div class="row">
+    <input id="mnTipo" type="text" placeholder="tipo (obrigatório)" style="width:200px">
+    <input id="mnFabricante" type="text" placeholder="fabricante">
+    <input id="mnTamanho" type="text" placeholder="tamanho">
+    <input id="mnComposicao" type="text" placeholder="composição">
+    <input id="mnCor" type="text" placeholder="cor">
+    <input id="mnCompra" type="date" title="data de compra">
+    <button class="acc" id="mnCadastrar">Cadastrar novos</button>
+  </div>
+</section>
+<section id="mnIdBox" hidden>
+  <h2><span>Já cadastrados</span></h2>
+  <div class="scroll"><table class="rt"><thead><tr><th>EPC</th><th>Tipo</th><th>Cor</th><th>Localização</th><th>Estado</th></tr></thead><tbody id="mnIdTb"></tbody></table></div>
+</section>
+<section id="mnInvBox" hidden>
+  <h2><span>EPCs inválidos (ignorados)</span></h2>
+  <div class="row"><code id="mnInvalidos" style="word-break:break-all"></code></div>
+</section>
+</div>
+<div class="view" data-view="revisao" hidden>
+<section>
+  <h2><span>Revisão do inventário</span><span><button id="rvAtualizar">atualizar</button></span></h2>
+  <div class="mut" style="padding:10px 16px 0">Aponta cadastros fora do padrão (EPC não hexadecimal ou com tamanho diferente de 24 caracteres) e tags lidas pelas antenas que não estão no inventário.</div>
+  <div class="row"><label class="mut">tags lidas nos últimos <select id="rvDias"><option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="90">90 dias</option></select></label></div>
+</section>
+<section>
+  <h2><span>Lidas pelas antenas e sem cadastro <span class="mut" id="rvSemN"></span></span></h2>
+  <div class="scroll"><table class="rt"><thead><tr><th>EPC</th><th>Leituras</th><th>Última leitura</th></tr></thead><tbody id="rvSemTb"></tbody></table></div>
+</section>
+<section>
+  <h2><span>Cadastros fora do padrão <span class="mut" id="rvForaN"></span></span></h2>
+  <div class="scroll"><table class="rt"><thead><tr><th>EPC</th><th>Tipo</th><th>Tamanho</th></tr></thead><tbody id="rvForaTb"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="destinos" hidden>
@@ -346,7 +409,7 @@ table.rt td[colspan]::before{content:none}}
   <div class="scroll"><table><thead><tr><th>Início</th><th>Usuário</th><th>Filtros aplicados</th><th>Esperados</th><th>Status</th><th></th></tr></thead><tbody id="confLista"></tbody></table></div>
 </section>
 <section id="confDetalhe" hidden>
-  <h2><span id="confTitulo">Detalhes da conferência</span><span><button id="confFinalizar" class="acc">Finalizar conferência</button> <button id="confFechar">fechar</button></span></h2>
+  <h2><span id="confTitulo">Detalhes da conferência</span><span><a id="cfCsv" class="nav-item" style="width:auto;display:inline-block;border:1px solid var(--line)" href="#">Exportar CSV</a> <button id="cfImprimir">Imprimir</button> <button id="confFinalizar" class="acc">Finalizar conferência</button> <button id="confFechar">fechar</button></span></h2>
   <div class="cards" style="padding:16px 16px 0">
     <div class="card"><b id="cfEsp">–</b><span>itens esperados</span></div>
     <div class="card"><b id="cfConf" style="color:var(--green)">–</b><span>itens conferidos</span></div>
@@ -482,7 +545,7 @@ const itemTipo=t=>t?esc(t):'<span class="mut">não cadastrada</span>';
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
 const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Painel',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
-  inventario:'Inventário',catalogo:'Catálogo de itens',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
+  inventario:'Inventário',catalogo:'Catálogo de itens',manual:'Leitor manual',revisao:'Revisão do inventário',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
 let view='painel';
 const LOADERS={
   painel:()=>carregarDashboard(),
@@ -497,6 +560,8 @@ const LOADERS={
   alertaswa:async()=>{await carregarAlertasWa();if(!document.activeElement||!/^(INPUT|SELECT)$/.test(document.activeElement.tagName))await carregarDestinatariosWa()},
   acomodacoes:()=>carregarAcomodacoes(),
   catalogo:()=>carregarCatalogo(),
+  manual:async()=>{},
+  revisao:()=>{if(!revCarregada)return carregarRevisao()},
   destinos:()=>carregarDestinos(),
   estados:()=>carregarEstados(),
   tags:async()=>{const t=await j('/api/tags?hours='+$('hours').value);
@@ -866,12 +931,13 @@ async function carregarConfDetalhe(){
   $('cfEsp').textContent=c.esperados;$('cfConf').textContent=c.conferidos;$('cfNao').textContent=c.nao_conferidos;
   $('cfPct').textContent=c.percentual+'%';$('cfDur').textContent=c.duracao_min;
   $('cfInfo').textContent=`Por ${c.usuario||'–'} · iniciada ${dt(c.iniciada_em)}${c.finalizada_em?' · finalizada '+dt(c.finalizada_em):''} · filtros: ${c.filtros_desc}`;
-  $('confFinalizar').hidden=c.status!=='andamento';
+  $('confFinalizar').hidden=c.status!=='andamento';$('cfCsv').href='/api/conferencias/'+c.id+'/export.csv';
   $('cfItens').innerHTML=c.itens.map(i=>`<tr><td>${i.conferido_em?'<span class="pill ok">✓ conferido</span>':'<span class="pill alerta">não conferido</span>'}</td>
     <td class="epc">${esc(i.epc)}</td><td>${esc(i.tipo)}</td><td>${i.conferido_em?dt(i.conferido_em):'–'}</td></tr>`).join('')||'<tr><td colspan=4>nenhum item</td></tr>';
 }
 document.addEventListener('click',async e=>{const b=e.target.closest('.verConf');if(!b)return;confId=Number(b.dataset.id);await carregarConfDetalhe();$('confDetalhe').scrollIntoView()});
 $('cfSoNao').onchange=()=>confId&&carregarConfDetalhe();
+$('cfImprimir').onclick=()=>{document.body.classList.add('imprime-conf');window.print();setTimeout(()=>document.body.classList.remove('imprime-conf'),500)};
 $('confFechar').onclick=()=>{confId=null;$('confDetalhe').hidden=true};
 $('confFinalizar').onclick=async()=>{
   if(!confId||!confirm('Finalizar a conferência? Os itens não lidos até agora ficam como não conferidos.'))return;
@@ -1116,6 +1182,31 @@ $('novoEstado').onclick=async()=>{
   catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
 
+let selCat=new Set(),catVisiveis=[];
+function atualizaSelCat(){
+  $('catSelN').textContent=selCat.size;$('catLoteBar').hidden=selCat.size===0;
+  $('catTodos').checked=catVisiveis.length>0&&catVisiveis.every(e=>selCat.has(e));
+}
+document.addEventListener('change',e=>{
+  if(e.target.classList.contains('catSel')){e.target.checked?selCat.add(e.target.dataset.epc):selCat.delete(e.target.dataset.epc);atualizaSelCat()}
+  else if(e.target.id==='catTodos'){catVisiveis.forEach(x=>e.target.checked?selCat.add(x):selCat.delete(x));
+    document.querySelectorAll('.catSel').forEach(c=>c.checked=e.target.checked);atualizaSelCat()}
+});
+$('catLoteLimpar').onclick=()=>{selCat.clear();document.querySelectorAll('.catSel').forEach(c=>c.checked=false);atualizaSelCat()};
+$('catLoteAplicar').onclick=async()=>{
+  const msg=$('catLoteMsg'),corpo={epcs:[...selCat]};
+  for(const [campo,id] of [['tipo','lcTipo'],['fabricante','lcFabricante'],['tamanho','lcTamanho'],['composicao','lcComposicao'],['cor','lcCor'],['data_compra','lcCompra']]){
+    const v=$(id).value.trim();if(v)corpo[campo]=v;
+  }
+  if(Object.keys(corpo).length===1){msg.className='msg bad';msg.textContent='preencha ao menos um campo';return}
+  if(!confirm(`Alterar ${selCat.size} item(ns)?`))return;
+  try{
+    const r=await j('/api/itens/editar-lote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)});
+    msg.className='msg ok';msg.textContent=`${r.alterados} item(ns) alterado(s)`;
+    ['lcTipo','lcFabricante','lcTamanho','lcComposicao','lcCor','lcCompra'].forEach(id=>$(id).value='');
+    await Promise.all([carregarCatalogo(),carregarOpcoesInventario(),carregarInventario()]);
+  }catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
 async function carregarCatalogo(){
   const q=$('itBusca').value.trim();
   const escolhasPendentes={};
@@ -1123,13 +1214,17 @@ async function carregarCatalogo(){
   const rows=await j('/api/itens'+(q?'?q='+encodeURIComponent(q):''));
   await carregarEstados();
   const opts=estadosCache.map(e=>`<option value="${e.id}">${esc(e.nome)}</option>`).join('');
+  catVisiveis=rows.map(i=>i.epc);
   $('catalogo').innerHTML=rows.map(i=>`<tr>
+    <td><input type="checkbox" class="catSel" data-epc="${esc(i.epc)}"${selCat.has(i.epc)?' checked':''}></td>
     <td class="epc">${esc(i.epc)}</td><td>${esc(i.tipo)}</td><td>${esc(i.fabricante||'–')}</td>
     <td>${esc(i.tamanho||'–')}</td><td>${esc(i.composicao||'–')}</td><td>${esc(i.cor||'–')}</td>
+    <td>${i.data_compra?esc(i.data_compra.split('-').reverse().join('/')):'–'}</td>
     <td>${esc(i.localizacao||'–')}</td>
     <td><select class="estadoSel" data-epc="${esc(i.epc)}">${opts}</select></td>
     <td><button class="definirEstadoBtn" data-epc="${esc(i.epc)}">Definir</button></td>
-  </tr>`).join('')||'<tr><td colspan=9>nenhum item cadastrado</td></tr>';
+  </tr>`).join('')||'<tr><td colspan=11>nenhum item cadastrado</td></tr>';
+  atualizaSelCat();
   for(const i of rows){
     const sel=document.querySelector(`select.estadoSel[data-epc="${CSS.escape(i.epc)}"]`);
     if(!sel)continue;
@@ -1157,12 +1252,53 @@ $('cadastrarItem').onclick=async()=>{
   try{
     await j('/api/itens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       epc,tipo,fabricante:$('itFabricante').value.trim()||null,tamanho:$('itTamanho').value.trim()||null,
-      composicao:$('itComposicao').value.trim()||null,cor:$('itCor').value.trim()||null})});
+      composicao:$('itComposicao').value.trim()||null,cor:$('itCor').value.trim()||null,data_compra:$('itCompra').value||null})});
     msg.className='msg ok';msg.textContent=`item ${epc} cadastrado`;
-    ['itEpc','itTipo','itFabricante','itTamanho','itComposicao','itCor'].forEach(id=>$(id).value='');
+    ['itEpc','itTipo','itFabricante','itTamanho','itComposicao','itCor','itCompra'].forEach(id=>$(id).value='');
     await Promise.all([carregarCatalogo(),carregarOpcoesInventario(),carregarInventario()]);
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
+
+function lerEpcs(){return $('mnEpcs').value.split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean)}
+$('mnLimpar').onclick=()=>{$('mnEpcs').value='';['mnNovosBox','mnIdBox','mnInvBox'].forEach(id=>$(id).hidden=true);$('mnResumo').textContent='';$('mnMsg').textContent=''};
+async function consultarManual(){
+  const msg=$('mnMsg'),epcs=lerEpcs();
+  if(!epcs.length){msg.className='msg bad';msg.textContent='informe ao menos um EPC';return}
+  try{
+    const r=await j('/api/itens/consulta',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({epcs})});
+    manualNovos=r.novos;
+    $('mnResumo').textContent=`${r.identificados.length} cadastrados · ${r.novos.length} novos · ${r.invalidos.length} inválidos`;
+    $('mnIdBox').hidden=!r.identificados.length;
+    $('mnIdTb').innerHTML=r.identificados.map(i=>`<tr><td class="epc" data-l="EPC">${esc(i.epc)}</td><td data-l="Tipo">${esc(i.tipo)}</td><td data-l="Cor">${esc(i.cor||'–')}</td><td data-l="Localização">${esc(i.localizacao||'–')}</td><td data-l="Estado">${esc(i.estado)}</td></tr>`).join('');
+    $('mnNovosBox').hidden=!r.novos.length;$('mnNovosN').textContent=r.novos.length;
+    $('mnInvBox').hidden=!r.invalidos.length;$('mnInvalidos').textContent=r.invalidos.join('  ');
+    msg.textContent='';
+  }catch(e){msg.className='msg bad';msg.textContent=e.message}
+}
+let manualNovos=[];
+$('mnConsultar').onclick=consultarManual;
+$('mnCadastrar').onclick=async()=>{
+  const msg=$('mnMsg'),tipo=$('mnTipo').value.trim();
+  if(!tipo){msg.className='msg bad';msg.textContent='informe o tipo dos itens novos';return}
+  try{
+    const r=await j('/api/itens/cadastrar-lote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      epcs:manualNovos,tipo,fabricante:$('mnFabricante').value.trim()||null,tamanho:$('mnTamanho').value.trim()||null,
+      composicao:$('mnComposicao').value.trim()||null,cor:$('mnCor').value.trim()||null,data_compra:$('mnCompra').value||null})});
+    await consultarManual();
+    msg.className='msg ok';msg.textContent=`${r.cadastrados} item(ns) cadastrado(s)`;
+    ['mnTipo','mnFabricante','mnTamanho','mnComposicao','mnCor','mnCompra'].forEach(id=>$(id).value='');
+  }catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
+let revCarregada=false;
+async function carregarRevisao(){
+  const r=await j('/api/inventario/revisao?dias='+$('rvDias').value);
+  revCarregada=true;
+  $('rvSemN').textContent=`(${r.lidas_sem_cadastro.length})`;
+  $('rvSemTb').innerHTML=r.lidas_sem_cadastro.map(x=>`<tr><td class="epc" data-l="EPC">${esc(x.epc)}</td><td data-l="Leituras">${x.leituras}</td><td data-l="Última leitura">${dt(x.ultima)}</td></tr>`).join('')||'<tr><td colspan=3>nenhuma — todas as tags lidas estão cadastradas</td></tr>';
+  $('rvForaN').textContent=`(${r.total_fora_do_padrao})`;
+  $('rvForaTb').innerHTML=r.epcs_fora_do_padrao.map(x=>`<tr><td class="epc" data-l="EPC">${esc(x.epc)}</td><td data-l="Tipo">${esc(x.tipo)}</td><td data-l="Tamanho">${x.tamanho}</td></tr>`).join('')||'<tr><td colspan=3>nenhum</td></tr>';
+}
+$('rvAtualizar').onclick=carregarRevisao;$('rvDias').onchange=carregarRevisao;
 
 carregarMe().finally(()=>{rota();setInterval(tick,3000)});
 </script>
