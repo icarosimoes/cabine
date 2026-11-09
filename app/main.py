@@ -174,6 +174,13 @@ def init_db():
           tags INTEGER NOT NULL DEFAULT 0, lote_id INTEGER REFERENCES lotes(id))""")
 
         con.execute("""
+        CREATE TABLE IF NOT EXISTS auditoria_login(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          criado_em DOUBLE PRECISION NOT NULL, usuario TEXT, resultado TEXT NOT NULL,
+          ip TEXT, navegador TEXT)""")  # nunca guarda senha
+        con.execute("CREATE INDEX IF NOT EXISTS ix_auditoria_login_em ON auditoria_login(criado_em)")
+        con.execute("DELETE FROM auditoria_login WHERE criado_em < %s", (time.time() - 365 * 86400,))
+        con.execute("""
         CREATE TABLE IF NOT EXISTS alerta_estado(
           chave TEXT PRIMARY KEY, desde DOUBLE PRECISION NOT NULL)""")  # alertas de antena/agente já enviados (sobrevive a restart/deploy)
         con.execute("""
@@ -2026,19 +2033,64 @@ class LoginIn(BaseModel):
     senha: str
 
 
+def audita_login(request: Request, usuario: str, resultado: str):
+    """Registra tentativa de login (ok/falha/bloqueado). Nunca derruba o login se o registro falhar."""
+    try:
+        with closing(db()) as con:
+            con.execute("INSERT INTO auditoria_login(criado_em,usuario,resultado,ip,navegador) VALUES(%s,%s,%s,%s,%s)",
+                        (time.time(), usuario[:80], resultado, ip_cliente(request),
+                         request.headers.get("user-agent", "")[:200]))
+            con.commit()
+    except Exception as e:  # noqa: BLE001
+        print(f"[auditoria] falha ao registrar login: {e}", flush=True)
+
+
 @app.post("/api/login")
 def login(payload: LoginIn, request: Request):
     ip = ip_cliente(request)
     if bloqueado(ip):
+        audita_login(request, payload.usuario.strip(), "bloqueado")
         raise HTTPException(429, "muitas tentativas; aguarde alguns minutos")
     u = autentica(payload.usuario.strip(), payload.senha)
     if not u:
         registra_falha(ip)
+        audita_login(request, payload.usuario.strip(), "falha")
         raise HTTPException(401, "usuário ou senha inválidos")
+    audita_login(request, u["usuario"], "ok")
     resp = JSONResponse({"usuario": u["usuario"], "nome": u["nome"], "papel": u["papel"]})
     resp.set_cookie(COOKIE, emite_token(u), max_age=SESSION_HORAS * 3600, httponly=True, samesite="lax",
                     secure=request.headers.get("x-forwarded-proto") == "https")
     return resp
+
+
+def _filtro_logins(usuario, resultado, dias):
+    dias = max(1, min(dias, 365))
+    where, args = ["criado_em >= %s"], [time.time() - dias * 86400]
+    if usuario:
+        where.append("usuario ILIKE %s"); args.append(f"%{usuario.strip()}%")
+    if resultado in ("ok", "falha", "bloqueado"):
+        where.append("resultado=%s"); args.append(resultado)
+    return " AND ".join(where), args
+
+
+@app.get("/api/auditoria/logins", dependencies=[Depends(admin_auth)])
+def auditoria_logins(usuario: str | None = None, resultado: str | None = None, dias: int = 30, limit: int = 300):
+    where, args = _filtro_logins(usuario, resultado, dias)
+    with closing(db()) as con:
+        rows = con.execute(f"SELECT id,criado_em,usuario,resultado,ip,navegador FROM auditoria_login WHERE {where} ORDER BY criado_em DESC LIMIT %s",
+                           (*args, max(1, min(limit, 2000)))).fetchall()
+        res = {r["resultado"]: r["n"] for r in con.execute(
+            f"SELECT resultado, COUNT(*) n FROM auditoria_login WHERE {where} GROUP BY resultado", args).fetchall()}
+    return {"resumo": {"ok": res.get("ok", 0), "falha": res.get("falha", 0), "bloqueado": res.get("bloqueado", 0)}, "logins": rows}
+
+
+@app.get("/api/auditoria/logins.csv", dependencies=[Depends(admin_auth)])
+def auditoria_logins_csv(usuario: str | None = None, resultado: str | None = None, dias: int = 30):
+    where, args = _filtro_logins(usuario, resultado, dias)
+    with closing(db()) as con:
+        rows = con.execute(f"SELECT criado_em,usuario,resultado,ip,navegador FROM auditoria_login WHERE {where} ORDER BY criado_em DESC LIMIT 20000", args).fetchall()
+    return csv_resp("auditoria-logins.csv", ["data", "usuario", "resultado", "ip", "navegador"],
+                    [(hora_local(r["criado_em"]), r["usuario"] or "", r["resultado"], r["ip"] or "", r["navegador"] or "") for r in rows])
 
 
 @app.post("/api/logout")

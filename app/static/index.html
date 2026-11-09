@@ -29,7 +29,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Ar
 .brand-mark{width:32px;height:32px;background:var(--teal);border-radius:var(--r-md);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;color:var(--on-accent);flex-shrink:0}
 .brand-row strong{font-size:14px;display:block}.brand-row span{font-size:10px;color:var(--muted);display:block}
 .nav-list{flex:1;padding:var(--sp-3) var(--sp-2);overflow-y:auto}
-.nav-section{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;padding:var(--sp-3) var(--sp-3) var(--sp-1)}
+.nav-section{display:flex;align-items:center;justify-content:space-between;width:100%;background:none;border:none;cursor:pointer;font:inherit;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;text-align:left;padding:var(--sp-3) var(--sp-3) var(--sp-1)}
+.nav-section:hover{color:var(--text)}
+.nav-section .chev{width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);transition:transform .15s;margin-top:-3px}
+.nav-group.fechado .nav-section .chev{transform:rotate(-45deg);margin-top:0}
+.nav-solo{margin:var(--sp-2) 0 2px;font-size:13px}
+.nav-sub{margin:2px 0 4px 18px;padding-left:6px;border-left:2px solid color-mix(in srgb,var(--muted) 45%,transparent)}
+.nav-sub .nav-item.active{box-shadow:-8px 0 0 -6px var(--teal)}
+.nav-group.fechado .nav-sub{display:none}
 .nav-item{display:flex;align-items:center;gap:var(--sp-3);padding:8px var(--sp-3);border-radius:var(--r-md);font-size:12px;font-weight:600;color:var(--text-dim);text-decoration:none;cursor:pointer;background:none;border:none;width:100%;text-align:left}
 .nav-item:hover{background:var(--navy-light);color:var(--text)}
 .nav-item.active{background:var(--teal-soft);color:var(--teal)}
@@ -65,6 +72,8 @@ button:disabled{opacity:.5;cursor:default}
 .pill.setor{color:var(--teal)}.pill.lavanderia{color:var(--yellow)}
 .pill.alerta{background:var(--red-soft);color:var(--red)}.pill.ok,.pill.ativo{background:var(--green-soft);color:var(--green)}.pill.inativo{background:var(--red-soft);color:var(--red)}
 body.so-painel .nav-section,body.so-painel .nav-item:not([data-nav=painel]):not(#tema):not(#sair){display:none}
+body.so-painel .nav-group.fechado .nav-sub{display:block}
+body.so-painel .nav-sub{margin:0;padding:0;border:0}
 .banner{border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-weight:700;display:flex;gap:10px;align-items:center}
 .banner.ok{background:var(--green-soft);color:var(--green);border-color:var(--green)}.banner.bad{background:var(--red-soft);color:var(--red);border-color:var(--red)}
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr));gap:16px}.grid2>section{margin-bottom:0}
@@ -122,33 +131,58 @@ table.rt td[colspan]::before{content:none}}
 <aside class="sidebar" id="sidebar">
   <div class="brand-row"><div class="brand-mark">C</div><div><strong>Cabine RFID</strong><span>Solid · enxoval</span></div></div>
   <nav class="nav-list">
-    <div class="nav-section">Visão geral</div>
-    <a class="nav-item" href="#painel" data-nav="painel">Painel</a>
-    <div class="nav-section">Operação</div>
-    <a class="nav-item" href="#leitura" data-nav="leitura">Leitura da cabine</a>
-    <a class="nav-item" href="#conferencia" data-nav="conferencia">Conferência de estoque</a>
-    <a class="nav-item" href="#transferencias" data-nav="transferencias">Transferências</a>
-    <div class="nav-section">Controle</div>
-    <a class="nav-item" href="#evasao" data-nav="evasao">Alertas de evasão <span class="badge" id="badgeEvasao"></span></a>
-    <div class="nav-section">Relatórios</div>
-    <a class="nav-item" href="#relatorios" data-nav="relatorios">Leituras por hora</a>
-    <div class="nav-section">Cadastros</div>
-    <a class="nav-item" href="#inventario" data-nav="inventario">Inventário</a>
-    <a class="nav-item" href="#catalogo" data-nav="catalogo">Catálogo de itens</a>
-    <a class="nav-item" href="#manual" data-nav="manual">Leitor manual</a>
-    <a class="nav-item" href="#revisao" data-nav="revisao">Revisão do inventário</a>
-    <a class="nav-item" href="#destinos" data-nav="destinos">Destinos</a>
-    <a class="nav-item" href="#antenas" data-nav="antenas">Antenas</a>
-    <a class="nav-item" href="#acomodacoes" data-nav="acomodacoes">Acomodações</a>
-    <a class="nav-item" href="#estados" data-nav="estados">Estados de inventário</a>
-    <div class="nav-section">Leitor</div>
-    <a class="nav-item" href="#tags" data-nav="tags">Tags lidas</a>
-    <a class="nav-item" href="#eventos" data-nav="eventos">Eventos ao vivo</a>
+    <a class="nav-item nav-solo" href="#painel" data-nav="painel">Dashboard</a>
+    <div class="nav-group" data-grupo="Operação">
+      <button type="button" class="nav-section" aria-expanded="true"><span>Operação</span><i class="chev" aria-hidden="true"></i></button>
+      <div class="nav-sub">
+        <a class="nav-item" href="#leitura" data-nav="leitura">Leitura da cabine</a>
+        <a class="nav-item" href="#conferencia" data-nav="conferencia">Conferência de estoque</a>
+        <a class="nav-item" href="#transferencias" data-nav="transferencias">Transferências</a>
+      </div>
+    </div>
+    <div class="nav-group" data-grupo="Controle">
+      <button type="button" class="nav-section" aria-expanded="true"><span>Controle</span><i class="chev" aria-hidden="true"></i></button>
+      <div class="nav-sub">
+        <a class="nav-item" href="#evasao" data-nav="evasao">Alertas de evasão <span class="badge" id="badgeEvasao"></span></a>
+      </div>
+    </div>
+    <div class="nav-group" data-grupo="Relatórios">
+      <button type="button" class="nav-section" aria-expanded="true"><span>Relatórios</span><i class="chev" aria-hidden="true"></i></button>
+      <div class="nav-sub">
+        <a class="nav-item" href="#relatorios" data-nav="relatorios">Leituras por hora</a>
+      </div>
+    </div>
+    <div class="nav-group" data-grupo="Cadastros">
+      <button type="button" class="nav-section" aria-expanded="true"><span>Cadastros</span><i class="chev" aria-hidden="true"></i></button>
+      <div class="nav-sub">
+        <a class="nav-item" href="#inventario" data-nav="inventario">Inventário</a>
+        <a class="nav-item" href="#catalogo" data-nav="catalogo">Catálogo de itens</a>
+        <a class="nav-item" href="#manual" data-nav="manual">Leitor manual</a>
+        <a class="nav-item" href="#revisao" data-nav="revisao">Revisão do inventário</a>
+        <a class="nav-item" href="#destinos" data-nav="destinos">Destinos</a>
+        <a class="nav-item" href="#antenas" data-nav="antenas">Antenas</a>
+        <a class="nav-item" href="#acomodacoes" data-nav="acomodacoes">Acomodações</a>
+        <a class="nav-item" href="#estados" data-nav="estados">Estados de inventário</a>
+      </div>
+    </div>
+    <div class="nav-group" data-grupo="Leitor">
+      <button type="button" class="nav-section" aria-expanded="true"><span>Leitor</span><i class="chev" aria-hidden="true"></i></button>
+      <div class="nav-sub">
+        <a class="nav-item" href="#tags" data-nav="tags">Tags lidas</a>
+        <a class="nav-item" href="#eventos" data-nav="eventos">Eventos ao vivo</a>
+      </div>
+    </div>
+    <div class="nav-group" data-grupo="Administração" id="navAdmin" hidden>
+      <button type="button" class="nav-section" aria-expanded="true"><span>Administração</span><i class="chev" aria-hidden="true"></i></button>
+      <div class="nav-sub">
+        <a class="nav-item" href="#usuarios" data-nav="usuarios" id="navUsuarios" hidden>Usuários</a>
+        <a class="nav-item" href="#alertaswa" data-nav="alertaswa" id="navAlertasWa" hidden>Alertas WhatsApp</a>
+        <a class="nav-item" href="#auditoria" data-nav="auditoria" id="navAuditoria" hidden>Auditoria de logins</a>
+      </div>
+    </div>
   </nav>
   <div class="sidebar-footer">
     <div class="leitor"><span id="dot" class="dot"></span><span id="status">…</span></div>
-    <a class="nav-item" href="#usuarios" data-nav="usuarios" id="navUsuarios" hidden>Usuários</a>
-    <a class="nav-item" href="#alertaswa" data-nav="alertaswa" id="navAlertasWa" hidden>Alertas WhatsApp</a>
     <div class="leitor" id="usuarioBox" style="color:var(--text-dim)"></div>
     <button class="nav-item" id="instalarApp" type="button" hidden>Instalar app</button>
     <button class="nav-item" id="tema" type="button">Tema claro/escuro</button>
@@ -156,7 +190,7 @@ table.rt td[colspan]::before{content:none}}
   </div>
 </aside>
 <main class="main-content">
-<h1 id="titulo">Painel</h1>
+<h1 id="titulo">Dashboard</h1>
 <div class="view" data-view="painel">
 <div class="banner" id="dashBanner">carregando…</div>
 <div class="cards">
@@ -234,7 +268,7 @@ table.rt td[colspan]::before{content:none}}
 </section>
 
 <section>
-  <h2><span>Lotes aguardando transferência <span id="pendCount" class="mut"></span></span></h2>
+  <h2><span>Lotes aguardando transferência <span id="pendCount" class="mut"></span></span><span><button id="excluirTodosLotes" hidden>Excluir todos</button></span></h2>
   <div class="scroll"><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th></th></tr></thead><tbody id="pendentes"></tbody></table></div>
 </section>
 </div>
@@ -347,6 +381,24 @@ table.rt td[colspan]::before{content:none}}
 <section id="mnInvBox" hidden>
   <h2><span>EPCs inválidos (ignorados)</span></h2>
   <div class="row"><code id="mnInvalidos" style="word-break:break-all"></code></div>
+</section>
+</div>
+<div class="view" data-view="auditoria" hidden>
+<section>
+  <h2><span>Auditoria de logins</span><span><a id="audCsv" class="nav-item" style="width:auto;display:inline-block;border:1px solid var(--line)" href="#">Exportar CSV</a></span></h2>
+  <div class="mut" style="padding:10px 16px 0">Quem entrou (ou tentou entrar) no sistema, de onde e com qual navegador. A senha digitada nunca é guardada. Registros ficam 365 dias. Só administradores veem esta tela.</div>
+  <div class="row">
+    <input id="audUsuario" type="text" placeholder="usuário" style="width:160px">
+    <select id="audResultado"><option value="">todos os resultados</option><option value="ok">sucesso</option><option value="falha">senha errada</option><option value="bloqueado">bloqueado (muitas tentativas)</option></select>
+    <select id="audDias"><option value="1">24 horas</option><option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="90">90 dias</option><option value="365">365 dias</option></select>
+    <button class="acc" id="audBuscar">Buscar</button>
+  </div>
+  <div class="cards" style="padding:0 16px 16px">
+    <div class="card"><b id="audOk" style="color:var(--green)">–</b><span>logins com sucesso</span></div>
+    <div class="card"><b id="audFalha" style="color:var(--red)">–</b><span>senhas erradas</span></div>
+    <div class="card"><b id="audBloq" style="color:var(--red)">–</b><span>bloqueios</span></div>
+  </div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Quando</th><th>Usuário</th><th>Resultado</th><th>IP</th><th>Navegador</th></tr></thead><tbody id="audTb"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="revisao" hidden>
@@ -544,8 +596,8 @@ async function j(u,opts){
 const itemTipo=t=>t?esc(t):'<span class="mut">não cadastrada</span>';
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
-const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Painel',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
-  inventario:'Inventário',catalogo:'Catálogo de itens',manual:'Leitor manual',revisao:'Revisão do inventário',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
+const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Dashboard',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
+  inventario:'Inventário',catalogo:'Catálogo de itens',manual:'Leitor manual',auditoria:'Auditoria de logins',revisao:'Revisão do inventário',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
 let view='painel';
 const LOADERS={
   painel:()=>carregarDashboard(),
@@ -561,6 +613,7 @@ const LOADERS={
   acomodacoes:()=>carregarAcomodacoes(),
   catalogo:()=>carregarCatalogo(),
   manual:async()=>{},
+  auditoria:()=>{if(!audCarregada)return carregarAuditoria()},
   revisao:()=>{if(!revCarregada)return carregarRevisao()},
   destinos:()=>carregarDestinos(),
   estados:()=>carregarEstados(),
@@ -621,10 +674,16 @@ function rota(){
   view=TITULOS[h]&&!(eu&&eu.papel==='painel'&&h!=='painel')?h:'painel';
   document.querySelectorAll('.view').forEach(v=>v.hidden=v.dataset.view!==view);
   document.querySelectorAll('[data-nav]').forEach(a=>a.classList.toggle('active',a.dataset.nav===view));
+  const ativo=document.querySelector(`.nav-sub [data-nav="${view}"]`);if(ativo){const g=ativo.closest('.nav-group');g.classList.remove('fechado');g.querySelector('.nav-section').setAttribute('aria-expanded','true')}
   $('titulo').textContent=TITULOS[view];document.title=TITULOS[view]+' — Cabine RFID';
   $('sidebar').classList.remove('open');$('backdrop').classList.remove('on');
   tick();
 }
+function navFechados(){try{return JSON.parse(localStorage.getItem('navFechados')||'[]')}catch(e){return[]}}
+function navSalvar(){try{localStorage.setItem('navFechados',JSON.stringify([...document.querySelectorAll('.nav-group.fechado')].map(g=>g.dataset.grupo)))}catch(e){}}
+function navAplicar(){const f=navFechados();document.querySelectorAll('.nav-group').forEach(g=>{const c=f.includes(g.dataset.grupo);g.classList.toggle('fechado',c);g.querySelector('.nav-section').setAttribute('aria-expanded',!c)})}
+document.querySelectorAll('.nav-section').forEach(b=>b.onclick=()=>{const g=b.closest('.nav-group');const c=g.classList.toggle('fechado');b.setAttribute('aria-expanded',!c);navSalvar()});
+navAplicar();
 window.addEventListener('hashchange',rota);
 $('menuBtn').onclick=()=>{$('sidebar').classList.add('open');$('backdrop').classList.add('on')};
 $('backdrop').onclick=()=>{$('sidebar').classList.remove('open');$('backdrop').classList.remove('on')};
@@ -663,6 +722,22 @@ document.addEventListener('click',async e=>{
   await carregarDestinos();
 });
 
+let lotesPend=[];
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('.excluirLote');if(!b)return;
+  if(!confirm(`Excluir o lote #${b.dataset.lote} (${b.dataset.qtd} peças)? Não dá para desfazer.`))return;
+  b.disabled=true;
+  try{await j('/api/lotes/'+b.dataset.lote,{method:'DELETE'});await carregarPendentes()}
+  catch(err){alert(err.message);b.disabled=false}
+});
+$('excluirTodosLotes').onclick=async()=>{
+  const ids=[...lotesPend];if(!ids.length)return;
+  if(!confirm(`Excluir TODOS os ${ids.length} lotes aguardando transferência? Não dá para desfazer.`))return;
+  let falhas=0;
+  for(const id of ids){try{await j('/api/lotes/'+id,{method:'DELETE'})}catch(e){falhas++}}
+  if(falhas)alert(`${falhas} lote(s) não puderam ser excluídos (talvez já transferidos).`);
+  await carregarPendentes();
+};
 async function carregarPendentes(){
   const antes={};
   document.querySelectorAll('select.destinoSel').forEach(s=>antes[s.dataset.lote]={destino:s.value,obs:document.querySelector(`input.obsLote[data-lote="${s.dataset.lote}"]`)?.value||''});
@@ -672,8 +747,9 @@ async function carregarPendentes(){
     <td>#${l.id}</td><td>${dt(l.criado_em)}</td><td>${l.quantidade}</td>
     <td><select class="destinoSel" data-lote="${l.id}"></select></td>
     <td><input type="text" class="obsLote" data-lote="${l.id}" placeholder="observação" style="width:140px"></td>
-    <td><button class="acc transferirBtn" data-lote="${l.id}">Transferir</button> <button data-abrir="${l.id}">Abrir</button></td>
+    <td><button class="acc transferirBtn" data-lote="${l.id}">Transferir</button> <button data-abrir="${l.id}">Abrir</button> <button class="excluirLote" data-lote="${l.id}" data-qtd="${l.quantidade}">Excluir</button></td>
   </tr>`).join('')||'<tr><td colspan=6>nenhum lote aguardando transferência</td></tr>';
+  lotesPend=lotes.map(l=>l.id);$('excluirTodosLotes').hidden=!lotes.length;
   await carregarDestinos();
   Object.entries(antes).forEach(([loteId,v])=>{
     const sel=document.querySelector(`select.destinoSel[data-lote="${loteId}"]`);
@@ -947,7 +1023,7 @@ let eu=null;
 async function carregarMe(){
   try{eu=await j('/api/me')}catch(e){return}
   $('usuarioBox').textContent=`${eu.nome||eu.usuario} · ${eu.papel}`;
-  $('navUsuarios').hidden=eu.papel!=='admin';$('navAlertasWa').hidden=eu.papel!=='admin';
+  $('navUsuarios').hidden=eu.papel!=='admin';$('navAlertasWa').hidden=eu.papel!=='admin';$('navAuditoria').hidden=eu.papel!=='admin';$('navAdmin').hidden=eu.papel!=='admin';
   document.body.classList.toggle('so-painel',eu.papel==='painel');if(eu.papel==='painel'&&location.hash!=='#painel')location.hash='#painel';
 }
 let pedidoInstalar=null;
@@ -1289,6 +1365,16 @@ $('mnCadastrar').onclick=async()=>{
     ['mnTipo','mnFabricante','mnTamanho','mnComposicao','mnCor','mnCompra'].forEach(id=>$(id).value='');
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
+let audCarregada=false;
+function audQuery(){const q=new URLSearchParams({dias:$('audDias').value});if($('audUsuario').value.trim())q.set('usuario',$('audUsuario').value.trim());if($('audResultado').value)q.set('resultado',$('audResultado').value);return q.toString()}
+async function carregarAuditoria(){
+  const r=await j('/api/auditoria/logins?'+audQuery());audCarregada=true;
+  $('audCsv').href='/api/auditoria/logins.csv?'+audQuery();
+  $('audOk').textContent=r.resumo.ok;$('audFalha').textContent=r.resumo.falha;$('audBloq').textContent=r.resumo.bloqueado;
+  const rot={ok:'<span class="pill ok">sucesso</span>',falha:'<span class="pill alerta">senha errada</span>',bloqueado:'<span class="pill alerta">bloqueado</span>'};
+  $('audTb').innerHTML=r.logins.map(l=>`<tr><td data-l="Quando">${dt(l.criado_em)}</td><td data-l="Usuário">${esc(l.usuario||'–')}</td><td data-l="Resultado">${rot[l.resultado]||esc(l.resultado)}</td><td data-l="IP">${esc(l.ip||'–')}</td><td data-l="Navegador" class="mut">${esc(l.navegador||'–')}</td></tr>`).join('')||'<tr><td colspan=5>nenhum registro no período</td></tr>';
+}
+$('audBuscar').onclick=carregarAuditoria;$('audDias').onchange=carregarAuditoria;$('audResultado').onchange=carregarAuditoria;
 let revCarregada=false;
 async function carregarRevisao(){
   const r=await j('/api/inventario/revisao?dias='+$('rvDias').value);

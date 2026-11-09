@@ -235,3 +235,5 @@ O service worker **nao** guarda API nem paginas do painel — so icones e a pagi
 Obrigatorias: `DATABASE_URL`, `WEBHOOK_USER/PASS`, `UI_USER/PASS`, `SAIDA_USER/PASS`, `SESSION_SECRET` (>= 32). Opcionais: `SESSION_HORAS`, `RETENTION_DAYS`, `TZ_OFFSET_HOURS`, `STALE_MINUTES`,
 `KUMA_PUSH_URL`, `SAIDA_JANELA_MINUTOS`, `SESSAO_AUTO`, `WHATSAPP_API_URL/INSTANCE/APIKEY`, `ALERTA_SEM_SINAL_SEGUNDOS`, `ALERTA_FALHAS_INGEST`, `ALERTA_REPETIR_MINUTOS`, `AGENTE_SEM_CONTATO_SEGUNDOS`, `AGENTE_DIST`.
 No `impinj-stack.yml` nao use parenteses nem espacos extras no texto de `${VAR:?mensagem}` (quebra a interpolacao do `docker stack deploy`).
+
+| `GET` | `/api/auditoria/logins?usuario=&resultado=&dias=30&limit=300` | Admin. Tentativas de login (`ok`/`falha`/`bloqueado`) com IP e navegador, mais `resumo`. Versao CSV em `/api/auditoria/logins.csv`. Senha nunca e guardada. |

@@ -610,3 +610,23 @@ def test_revisao_do_inventario_e_csv_da_conferencia(client):
     assert r.status_code == 200 and "text/csv" in r.headers["content-type"]
     assert r.text.lstrip("\ufeff").startswith("epc") and "AA11" in r.text
     assert client.get("/api/conferencias/99999/export.csv").status_code == 404
+
+
+def test_auditoria_de_logins_so_admin_e_sem_senha(client):
+    client.post("/api/usuarios", json={"usuario": "ana", "nome": "Ana", "papel": "leitura", "senha": "senha-forte-1"})
+    anon = client.__class__(client.app)
+    assert anon.post("/api/login", json={"usuario": "ana", "senha": "errada-123"}, headers={"user-agent": "teste-ua"}).status_code == 401
+    assert anon.post("/api/login", json={"usuario": "ana", "senha": "senha-forte-1"}).status_code == 200
+    r = client.get("/api/auditoria/logins").json()
+    assert r["resumo"] == {"ok": 1, "falha": 1, "bloqueado": 0}
+    assert [(l["usuario"], l["resultado"]) for l in r["logins"]] == [("ana", "ok"), ("ana", "falha")]
+    assert r["logins"][1]["navegador"] == "teste-ua"
+    assert "errada-123" not in str(r) and "senha-forte-1" not in str(r)
+    assert client.get("/api/auditoria/logins?resultado=falha").json()["resumo"]["ok"] == 0
+    assert client.get("/api/auditoria/logins?usuario=zzz").json()["logins"] == []
+    assert "ana;falha" in client.get("/api/auditoria/logins.csv").text
+    assert anon.get("/api/auditoria/logins").status_code == 403  # leitura não vê auditoria
+    for _ in range(main.LIMITE_FALHAS):
+        anon.post("/api/login", json={"usuario": "x", "senha": "y"})
+    main._falhas.clear()  # o IP do teste (também do admin) está bloqueado
+    assert client.get("/api/auditoria/logins?resultado=bloqueado").json()["resumo"]["bloqueado"] >= 1
