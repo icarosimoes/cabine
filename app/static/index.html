@@ -179,6 +179,7 @@ table.rt td[colspan]::before{content:none}}
         <a class="nav-item" href="#usuarios" data-nav="usuarios" id="navUsuarios" hidden>Usuários</a>
         <a class="nav-item" href="#alertaswa" data-nav="alertaswa" id="navAlertasWa" hidden>Alertas WhatsApp</a>
         <a class="nav-item" href="#auditoria" data-nav="auditoria" id="navAuditoria" hidden>Auditoria de logins</a>
+        <a class="nav-item" href="#acoes" data-nav="acoes" hidden>Auditoria de ações</a>
       </div>
     </div>
   </nav>
@@ -402,6 +403,23 @@ table.rt td[colspan]::before{content:none}}
   <div class="scroll"><table class="rt"><thead><tr><th>Quando</th><th>Usuário</th><th>Resultado</th><th>IP</th><th>Navegador</th></tr></thead><tbody id="audTb"></tbody></table></div>
 </section>
 </div>
+<div class="view" data-view="acoes" hidden>
+<section>
+  <h2><span>Auditoria de ações</span><span><a id="acoCsv" class="nav-item" style="width:auto;display:inline-block;border:1px solid var(--line)" href="#">Exportar CSV</a></span></h2>
+  <div class="mut" style="padding:10px 16px 0">Tudo que alterou dados no sistema: quem fez, o quê, quando, de que IP e se foi permitido. Inclui tentativas negadas (sem permissão). Não guarda o conteúdo enviado, então senhas nunca aparecem. Registros ficam 365 dias.</div>
+  <div class="row">
+    <input id="acoUsuario" type="text" placeholder="usuário" style="width:160px">
+    <select id="acoResultado"><option value="">todos os resultados</option><option value="ok">feitas</option><option value="negado">negadas (sem permissão)</option><option value="erro">com erro</option></select>
+    <select id="acoDias"><option value="1">24 horas</option><option value="7">7 dias</option><option value="30" selected>30 dias</option><option value="90">90 dias</option><option value="365">365 dias</option></select>
+    <button class="acc" id="acoBuscar">Buscar</button>
+  </div>
+  <div class="cards" style="padding:0 16px 16px">
+    <div class="card"><b id="acoTotal">–</b><span>ações no período</span></div>
+    <div class="card"><b id="acoNeg" style="color:var(--red)">–</b><span>tentativas negadas</span></div>
+  </div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Onde</th><th>Resultado</th><th>IP</th></tr></thead><tbody id="acoTb"></tbody></table></div>
+</section>
+</div>
 <div class="view" data-view="revisao" hidden>
 <section>
   <h2><span>Revisão do inventário</span><span><button id="rvAtualizar">atualizar</button></span></h2>
@@ -605,7 +623,7 @@ const itemTipo=t=>t?esc(t):'<span class="mut">não cadastrada</span>';
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
 const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Dashboard',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
-  inventario:'Inventário',catalogo:'Catálogo de itens',manual:'Leitor manual',auditoria:'Auditoria de logins',revisao:'Revisão do inventário',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
+  inventario:'Inventário',catalogo:'Catálogo de itens',manual:'Leitor manual',auditoria:'Auditoria de logins',acoes:'Auditoria de ações',revisao:'Revisão do inventário',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
 let view='painel';
 const LOADERS={
   painel:()=>carregarDashboard(),
@@ -622,6 +640,7 @@ const LOADERS={
   catalogo:()=>carregarCatalogo(),
   manual:async()=>{},
   auditoria:()=>{if(!audCarregada)return carregarAuditoria()},
+  acoes:()=>{if(!acoCarregada)return carregarAcoes()},
   revisao:()=>{if(!revCarregada)return carregarRevisao()},
   destinos:()=>carregarDestinos(),
   estados:()=>carregarEstados(),
@@ -1030,7 +1049,7 @@ $('confFinalizar').onclick=async()=>{
 };
 let eu=null;
 const tem=p=>!eu||(eu.permissoes||[]).includes(p);
-const NAV_PERM={painel:'dashboard',usuarios:'usuarios',alertaswa:'alertas_whatsapp',auditoria:'auditoria'};
+const NAV_PERM={painel:'dashboard',usuarios:'usuarios',alertaswa:'alertas_whatsapp',auditoria:'auditoria',acoes:'auditoria'};
 const podeVer=h=>tem(NAV_PERM[h]||'consultar');
 function aplicaPermissoes(){
   document.querySelectorAll('[data-nav]').forEach(a=>a.hidden=!podeVer(a.dataset.nav));
@@ -1407,6 +1426,16 @@ $('mnCadastrar').onclick=async()=>{
     ['mnTipo','mnFabricante','mnTamanho','mnComposicao','mnCor','mnCompra'].forEach(id=>$(id).value='');
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
+let acoCarregada=false;
+function acoQuery(){const q=new URLSearchParams({dias:$('acoDias').value});if($('acoUsuario').value.trim())q.set('usuario',$('acoUsuario').value.trim());if($('acoResultado').value)q.set('resultado',$('acoResultado').value);return q.toString()}
+async function carregarAcoes(){
+  const r=await j('/api/auditoria/acoes?'+acoQuery());acoCarregada=true;
+  $('acoCsv').href='/api/auditoria/acoes.csv?dias='+$('acoDias').value;
+  $('acoTotal').textContent=r.total;$('acoNeg').textContent=r.negadas;
+  const res=st=>st<400?'<span class="pill ok">feita</span>':st===403?'<span class="pill alerta">negada</span>':'<span class="pill alerta">erro '+st+'</span>';
+  $('acoTb').innerHTML=r.acoes.map(a=>`<tr><td data-l="Quando">${dt(a.criado_em)}</td><td data-l="Usuário">${esc(a.usuario||'–')}</td><td data-l="Ação">${esc(a.acao)}</td><td data-l="Onde" class="mut">${esc(a.caminho)}</td><td data-l="Resultado">${res(a.status)}</td><td data-l="IP">${esc(a.ip||'–')}</td></tr>`).join('')||'<tr><td colspan=6>nenhum registro no período</td></tr>';
+}
+$('acoBuscar').onclick=carregarAcoes;$('acoDias').onchange=carregarAcoes;$('acoResultado').onchange=carregarAcoes;
 let audCarregada=false;
 function audQuery(){const q=new URLSearchParams({dias:$('audDias').value});if($('audUsuario').value.trim())q.set('usuario',$('audUsuario').value.trim());if($('audResultado').value)q.set('resultado',$('audResultado').value);return q.toString()}
 async function carregarAuditoria(){

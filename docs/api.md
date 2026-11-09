@@ -252,3 +252,5 @@ Sem a permissão a rota responde 403. `/api/summary` e `/api/me` valem para qual
 | `DELETE` | `/api/perfis/{nome}` | 409 se há usuários no perfil; `admin` é fixo (403). |
 
 Quem não é admin só concede (em perfil ou usuário) permissões que ele próprio tem.
+
+| `GET` | `/api/auditoria/acoes?usuario=&resultado=ok|negado|erro&dias=30&limit=300` | Permissão `auditoria`. Ações que alteram dados (quem, o quê, caminho, status, IP) + `total` e `negadas`. CSV em `/api/auditoria/acoes.csv`. Não guarda o corpo da requisição. |

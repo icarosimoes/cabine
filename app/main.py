@@ -206,6 +206,13 @@ def init_db():
         con.execute("CREATE INDEX IF NOT EXISTS ix_auditoria_login_em ON auditoria_login(criado_em)")
         con.execute("DELETE FROM auditoria_login WHERE criado_em < %s", (time.time() - 365 * 86400,))
         con.execute("""
+        CREATE TABLE IF NOT EXISTS auditoria_acoes(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          criado_em DOUBLE PRECISION NOT NULL, usuario TEXT, acao TEXT NOT NULL, metodo TEXT NOT NULL,
+          caminho TEXT NOT NULL, status INTEGER NOT NULL, ip TEXT)""")  # só quem/quê/onde/resultado: nunca o corpo (senhas)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_auditoria_acoes_em ON auditoria_acoes(criado_em)")
+        con.execute("DELETE FROM auditoria_acoes WHERE criado_em < %s", (time.time() - 365 * 86400,))
+        con.execute("""
         CREATE TABLE IF NOT EXISTS alerta_estado(
           chave TEXT PRIMARY KEY, desde DOUBLE PRECISION NOT NULL)""")  # alertas de antena/agente já enviados (sobrevive a restart/deploy)
         con.execute("""
@@ -2093,6 +2100,97 @@ def login(payload: LoginIn, request: Request):
     resp.set_cookie(COOKIE, emite_token(u), max_age=SESSION_HORAS * 3600, httponly=True, samesite="lax",
                     secure=request.headers.get("x-forwarded-proto") == "https")
     return resp
+
+
+ROTULOS_ACAO = [  # (método, regex do caminho, descrição) — o que não casar aparece como "MÉTODO caminho"
+    ("DELETE", r"/api/lotes/\d+", "Excluiu lote"), ("POST", r"/api/lotes/registrar", "Registrou lote"),
+    ("POST", r"/api/lotes/\d+/transferir", "Transferiu lote"), ("POST", r"/api/lotes/\d+/estado", "Mudou estado do lote"),
+    ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/leitura/armar", "Armou a leitura"),
+    ("POST", r"/api/itens", "Cadastrou/atualizou item"), ("POST", r"/api/itens/editar-lote", "Editou itens em lote"),
+    ("POST", r"/api/itens/cadastrar-lote", "Cadastrou itens em lote"), ("PATCH", r"/api/itens/[^/]+/estado", "Mudou estado do item"),
+    ("POST", r"/api/conferencias", "Iniciou conferência"), ("POST", r"/api/conferencias/\d+/finalizar", "Finalizou conferência"),
+    ("POST", r"/api/destinos", "Criou destino"), ("PATCH", r"/api/destinos/\d+", "Alterou destino"),
+    ("POST", r"/api/estados", "Criou estado"), ("POST", r"/api/antenas", "Criou antena"), ("PUT", r"/api/antenas/\d+", "Alterou antena"),
+    ("POST", r"/api/antenas/\d+/comandos", "Enviou comando ao rádio"), ("POST", r"/api/acomodacoes", "Salvou acomodação"),
+    ("PUT", r"/api/config/alertas", "Alterou config de alertas"), ("POST", r"/api/alertas/destinatarios", "Criou destinatário de alerta"),
+    ("PUT", r"/api/alertas/destinatarios/\d+", "Alterou destinatário de alerta"), ("DELETE", r"/api/alertas/destinatarios/\d+", "Excluiu destinatário de alerta"),
+    ("POST", r"/api/alertas/destinatarios/\d+/teste", "Testou destinatário de alerta"),
+    ("POST", r"/api/agentes", "Criou agente"), ("DELETE", r"/api/agentes/\d+", "Excluiu agente"),
+    ("POST", r"/api/usuarios", "Criou usuário"), ("PATCH", r"/api/usuarios/\d+", "Alterou usuário (perfil/senha/status)"),
+    ("POST", r"/api/perfis", "Criou perfil"), ("PUT", r"/api/perfis/[^/]+", "Alterou perfil"), ("DELETE", r"/api/perfis/[^/]+", "Excluiu perfil"),
+]
+_SEM_AUDITORIA = ("/api/login", "/api/logout", "/api/agente/", "/api/saida")  # login tem tabela própria; o resto é tráfego de máquina
+
+
+def _rotulo_acao(metodo, caminho):
+    for m, rx, texto in ROTULOS_ACAO:
+        if m == metodo and re.fullmatch(rx, caminho):
+            return texto
+    return f"{metodo} {caminho}"
+
+
+def _quem(request: Request):
+    tok = request.cookies.get(COOKIE)
+    u = valida_token(tok) if tok else None
+    if u:
+        return u["usuario"]
+    cred = request.headers.get("authorization", "")
+    if cred.lower().startswith("basic "):
+        try:
+            return base64.b64decode(cred[6:]).decode().split(":", 1)[0][:80]
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
+
+def _grava_acao(usuario, metodo, caminho, status, ip):
+    try:
+        with closing(db()) as con:
+            con.execute("INSERT INTO auditoria_acoes(criado_em,usuario,acao,metodo,caminho,status,ip) VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                        (time.time(), usuario, _rotulo_acao(metodo, caminho), metodo, caminho[:200], status, ip))
+            con.commit()
+    except Exception as e:  # noqa: BLE001
+        print(f"[auditoria] falha ao registrar ação: {e}", flush=True)
+
+
+@app.middleware("http")
+async def audita_acoes(request: Request, call_next):
+    resp = await call_next(request)
+    p = request.url.path
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and p.startswith("/api/") and not p.startswith(_SEM_AUDITORIA) \
+            and resp.status_code not in (401, 404, 405, 422, 429):  # 403 (negado) conta: tentativa sem permissão
+        usuario = _quem(request)
+        if usuario:
+            await asyncio.to_thread(_grava_acao, usuario, request.method, p, resp.status_code, ip_cliente(request))
+    return resp
+
+
+@app.get("/api/auditoria/acoes", dependencies=[Depends(P_AUDITORIA)])
+def auditoria_acoes(usuario: str | None = None, resultado: str | None = None, dias: int = 30, limit: int = 300):
+    where, args = ["criado_em >= %s"], [time.time() - max(1, min(dias, 365)) * 86400]
+    if usuario:
+        where.append("usuario ILIKE %s"); args.append(f"%{usuario.strip()}%")
+    if resultado == "ok":
+        where.append("status < 400")
+    elif resultado == "negado":
+        where.append("status = 403")
+    elif resultado == "erro":
+        where.append("status >= 400 AND status <> 403")
+    w = " AND ".join(where)
+    with closing(db()) as con:
+        rows = con.execute(f"SELECT id,criado_em,usuario,acao,caminho,status,ip FROM auditoria_acoes WHERE {w} ORDER BY criado_em DESC LIMIT %s",
+                           (*args, max(1, min(limit, 2000)))).fetchall()
+        n = con.execute(f"SELECT COUNT(*) n, COUNT(*) FILTER (WHERE status=403) neg FROM auditoria_acoes WHERE {w}", args).fetchone()
+    return {"total": n["n"], "negadas": n["neg"], "acoes": rows}
+
+
+@app.get("/api/auditoria/acoes.csv", dependencies=[Depends(P_AUDITORIA)])
+def auditoria_acoes_csv(dias: int = 30):
+    with closing(db()) as con:
+        rows = con.execute("SELECT criado_em,usuario,acao,caminho,status,ip FROM auditoria_acoes WHERE criado_em >= %s ORDER BY criado_em DESC LIMIT 20000",
+                           (time.time() - max(1, min(dias, 365)) * 86400,)).fetchall()
+    return csv_resp("auditoria-acoes.csv", ["data", "usuario", "acao", "caminho", "status", "ip"],
+                    [(hora_local(r["criado_em"]), r["usuario"] or "", r["acao"], r["caminho"], r["status"], r["ip"] or "") for r in rows])
 
 
 def _filtro_logins(usuario, resultado, dias):

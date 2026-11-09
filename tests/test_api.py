@@ -684,3 +684,24 @@ def test_quem_gerencia_usuarios_nao_escala_privilegio(client):
     assert c.post("/api/usuarios", json={"usuario": "novo", "papel": "Basico", "senha": "senha-forte-1"}).status_code == 200
     uid_admin_like = next(u["id"] for u in c.get("/api/usuarios").json() if u["usuario"] == "novo")
     assert c.patch(f"/api/usuarios/{uid_admin_like}", json={"papel": "operador"}).status_code == 403  # operador tem mais poder
+
+
+def test_auditoria_de_acoes_registra_quem_fez_e_tentativas_negadas(client):
+    client.post("/api/usuarios", json={"usuario": "ana", "papel": "leitura", "senha": "senha-forte-1"})
+    client.post("/api/itens", json={"epc": "AB01", "tipo": "Roupão"})
+    client.post("/api/perfis", json={"nome": "Teste", "permissoes": ["consultar"]})
+    ana = client.__class__(client.app)
+    ana.post("/api/login", json={"usuario": "ana", "senha": "senha-forte-1"})
+    assert ana.post("/api/itens", json={"epc": "AB02", "tipo": "x"}).status_code == 403  # leitura não edita
+    assert ana.get("/api/itens").status_code == 200  # leitura (GET) não entra na auditoria
+    r = client.get("/api/auditoria/acoes").json()
+    por_acao = {(a["usuario"], a["acao"], a["status"]) for a in r["acoes"]}
+    assert ("admin", "Criou usuário", 200) in por_acao and ("admin", "Cadastrou/atualizou item", 200) in por_acao
+    assert ("admin", "Criou perfil", 200) in por_acao and ("ana", "Cadastrou/atualizou item", 403) in por_acao
+    assert r["negadas"] == 1 and not any(a["acao"].startswith("GET") for a in r["acoes"])
+    assert not any("/api/login" in a["caminho"] for a in r["acoes"])  # login tem auditoria própria
+    assert "senha-forte-1" not in str(r)  # nunca guarda o corpo
+    assert [a["usuario"] for a in client.get("/api/auditoria/acoes?resultado=negado").json()["acoes"]] == ["ana"]
+    assert client.get("/api/auditoria/acoes?usuario=zzz").json()["acoes"] == []
+    assert "Criou perfil" in client.get("/api/auditoria/acoes.csv").text
+    assert ana.get("/api/auditoria/acoes").status_code == 403  # só quem tem a permissão 'auditoria'
