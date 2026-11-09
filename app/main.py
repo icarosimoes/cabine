@@ -36,8 +36,26 @@ if len(_sess) < 32:  # chave do cookie não pode derivar de senha: exigir segred
 SESSION_SECRET = _sess.encode()
 SESSION_HORAS = int(os.environ.get("SESSION_HORAS", "12"))
 COOKIE = "cabine_sessao"
-# painel < leitura < operador < admin. "painel" só vê o Painel (dashboard); não acessa nenhuma outra rota da API.
-PAPEIS = {"painel": 0, "leitura": 1, "operador": 2, "admin": 3}
+# Permissões por módulo. Cada usuário tem um perfil (tabela `perfis`) que é um conjunto delas; o perfil `admin` é fixo e tem todas.
+PERMISSOES = {
+    "dashboard": "Ver o Dashboard",
+    "consultar": "Consultar telas (inventário, lotes, transferências, evasão, relatórios, tags, eventos, conferências)",
+    "operar_cabine": "Operar a cabine (registrar lotes, transferir, divergência, estado do lote)",
+    "excluir_lotes": "Excluir lotes aguardando transferência",
+    "catalogo_editar": "Cadastrar e editar itens (catálogo, lote, leitor manual, estado do item)",
+    "conferencia": "Iniciar e finalizar conferências de estoque",
+    "cadastros": "Manter destinos, estados, antenas e acomodações",
+    "exportar": "Exportar CSV",
+    "alertas_whatsapp": "Configurar alertas por WhatsApp e destinatários",
+    "usuarios": "Gerenciar usuários e perfis",
+    "auditoria": "Ver a auditoria",
+    "sistema": "Agentes do hotel, comandos ao rádio e download do agente",
+}
+PERFIS_PADRAO = {  # criados só na primeira vez; depois podem ser editados ou excluídos (menos o admin)
+    "operador": ("Opera a cabine e edita o catálogo", ["dashboard", "consultar", "exportar", "operar_cabine", "excluir_lotes", "catalogo_editar", "conferencia"]),
+    "leitura": ("Só consulta e exporta", ["dashboard", "consultar", "exportar"]),
+    "painel": ("Só o Dashboard", ["dashboard"]),
+}
 
 ITENS_VIEW_SQL = """
 SELECT i.epc, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, i.criado_em, i.atualizado_em,
@@ -139,7 +157,7 @@ def init_db():
           usuario TEXT NOT NULL UNIQUE,
           nome TEXT,
           senha_hash TEXT,
-          papel TEXT NOT NULL DEFAULT 'operador' CHECK(papel IN ('painel','leitura','operador','admin')),
+          papel TEXT NOT NULL DEFAULT 'operador',
           ativo INTEGER NOT NULL DEFAULT 1,
           criado_em DOUBLE PRECISION NOT NULL)""")
         con.execute("ALTER TABLE transferencias ADD COLUMN IF NOT EXISTS usuario TEXT")
@@ -164,8 +182,15 @@ def init_db():
           nome TEXT, whatsapp TEXT, tipo TEXT, status TEXT NOT NULL, detalhe TEXT)""")
         con.execute("""
         CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY, valor TEXT NOT NULL)""")
-        con.execute("ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_papel_check")  # inclui o papel 'painel'
-        con.execute("ALTER TABLE usuarios ADD CONSTRAINT usuarios_papel_check CHECK(papel IN ('painel','leitura','operador','admin'))")
+        con.execute("ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_papel_check")  # perfis agora são dinâmicos (tabela perfis)
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS perfis(
+          nome TEXT PRIMARY KEY, descricao TEXT, permissoes TEXT NOT NULL DEFAULT '[]', criado_em DOUBLE PRECISION NOT NULL)""")
+        if not con.execute("SELECT 1 FROM perfis LIMIT 1").fetchone():  # só semeia na primeira vez (senão um perfil excluído voltaria)
+            for nome, (desc, perms) in PERFIS_PADRAO.items():
+                con.execute("INSERT INTO perfis(nome,descricao,permissoes,criado_em) VALUES(%s,%s,%s,%s)", (nome, desc, json.dumps(perms), time.time()))
+        con.execute("""INSERT INTO perfis(nome,descricao,permissoes,criado_em) VALUES('admin','Acesso total (fixo)',%s,%s)
+                       ON CONFLICT(nome) DO UPDATE SET permissoes=excluded.permissoes""", (json.dumps(list(PERMISSOES)), time.time()))  # admin sempre com todas, inclusive as novas
         con.execute("""
         CREATE TABLE IF NOT EXISTS sessoes(
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -322,13 +347,21 @@ def confere_senha(senha: str, guardado: str | None) -> bool:
         return False
 
 
+def _perms(texto):
+    try:
+        return frozenset(p for p in json.loads(texto or "[]") if p in PERMISSOES)
+    except ValueError:
+        return frozenset()
+
+
 def autentica(usuario: str, senha: str):
     if secrets.compare_digest(usuario, UI_USER) & secrets.compare_digest(senha, UI_PASS):
-        return {"usuario": UI_USER, "nome": UI_USER, "papel": "admin", "env": True}
+        return {"usuario": UI_USER, "nome": UI_USER, "papel": "admin", "env": True, "perms": frozenset(PERMISSOES)}
     with closing(db()) as con:
-        u = con.execute("SELECT usuario,nome,papel,senha_hash FROM usuarios WHERE usuario=%s AND ativo=1", (usuario,)).fetchone()
+        u = con.execute("""SELECT u.usuario,u.nome,u.papel,u.senha_hash,p.permissoes FROM usuarios u
+                           LEFT JOIN perfis p ON p.nome=u.papel WHERE u.usuario=%s AND u.ativo=1""", (usuario,)).fetchone()
     if u and u["senha_hash"] and confere_senha(senha, u["senha_hash"]):
-        return {"usuario": u["usuario"], "nome": u["nome"] or u["usuario"], "papel": u["papel"], "env": False}
+        return {"usuario": u["usuario"], "nome": u["nome"] or u["usuario"], "papel": u["papel"], "env": False, "perms": _perms(u["permissoes"])}
 
 
 def emite_token(u: dict) -> str:
@@ -345,10 +378,11 @@ def valida_token(tok: str):
         if d["x"] < time.time():
             return None
         if d["e"]:
-            return {"usuario": UI_USER, "nome": UI_USER, "papel": "admin", "env": True}
-        with closing(db()) as con:  # papel e "ativo" valem na hora, não só no login
-            u = con.execute("SELECT usuario,nome,papel FROM usuarios WHERE usuario=%s AND ativo=1", (d["u"],)).fetchone()
-        return {"usuario": u["usuario"], "nome": u["nome"] or u["usuario"], "papel": u["papel"], "env": False} if u else None
+            return {"usuario": UI_USER, "nome": UI_USER, "papel": "admin", "env": True, "perms": frozenset(PERMISSOES)}
+        with closing(db()) as con:  # perfil, permissões e "ativo" valem na hora, não só no login
+            u = con.execute("""SELECT u.usuario,u.nome,u.papel,p.permissoes FROM usuarios u
+                               LEFT JOIN perfis p ON p.nome=u.papel WHERE u.usuario=%s AND u.ativo=1""", (d["u"],)).fetchone()
+        return {"usuario": u["usuario"], "nome": u["nome"] or u["usuario"], "papel": u["papel"], "env": False, "perms": _perms(u["permissoes"])} if u else None
     except Exception:  # noqa: BLE001
         return None
 
@@ -367,27 +401,25 @@ def usuario_opt(request: Request, c: HTTPBasicCredentials | None = Depends(_basi
 
 
 def painel_auth(u=Depends(usuario_opt)):
-    """Qualquer usuário autenticado, inclusive o perfil 'painel' (só dashboard). Use só em /api/dashboard, /api/summary e /api/me."""
+    """Qualquer usuário autenticado. Use só em /api/summary e /api/me; o resto exige permissão (`exige`)."""
     if not u:
         raise HTTPException(401, "não autenticado")
     return u
 
 
-def ui_auth(u=Depends(painel_auth)):
-    if PAPEIS[u["papel"]] < PAPEIS["leitura"]:
-        raise HTTPException(403, "seu perfil só acessa o Painel")
-    return u
+def exige(perm: str):
+    assert perm in PERMISSOES, perm
 
-
-def exige(papel: str):
-    def dep(u=Depends(ui_auth)):
-        if PAPEIS[u["papel"]] < PAPEIS[papel]:
-            raise HTTPException(403, f"ação exige papel '{papel}'")
+    def dep(u=Depends(painel_auth)):
+        if perm not in u["perms"]:
+            raise HTTPException(403, f"seu perfil não tem a permissão '{perm}'")
         return u
     return dep
 
 
-op_auth, admin_auth = exige("operador"), exige("admin")
+P_DASH, P_CONSULTAR, P_OPERAR, P_EXCLUIR = exige("dashboard"), exige("consultar"), exige("operar_cabine"), exige("excluir_lotes")
+P_CATALOGO, P_CONF, P_CADASTROS, P_EXPORTAR = exige("catalogo_editar"), exige("conferencia"), exige("cadastros"), exige("exportar")
+P_WHATSAPP, P_USUARIOS, P_AUDITORIA, P_SISTEMA = exige("alertas_whatsapp"), exige("usuarios"), exige("auditoria"), exige("sistema")
 
 
 def first(d: dict, *keys):
@@ -816,7 +848,7 @@ async def ingest(request: Request):
     return {"ok": True, "received": len(rows), "stored": len(rows)}
 
 
-@app.post("/api/leitura/armar", dependencies=[Depends(op_auth)])
+@app.post("/api/leitura/armar", dependencies=[Depends(P_OPERAR)])
 def armar_leitura(segundos: int = 15):
     segundos = max(1, min(segundos, 600))
     state["armado_ate"] = time.time() + segundos
@@ -841,7 +873,7 @@ class AlertaCfg(BaseModel):
     repetir_min: int = 120
 
 
-@app.get("/api/config/alertas", dependencies=[Depends(admin_auth)])
+@app.get("/api/config/alertas", dependencies=[Depends(P_WHATSAPP)])
 def ler_config_alertas():
     c = cfg()
     return {"wa_url": c["wa_url"], "wa_instance": c["wa_instance"], "wa_apikey_definida": bool(c["wa_apikey"]),
@@ -850,7 +882,7 @@ def ler_config_alertas():
             "alertas_abertos": sorted(state["alertas"])}
 
 
-@app.put("/api/config/alertas", dependencies=[Depends(admin_auth)])
+@app.put("/api/config/alertas", dependencies=[Depends(P_WHATSAPP)])
 def salvar_config_alertas(b: AlertaCfg):
     if not (10 <= b.sem_sinal_seg <= 86400 and 1 <= b.falhas <= 1000 and 5 <= b.repetir_min <= 10080):
         raise HTTPException(400, "limites inválidos (sem sinal 10–86400 s, falhas 1–1000, repetir 5–10080 min)")
@@ -891,13 +923,13 @@ def _valida_dest(b: DestinatarioIn) -> dict:
     return {"nome": nome, "whatsapp": num, "ativo": b.ativo, "recebe_sem_sinal": b.recebe_sem_sinal, "recebe_falhas": b.recebe_falhas}
 
 
-@app.get("/api/alertas/destinatarios", dependencies=[Depends(admin_auth)])
+@app.get("/api/alertas/destinatarios", dependencies=[Depends(P_WHATSAPP)])
 def listar_destinatarios():
     with closing(db()) as con:
         return con.execute("SELECT * FROM alerta_destinatarios ORDER BY nome").fetchall()
 
 
-@app.post("/api/alertas/destinatarios", dependencies=[Depends(admin_auth)])
+@app.post("/api/alertas/destinatarios", dependencies=[Depends(P_WHATSAPP)])
 def criar_destinatario(b: DestinatarioIn):
     v = _valida_dest(b)
     with closing(db()) as con:
@@ -909,7 +941,7 @@ def criar_destinatario(b: DestinatarioIn):
     return {"ok": True}
 
 
-@app.put("/api/alertas/destinatarios/{dest_id}", dependencies=[Depends(admin_auth)])
+@app.put("/api/alertas/destinatarios/{dest_id}", dependencies=[Depends(P_WHATSAPP)])
 def editar_destinatario(dest_id: int, b: DestinatarioIn):
     v = _valida_dest(b)
     with closing(db()) as con:
@@ -923,7 +955,7 @@ def editar_destinatario(dest_id: int, b: DestinatarioIn):
     return {"ok": True}
 
 
-@app.delete("/api/alertas/destinatarios/{dest_id}", dependencies=[Depends(admin_auth)])
+@app.delete("/api/alertas/destinatarios/{dest_id}", dependencies=[Depends(P_WHATSAPP)])
 def excluir_destinatario(dest_id: int):
     with closing(db()) as con:
         con.execute("DELETE FROM alerta_destinatarios WHERE id=%s", (dest_id,))
@@ -931,7 +963,7 @@ def excluir_destinatario(dest_id: int):
     return {"ok": True}
 
 
-@app.post("/api/alertas/destinatarios/{dest_id}/teste", dependencies=[Depends(admin_auth)])
+@app.post("/api/alertas/destinatarios/{dest_id}/teste", dependencies=[Depends(P_WHATSAPP)])
 def testar_destinatario(dest_id: int):
     r = notificar("teste", "✅ Cabine RFID: mensagem de teste do alerta por WhatsApp.", destinatario_id=dest_id)
     if not r:
@@ -959,7 +991,7 @@ def _buscar_grupos():
         GRUPOS.update(status="erro", erro=f"falha ao falar com a Evolution: {e}")
 
 
-@app.post("/api/alertas/grupos/atualizar", dependencies=[Depends(admin_auth)])
+@app.post("/api/alertas/grupos/atualizar", dependencies=[Depends(P_WHATSAPP)])
 def atualizar_grupos():
     """Busca os grupos da instância Evolution em segundo plano (pode levar minutos); consulte GET /api/alertas/grupos."""
     c = cfg()
@@ -971,12 +1003,12 @@ def atualizar_grupos():
     return {"status": GRUPOS["status"]}
 
 
-@app.get("/api/alertas/grupos", dependencies=[Depends(admin_auth)])
+@app.get("/api/alertas/grupos", dependencies=[Depends(P_WHATSAPP)])
 def listar_grupos_whatsapp():
     return {k: GRUPOS.get(k) for k in ("status", "grupos", "atualizado_em", "erro", "iniciado_em")}
 
 
-@app.get("/api/alertas/envios", dependencies=[Depends(admin_auth)])
+@app.get("/api/alertas/envios", dependencies=[Depends(P_WHATSAPP)])
 def historico_envios(limit: int = 50):
     with closing(db()) as con:
         return con.execute("SELECT * FROM alerta_envios ORDER BY id DESC LIMIT %s", (max(1, min(limit, 500)),)).fetchall()
@@ -1021,7 +1053,7 @@ def _extra_publico(extra) -> dict:
     return out
 
 
-@app.get("/api/dashboard", dependencies=[Depends(painel_auth)])
+@app.get("/api/dashboard", dependencies=[Depends(P_DASH)])
 def dashboard():
     """Visão geral para o Painel: monitoramento das antenas/agentes, alertas e números da operação."""
     now = time.time()
@@ -1076,7 +1108,7 @@ def dashboard():
     }
 
 
-@app.get("/api/tags", dependencies=[Depends(ui_auth)])
+@app.get("/api/tags", dependencies=[Depends(P_CONSULTAR)])
 def tags(hours: float = 24, limit: int = 200):
     since = time.time() - hours * 3600
     with closing(db()) as con:
@@ -1091,7 +1123,7 @@ def tags(hours: float = 24, limit: int = 200):
     return rows
 
 
-@app.get("/api/events", dependencies=[Depends(ui_auth)])
+@app.get("/api/events", dependencies=[Depends(P_CONSULTAR)])
 def events(limit: int = 100, epc: str | None = None, after_id: int = 0, raw: bool = False):
     sql = ("SELECT e.id,e.received_at,e.event_type,e.epc,e.tid,e.antenna,e.rssi,e.seen_at,i.tipo"
            + (",e.raw" if raw else "") + " FROM events e LEFT JOIN itens i ON i.epc=e.epc WHERE e.id>%s")
@@ -1133,7 +1165,7 @@ def classificar_epcs(con, epcs):
     return identificados, novos
 
 
-@app.post("/api/lotes/registrar", dependencies=[Depends(op_auth)])
+@app.post("/api/lotes/registrar", dependencies=[Depends(P_OPERAR)])
 def registrar_lote(janela_segundos: int = 15):
     janela_segundos = max(1, min(janela_segundos, 600))
     now = time.time()
@@ -1154,7 +1186,7 @@ def registrar_lote(janela_segundos: int = 15):
             "identificados": identificados, "novos": novos}
 
 
-@app.get("/api/lotes", dependencies=[Depends(ui_auth)])
+@app.get("/api/lotes", dependencies=[Depends(P_CONSULTAR)])
 def listar_lotes(status: str | None = None, limit: int = 100):
     sql = "SELECT * FROM lotes"
     args: list = []
@@ -1165,7 +1197,7 @@ def listar_lotes(status: str | None = None, limit: int = 100):
         return con.execute(sql, args).fetchall()
 
 
-@app.get("/api/lotes/{lote_id}", dependencies=[Depends(ui_auth)])
+@app.get("/api/lotes/{lote_id}", dependencies=[Depends(P_CONSULTAR)])
 def detalhe_lote(lote_id: int):
     with closing(db()) as con:
         lote = con.execute("SELECT * FROM lotes WHERE id=%s", (lote_id,)).fetchone()
@@ -1194,7 +1226,7 @@ class DivergenciaIn(BaseModel):
 
 
 @app.delete("/api/lotes/{lote_id}")
-def reiniciar_leitura(lote_id: int, _: dict = Depends(op_auth)):
+def reiniciar_leitura(lote_id: int, _: dict = Depends(P_EXCLUIR)):
     """'Reiniciar leitura': descarta um lote que ainda não foi transferido."""
     with closing(db()) as con:
         lote = con.execute("SELECT status FROM lotes WHERE id=%s", (lote_id,)).fetchone()
@@ -1209,7 +1241,7 @@ def reiniciar_leitura(lote_id: int, _: dict = Depends(op_auth)):
 
 
 @app.post("/api/lotes/{lote_id}/estado")
-def definir_estado_lote(lote_id: int, payload: EstadoLoteIn, _: dict = Depends(op_auth)):
+def definir_estado_lote(lote_id: int, payload: EstadoLoteIn, _: dict = Depends(P_OPERAR)):
     """'Definir estado' em lote: aplica o estado a todos os itens cadastrados do lote."""
     with closing(db()) as con:
         if not con.execute("SELECT 1 FROM lotes WHERE id=%s", (lote_id,)).fetchone():
@@ -1225,7 +1257,7 @@ def definir_estado_lote(lote_id: int, payload: EstadoLoteIn, _: dict = Depends(o
 
 
 @app.post("/api/lotes/{lote_id}/divergencia")
-def avisar_divergencia(lote_id: int, payload: DivergenciaIn, user: dict = Depends(op_auth)):
+def avisar_divergencia(lote_id: int, payload: DivergenciaIn, user: dict = Depends(P_OPERAR)):
     """'Clique aqui para nos avisar': manda a divergência de quantidade pelo WhatsApp aos destinatários ativos."""
     with closing(db()) as con:
         lote = con.execute("SELECT quantidade FROM lotes WHERE id=%s", (lote_id,)).fetchone()
@@ -1239,7 +1271,7 @@ def avisar_divergencia(lote_id: int, payload: DivergenciaIn, user: dict = Depend
     return {"ok": True, "enviados": sum(1 for x in r if not x["erro"]), "falhas": sum(1 for x in r if x["erro"])}
 
 
-@app.get("/api/transferencias/{transf_id}/comprovante", dependencies=[Depends(ui_auth)])
+@app.get("/api/transferencias/{transf_id}/comprovante", dependencies=[Depends(P_CONSULTAR)])
 def comprovante_transferencia(transf_id: int):
     with closing(db()) as con:
         t = con.execute("""SELECT t.id, t.lote_id, t.criado_em, t.usuario, t.observacao, d.nome destino
@@ -1253,7 +1285,7 @@ def comprovante_transferencia(transf_id: int):
 
 
 @app.post("/api/lotes/{lote_id}/transferir")
-def transferir_lote(lote_id: int, payload: TransferenciaIn, user: dict = Depends(op_auth)):
+def transferir_lote(lote_id: int, payload: TransferenciaIn, user: dict = Depends(P_OPERAR)):
     now = time.time()
     with closing(db()) as con:
         lote = con.execute("SELECT * FROM lotes WHERE id=%s", (lote_id,)).fetchone()
@@ -1274,7 +1306,7 @@ def transferir_lote(lote_id: int, payload: TransferenciaIn, user: dict = Depends
     return {"ok": True, "lote_id": lote_id, "transferencia_id": transf_id, "destino": destino["nome"], "criado_em": now}
 
 
-@app.get("/api/destinos", dependencies=[Depends(ui_auth)])
+@app.get("/api/destinos", dependencies=[Depends(P_CONSULTAR)])
 def listar_destinos(tipo: str | None = None, ativo: bool | None = None):
     sql = "SELECT * FROM destinos"
     cond, args = [], []
@@ -1289,7 +1321,7 @@ def listar_destinos(tipo: str | None = None, ativo: bool | None = None):
         return con.execute(sql, args).fetchall()
 
 
-@app.post("/api/destinos", dependencies=[Depends(admin_auth)])
+@app.post("/api/destinos", dependencies=[Depends(P_CADASTROS)])
 def criar_destino(payload: DestinoIn):
     if payload.tipo not in ("setor", "lavanderia"):
         raise HTTPException(400, "tipo deve ser 'setor' ou 'lavanderia'")
@@ -1307,7 +1339,7 @@ def criar_destino(payload: DestinoIn):
     return row
 
 
-@app.patch("/api/destinos/{destino_id}", dependencies=[Depends(admin_auth)])
+@app.patch("/api/destinos/{destino_id}", dependencies=[Depends(P_CADASTROS)])
 def atualizar_destino(destino_id: int, payload: DestinoPatch):
     with closing(db()) as con:
         if payload.ativo is not None:
@@ -1321,7 +1353,7 @@ def atualizar_destino(destino_id: int, payload: DestinoPatch):
     return row
 
 
-@app.get("/api/transferencias", dependencies=[Depends(ui_auth)])
+@app.get("/api/transferencias", dependencies=[Depends(P_CONSULTAR)])
 def listar_transferencias(destino_id: int | None = None, tipo: str | None = None,
                            desde: float | None = None, ate: float | None = None, limit: int = 200):
     sql = """SELECT t.id, t.lote_id, t.destino_id, d.nome destino_nome, d.tipo destino_tipo,
@@ -1355,7 +1387,7 @@ class ItemIn(BaseModel):
     data_compra: str | None = None
 
 
-@app.post("/api/itens", dependencies=[Depends(op_auth)])
+@app.post("/api/itens", dependencies=[Depends(P_CATALOGO)])
 def cadastrar_item(payload: ItemIn):
     epc, tipo = epc_manual(payload.epc) or "", payload.tipo.strip()
     if not epc or not tipo:
@@ -1388,7 +1420,7 @@ class LoteEdicaoIn(BaseModel):
     estado_id: int | None = None
 
 
-@app.post("/api/itens/editar-lote", dependencies=[Depends(op_auth)])
+@app.post("/api/itens/editar-lote", dependencies=[Depends(P_CATALOGO)])
 def editar_itens_lote(payload: LoteEdicaoIn):
     """Edita só os campos enviados (os ausentes não mudam; texto vazio limpa o campo, exceto `tipo`)."""
     epcs = list(dict.fromkeys(epc_manual(e) for e in payload.epcs if e and e.strip()))
@@ -1428,7 +1460,7 @@ def _normaliza_lista(epcs):
     return lista
 
 
-@app.post("/api/itens/consulta", dependencies=[Depends(ui_auth)])
+@app.post("/api/itens/consulta", dependencies=[Depends(P_CONSULTAR)])
 def consultar_itens(payload: ConsultaIn):
     """Leitor manual: diz quais EPCs colados/digitados já estão cadastrados e quais são novos ou inválidos."""
     lista = _normaliza_lista(payload.epcs)
@@ -1449,7 +1481,7 @@ class CadastroLoteIn(BaseModel):
     data_compra: str | None = None
 
 
-@app.post("/api/itens/cadastrar-lote", dependencies=[Depends(op_auth)])
+@app.post("/api/itens/cadastrar-lote", dependencies=[Depends(P_CATALOGO)])
 def cadastrar_itens_lote(payload: CadastroLoteIn):
     """Cadastra vários EPCs com os mesmos atributos. EPC já cadastrado não é alterado; inválido é devolvido."""
     tipo = payload.tipo.strip()
@@ -1473,7 +1505,7 @@ def cadastrar_itens_lote(payload: CadastroLoteIn):
     return {"cadastrados": len(validos) - antes, "ja_existiam": antes, "invalidos": invalidos}
 
 
-@app.get("/api/inventario/revisao", dependencies=[Depends(ui_auth)])
+@app.get("/api/inventario/revisao", dependencies=[Depends(P_CONSULTAR)])
 def revisao_inventario(dias: int = 30, limit: int = 500):
     """Qualidade do cadastro: EPCs fora do padrão e tags lidas pelas antenas que não estão no inventário."""
     dias = max(1, min(dias, 365))
@@ -1494,7 +1526,7 @@ def revisao_inventario(dias: int = 30, limit: int = 500):
             "lidas_sem_cadastro": sem_cadastro}
 
 
-@app.get("/api/itens", dependencies=[Depends(ui_auth)])
+@app.get("/api/itens", dependencies=[Depends(P_CONSULTAR)])
 def listar_itens(q: str | None = None, limit: int = 200):
     sql = f"SELECT * FROM ({ITENS_VIEW_SQL}) v"
     args: list = []
@@ -1506,7 +1538,7 @@ def listar_itens(q: str | None = None, limit: int = 200):
         return con.execute(sql, args).fetchall()
 
 
-@app.get("/api/itens/opcoes", dependencies=[Depends(ui_auth)])
+@app.get("/api/itens/opcoes", dependencies=[Depends(P_CONSULTAR)])
 def itens_opcoes():
     with closing(db()) as con:
         def distinct(col):
@@ -1531,13 +1563,13 @@ class EstadoItemIn(BaseModel):
     estado_id: int
 
 
-@app.get("/api/estados", dependencies=[Depends(ui_auth)])
+@app.get("/api/estados", dependencies=[Depends(P_CONSULTAR)])
 def listar_estados():
     with closing(db()) as con:
         return con.execute("SELECT * FROM estados_inventario ORDER BY padrao DESC, nome").fetchall()
 
 
-@app.post("/api/estados", dependencies=[Depends(admin_auth)])
+@app.post("/api/estados", dependencies=[Depends(P_CADASTROS)])
 def criar_estado(payload: EstadoIn):
     if payload.comportamento not in ("ativo", "inativo"):
         raise HTTPException(400, "comportamento deve ser 'ativo' ou 'inativo'")
@@ -1555,7 +1587,7 @@ def criar_estado(payload: EstadoIn):
     return row
 
 
-@app.patch("/api/itens/{epc}/estado", dependencies=[Depends(op_auth)])
+@app.patch("/api/itens/{epc}/estado", dependencies=[Depends(P_CATALOGO)])
 def definir_estado_item(epc: str, payload: EstadoItemIn):
     with closing(db()) as con:
         if not con.execute("SELECT 1 FROM itens WHERE epc=%s", (epc,)).fetchone():
@@ -1569,7 +1601,7 @@ def definir_estado_item(epc: str, payload: EstadoItemIn):
     return row
 
 
-@app.get("/api/inventario", dependencies=[Depends(ui_auth)])
+@app.get("/api/inventario", dependencies=[Depends(P_CONSULTAR)])
 def inventario(localizacao: str | None = None, estado: str | None = None, tipo: str | None = None,
                 fabricante: str | None = None, tamanho: str | None = None,
                 composicao: str | None = None, cor: str | None = None):
@@ -1619,7 +1651,7 @@ def registrar_saida(payload: SaidaIn):
     return {"epc": payload.epc, "destino": destino["nome"], "documentado": documentado, "detectado_em": now}
 
 
-@app.get("/api/saida", dependencies=[Depends(ui_auth)])
+@app.get("/api/saida", dependencies=[Depends(P_CONSULTAR)])
 def listar_saidas(documentado: bool | None = None, destino_id: int | None = None,
                    desde: float | None = None, ate: float | None = None, limit: int = 200):
     sql = """SELECT s.id, s.epc, s.destino_id, d.nome destino_nome, s.detectado_em, s.documentado, s.transferencia_id
@@ -1668,7 +1700,7 @@ def _valida_antena(con, p: AntenaIn) -> dict:
             "porta": p.porta, "evasao": p.evasao}
 
 
-@app.get("/api/antenas", dependencies=[Depends(ui_auth)])
+@app.get("/api/antenas", dependencies=[Depends(P_CONSULTAR)])
 def listar_antenas():
     with closing(db()) as con:
         return con.execute("""SELECT a.id, a.nome, a.descricao, a.modelo, a.destino_id, d.nome destino_nome,
@@ -1678,7 +1710,7 @@ def listar_antenas():
                               LEFT JOIN antena_status s ON s.antena_id=a.id ORDER BY a.nome""").fetchall()
 
 
-@app.post("/api/antenas", dependencies=[Depends(admin_auth)])
+@app.post("/api/antenas", dependencies=[Depends(P_CADASTROS)])
 def salvar_antena(payload: AntenaIn):
     with closing(db()) as con:
         v = _valida_antena(con, payload)
@@ -1691,7 +1723,7 @@ def salvar_antena(payload: AntenaIn):
     return {"ok": True}
 
 
-@app.put("/api/antenas/{antena_id}", dependencies=[Depends(admin_auth)])
+@app.put("/api/antenas/{antena_id}", dependencies=[Depends(P_CADASTROS)])
 def editar_antena(antena_id: int, payload: AntenaIn):
     with closing(db()) as con:
         if not con.execute("SELECT 1 FROM antenas WHERE id=%s", (antena_id,)).fetchone():
@@ -1731,7 +1763,7 @@ AGENTE_DIST = Path(os.environ.get("AGENTE_DIST", "/srv/agente"))
 AGENTE_ARQUIVOS = {"cabine-agent.exe": "application/octet-stream", "instalar.cmd": "text/plain", "cabine-agent.exe.sha256": "text/plain"}
 
 
-@app.get("/api/agente/download/{nome}", dependencies=[Depends(admin_auth)])
+@app.get("/api/agente/download/{nome}", dependencies=[Depends(P_SISTEMA)])
 def baixar_agente(nome: str):
     """Download do instalador do agente (só admin logado): .exe, instalar.cmd e o hash SHA-256."""
     if nome not in AGENTE_ARQUIVOS:
@@ -1747,7 +1779,7 @@ class AgenteIn(BaseModel):
 
 
 @app.post("/api/agentes")
-def criar_agente(b: AgenteIn, _: dict = Depends(admin_auth)):
+def criar_agente(b: AgenteIn, _: dict = Depends(P_SISTEMA)):
     nome = b.nome.strip()
     if not nome:
         raise HTTPException(400, "nome é obrigatório")
@@ -1762,13 +1794,13 @@ def criar_agente(b: AgenteIn, _: dict = Depends(admin_auth)):
     return {"id": ag["id"], "nome": nome, "token": token, "aviso": "guarde o token agora: ele não é mostrado de novo"}
 
 
-@app.get("/api/agentes", dependencies=[Depends(admin_auth)])
+@app.get("/api/agentes", dependencies=[Depends(P_SISTEMA)])
 def listar_agentes():
     with closing(db()) as con:
         return con.execute("SELECT id,nome,criado_em,visto_em,versao,host FROM agentes ORDER BY nome").fetchall()
 
 
-@app.delete("/api/agentes/{agente_id}", dependencies=[Depends(admin_auth)])
+@app.delete("/api/agentes/{agente_id}", dependencies=[Depends(P_SISTEMA)])
 def excluir_agente(agente_id: int):
     with closing(db()) as con:
         con.execute("DELETE FROM agentes WHERE id=%s", (agente_id,))
@@ -1845,7 +1877,7 @@ class ComandoIn(BaseModel):
 
 
 @app.post("/api/antenas/{antena_id}/comandos")
-def criar_comando(antena_id: int, b: ComandoIn, user: dict = Depends(admin_auth)):
+def criar_comando(antena_id: int, b: ComandoIn, user: dict = Depends(P_SISTEMA)):
     metodo = b.metodo.upper()
     if metodo not in ("GET", "PUT", "POST"):
         raise HTTPException(400, "método deve ser GET, PUT ou POST")
@@ -1865,7 +1897,7 @@ def criar_comando(antena_id: int, b: ComandoIn, user: dict = Depends(admin_auth)
     return {"id": cid}
 
 
-@app.get("/api/comandos/{cmd_id}", dependencies=[Depends(admin_auth)])
+@app.get("/api/comandos/{cmd_id}", dependencies=[Depends(P_SISTEMA)])
 def ler_comando(cmd_id: int):
     with closing(db()) as con:
         c = con.execute("SELECT * FROM comandos WHERE id=%s", (cmd_id,)).fetchone()
@@ -1886,7 +1918,7 @@ class AcomodacaoIn(BaseModel):
     itens: list[AcomodacaoItemIn] = []
 
 
-@app.get("/api/acomodacoes", dependencies=[Depends(ui_auth)])
+@app.get("/api/acomodacoes", dependencies=[Depends(P_CONSULTAR)])
 def listar_acomodacoes():
     with closing(db()) as con:
         acs = con.execute("SELECT id,nome,uhs FROM acomodacoes ORDER BY nome").fetchall()
@@ -1896,7 +1928,7 @@ def listar_acomodacoes():
     return acs
 
 
-@app.post("/api/acomodacoes", dependencies=[Depends(admin_auth)])
+@app.post("/api/acomodacoes", dependencies=[Depends(P_CADASTROS)])
 def salvar_acomodacao(payload: AcomodacaoIn):
     nome = payload.nome.strip()
     if not nome or payload.uhs < 0:
@@ -1913,7 +1945,7 @@ def salvar_acomodacao(payload: AcomodacaoIn):
     return {"ok": True, "id": ac_id}
 
 
-@app.get("/api/enxoval/esperado", dependencies=[Depends(ui_auth)])
+@app.get("/api/enxoval/esperado", dependencies=[Depends(P_CONSULTAR)])
 def enxoval_esperado(estado: str = "Em uso"):
     """Par de enxoval: esperado = Σ UHs × qtd por UH × fluxo (jogos em circulação), contra o atual no estado."""
     with closing(db()) as con:
@@ -1952,7 +1984,7 @@ def _stats(itens, iniciada, finalizada, agora):
 
 
 @app.post("/api/conferencias")
-def iniciar_conferencia(payload: ConferenciaIn, user: dict = Depends(op_auth)):
+def iniciar_conferencia(payload: ConferenciaIn, user: dict = Depends(P_CONF)):
     filtros = {k: v for k, v in payload.filtros.items() if k in FILTRO_CAMPOS and v}
     where, args = filtro_sql(filtros)
     now = time.time()
@@ -1972,13 +2004,13 @@ def iniciar_conferencia(payload: ConferenciaIn, user: dict = Depends(op_auth)):
     return {"id": cid, "esperados": len(itens), "filtros_desc": desc}
 
 
-@app.get("/api/conferencias", dependencies=[Depends(ui_auth)])
+@app.get("/api/conferencias", dependencies=[Depends(P_CONSULTAR)])
 def listar_conferencias():
     with closing(db()) as con:
         return con.execute("SELECT * FROM conferencias ORDER BY id DESC LIMIT 100").fetchall()
 
 
-@app.get("/api/conferencias/{cid}", dependencies=[Depends(ui_auth)])
+@app.get("/api/conferencias/{cid}", dependencies=[Depends(P_CONSULTAR)])
 def detalhe_conferencia(cid: int, somente: str | None = None, limit: int = 5000):
     now = time.time()
     with closing(db()) as con:
@@ -2000,7 +2032,7 @@ def detalhe_conferencia(cid: int, somente: str | None = None, limit: int = 5000)
     return {**c, **stats, "itens": itens[:min(limit, 10000)]}
 
 
-@app.get("/api/conferencias/{cid}/export.csv", dependencies=[Depends(ui_auth)])
+@app.get("/api/conferencias/{cid}/export.csv", dependencies=[Depends(P_EXPORTAR)])
 def export_conferencia(cid: int):
     d = detalhe_conferencia(cid, None, 10000)
     return csv_resp(f"conferencia-{cid}.csv", ["epc", "item", "situacao", "conferido_em"],
@@ -2008,7 +2040,7 @@ def export_conferencia(cid: int):
                       hora_local(i["conferido_em"]) if i["conferido_em"] else "") for i in d["itens"]])
 
 
-@app.post("/api/conferencias/{cid}/finalizar", dependencies=[Depends(op_auth)])
+@app.post("/api/conferencias/{cid}/finalizar", dependencies=[Depends(P_CONF)])
 def finalizar_conferencia(cid: int):
     now = time.time()
     with closing(db()) as con:
@@ -2057,7 +2089,7 @@ def login(payload: LoginIn, request: Request):
         audita_login(request, payload.usuario.strip(), "falha")
         raise HTTPException(401, "usuário ou senha inválidos")
     audita_login(request, u["usuario"], "ok")
-    resp = JSONResponse({"usuario": u["usuario"], "nome": u["nome"], "papel": u["papel"]})
+    resp = JSONResponse({"usuario": u["usuario"], "nome": u["nome"], "papel": u["papel"], "permissoes": sorted(u["perms"])})
     resp.set_cookie(COOKIE, emite_token(u), max_age=SESSION_HORAS * 3600, httponly=True, samesite="lax",
                     secure=request.headers.get("x-forwarded-proto") == "https")
     return resp
@@ -2073,7 +2105,7 @@ def _filtro_logins(usuario, resultado, dias):
     return " AND ".join(where), args
 
 
-@app.get("/api/auditoria/logins", dependencies=[Depends(admin_auth)])
+@app.get("/api/auditoria/logins", dependencies=[Depends(P_AUDITORIA)])
 def auditoria_logins(usuario: str | None = None, resultado: str | None = None, dias: int = 30, limit: int = 300):
     where, args = _filtro_logins(usuario, resultado, dias)
     with closing(db()) as con:
@@ -2084,7 +2116,7 @@ def auditoria_logins(usuario: str | None = None, resultado: str | None = None, d
     return {"resumo": {"ok": res.get("ok", 0), "falha": res.get("falha", 0), "bloqueado": res.get("bloqueado", 0)}, "logins": rows}
 
 
-@app.get("/api/auditoria/logins.csv", dependencies=[Depends(admin_auth)])
+@app.get("/api/auditoria/logins.csv", dependencies=[Depends(P_AUDITORIA)])
 def auditoria_logins_csv(usuario: str | None = None, resultado: str | None = None, dias: int = 30):
     where, args = _filtro_logins(usuario, resultado, dias)
     with closing(db()) as con:
@@ -2102,7 +2134,7 @@ def logout():
 
 @app.get("/api/me")
 def me(u: dict = Depends(painel_auth)):
-    return {"usuario": u["usuario"], "nome": u["nome"], "papel": u["papel"]}
+    return {"usuario": u["usuario"], "nome": u["nome"], "papel": u["papel"], "permissoes": sorted(u["perms"])}
 
 
 
@@ -2118,7 +2150,7 @@ def hora_local(epoch):
     return time.strftime("%d/%m/%Y %H:%M", time.gmtime(epoch + TZ_OFFSET)) if epoch else ""
 
 
-@app.get("/api/leituras-hora", dependencies=[Depends(ui_auth)])
+@app.get("/api/leituras-hora", dependencies=[Depends(P_CONSULTAR)])
 def leituras_hora(horas: int = 168):
     desde = int(time.time() // 3600 * 3600) - max(1, min(horas, 24 * 90)) * 3600
     with closing(db()) as con:
@@ -2126,7 +2158,7 @@ def leituras_hora(horas: int = 168):
                               WHERE hora>=%s GROUP BY hora ORDER BY hora DESC""", (desde,)).fetchall()
 
 
-@app.get("/api/export/leituras.csv", dependencies=[Depends(ui_auth)])
+@app.get("/api/export/leituras.csv", dependencies=[Depends(P_EXPORTAR)])
 def export_leituras(horas: int = 168):
     desde = int(time.time() // 3600 * 3600) - max(1, min(horas, 24 * 365)) * 3600
     with closing(db()) as con:
@@ -2136,7 +2168,7 @@ def export_leituras(horas: int = 168):
                     [(hora_local(r["hora"]), r["epc"], r["tipo"] or "", r["leituras"], r["melhor_rssi"] if r["melhor_rssi"] is not None else "") for r in rows])
 
 
-@app.get("/api/export/inventario.csv", dependencies=[Depends(ui_auth)])
+@app.get("/api/export/inventario.csv", dependencies=[Depends(P_EXPORTAR)])
 def export_inventario():
     with closing(db()) as con:
         rows = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v ORDER BY v.tipo, v.epc").fetchall()
@@ -2145,7 +2177,7 @@ def export_inventario():
                       r["data_compra"] or "", r["localizacao"] or "", r["estado"]) for r in rows])
 
 
-@app.get("/api/export/transferencias.csv", dependencies=[Depends(ui_auth)])
+@app.get("/api/export/transferencias.csv", dependencies=[Depends(P_EXPORTAR)])
 def export_transferencias():
     with closing(db()) as con:
         rows = con.execute("""SELECT t.lote_id, t.criado_em, d.nome destino, d.tipo, t.usuario, l.quantidade, t.observacao
@@ -2155,7 +2187,7 @@ def export_transferencias():
                     [(r["lote_id"], hora_local(r["criado_em"]), r["destino"], r["tipo"], r["usuario"] or "", r["quantidade"], r["observacao"] or "") for r in rows])
 
 
-@app.get("/api/sessoes", dependencies=[Depends(ui_auth)])
+@app.get("/api/sessoes", dependencies=[Depends(P_CONSULTAR)])
 def listar_sessoes(limit: int = 50):
     with closing(db()) as con:
         return {"auto": SESSAO_AUTO, "ocioso_segundos": SESSAO_OCIOSO,
@@ -2207,27 +2239,41 @@ class UsuarioPatch(BaseModel):
     senha: str | None = None
 
 
-def _valida_usuario(papel, senha):
-    if papel is not None and papel not in PAPEIS:
-        raise HTTPException(400, "papel deve ser painel, leitura, operador ou admin")
+def _perms_do_perfil(con, nome):
+    r = con.execute("SELECT permissoes FROM perfis WHERE nome=%s", (nome,)).fetchone()
+    return _perms(r["permissoes"]) if r else None
+
+
+def _pode_conceder(u, perms):
+    """Só o admin concede qualquer coisa; os demais só concedem permissões que eles próprios têm (sem escalar privilégio)."""
+    return u["papel"] == "admin" or set(perms) <= set(u["perms"])
+
+
+def _valida_usuario(con, u, papel, senha):
+    if papel is not None:
+        perms = _perms_do_perfil(con, papel)
+        if perms is None:
+            raise HTTPException(400, f"perfil '{papel}' não existe")
+        if not _pode_conceder(u, perms):
+            raise HTTPException(403, "você não pode atribuir um perfil com permissões que você não tem")
     if senha is not None and len(senha) < 8:
         raise HTTPException(400, "a senha precisa ter ao menos 8 caracteres")
 
 
-@app.get("/api/usuarios", dependencies=[Depends(admin_auth)])
+@app.get("/api/usuarios", dependencies=[Depends(P_USUARIOS)])
 def listar_usuarios():
     with closing(db()) as con:
         return con.execute("""SELECT id,usuario,nome,papel,ativo,(senha_hash IS NOT NULL) AS tem_senha
                               FROM usuarios ORDER BY usuario""").fetchall()
 
 
-@app.post("/api/usuarios", dependencies=[Depends(admin_auth)])
-def criar_usuario(payload: UsuarioIn):
+@app.post("/api/usuarios")
+def criar_usuario(payload: UsuarioIn, u: dict = Depends(P_USUARIOS)):
     nome_login = payload.usuario.strip().lower()
     if not nome_login or " " in nome_login:
         raise HTTPException(400, "usuário obrigatório, sem espaços")
-    _valida_usuario(payload.papel, payload.senha)
     with closing(db()) as con:
+        _valida_usuario(con, u, payload.papel, payload.senha)
         try:
             con.execute("INSERT INTO usuarios(usuario,nome,senha_hash,papel,ativo,criado_em) VALUES(%s,%s,%s,%s,1,%s)",
                         (nome_login, payload.nome, hash_senha(payload.senha) if payload.senha else None, payload.papel, time.time()))
@@ -2237,12 +2283,15 @@ def criar_usuario(payload: UsuarioIn):
     return {"ok": True}
 
 
-@app.patch("/api/usuarios/{uid}", dependencies=[Depends(admin_auth)])
-def atualizar_usuario(uid: int, payload: UsuarioPatch):
-    _valida_usuario(payload.papel, payload.senha)
+@app.patch("/api/usuarios/{uid}")
+def atualizar_usuario(uid: int, payload: UsuarioPatch, u: dict = Depends(P_USUARIOS)):
     with closing(db()) as con:
-        if not con.execute("SELECT 1 FROM usuarios WHERE id=%s", (uid,)).fetchone():
+        alvo = con.execute("SELECT papel FROM usuarios WHERE id=%s", (uid,)).fetchone()
+        if not alvo:
             raise HTTPException(404, "usuário não encontrado")
+        _valida_usuario(con, u, payload.papel, payload.senha)
+        if not _pode_conceder(u, _perms_do_perfil(con, alvo["papel"]) or set()):  # não mexe em quem tem mais poder que você
+            raise HTTPException(403, "esse usuário tem permissões que você não tem")
         if payload.nome is not None:
             con.execute("UPDATE usuarios SET nome=%s WHERE id=%s", (payload.nome, uid))
         if payload.papel is not None:
@@ -2253,6 +2302,83 @@ def atualizar_usuario(uid: int, payload: UsuarioPatch):
             con.execute("UPDATE usuarios SET senha_hash=%s WHERE id=%s", (hash_senha(payload.senha), uid))
         con.commit()
     return {"ok": True}
+
+
+class PerfilIn(BaseModel):
+    nome: str | None = None
+    descricao: str | None = None
+    permissoes: list[str] = []
+
+
+def _valida_perfil(u, perms):
+    desconhecidas = [p for p in perms if p not in PERMISSOES]
+    if desconhecidas:
+        raise HTTPException(400, f"permissão desconhecida: {desconhecidas[0]}")
+    if not _pode_conceder(u, perms):
+        raise HTTPException(403, "você não pode conceder permissões que você não tem")
+
+
+@app.get("/api/perfis", dependencies=[Depends(P_USUARIOS)])
+def listar_perfis():
+    with closing(db()) as con:
+        rows = con.execute("""SELECT p.nome, p.descricao, p.permissoes, (SELECT COUNT(*) FROM usuarios u WHERE u.papel=p.nome) AS usuarios
+                              FROM perfis p ORDER BY (p.nome='admin') DESC, p.nome""").fetchall()
+    return {"permissoes": [{"id": k, "rotulo": v} for k, v in PERMISSOES.items()],
+            "perfis": [{"nome": r["nome"], "descricao": r["descricao"], "permissoes": sorted(_perms(r["permissoes"])),
+                        "usuarios": r["usuarios"], "fixo": r["nome"] == "admin"} for r in rows]}
+
+
+@app.post("/api/perfis")
+def criar_perfil(payload: PerfilIn, u: dict = Depends(P_USUARIOS)):
+    nome = (payload.nome or "").strip()
+    if not re.fullmatch(r"[A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9 _-]{1,39}", nome):
+        raise HTTPException(400, "nome do perfil: 2 a 40 caracteres (letras, números, espaço, _ ou -)")
+    if nome.lower() == "admin":
+        raise HTTPException(409, "o perfil admin é reservado")
+    _valida_perfil(u, payload.permissoes)
+    with closing(db()) as con:
+        if con.execute("SELECT 1 FROM perfis WHERE lower(nome)=lower(%s)", (nome,)).fetchone():
+            raise HTTPException(409, "já existe um perfil com esse nome")
+        con.execute("INSERT INTO perfis(nome,descricao,permissoes,criado_em) VALUES(%s,%s,%s,%s)",
+                    (nome, (payload.descricao or "").strip() or None, json.dumps(sorted(set(payload.permissoes))), time.time()))
+        con.commit()
+    return {"ok": True}
+
+
+@app.put("/api/perfis/{nome}")
+def editar_perfil(nome: str, payload: PerfilIn, u: dict = Depends(P_USUARIOS)):
+    if nome == "admin":
+        raise HTTPException(403, "o perfil admin não pode ser alterado")
+    _valida_perfil(u, payload.permissoes)
+    with closing(db()) as con:
+        atual = _perms_do_perfil(con, nome)
+        if atual is None:
+            raise HTTPException(404, "perfil não encontrado")
+        if not _pode_conceder(u, atual):
+            raise HTTPException(403, "esse perfil tem permissões que você não tem")
+        con.execute("UPDATE perfis SET descricao=%s, permissoes=%s WHERE nome=%s",
+                    ((payload.descricao or "").strip() or None, json.dumps(sorted(set(payload.permissoes))), nome))
+        con.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/perfis/{nome}")
+def excluir_perfil(nome: str, u: dict = Depends(P_USUARIOS)):
+    if nome == "admin":
+        raise HTTPException(403, "o perfil admin não pode ser excluído")
+    with closing(db()) as con:
+        atual = _perms_do_perfil(con, nome)
+        if atual is None:
+            raise HTTPException(404, "perfil não encontrado")
+        if not _pode_conceder(u, atual):
+            raise HTTPException(403, "esse perfil tem permissões que você não tem")
+        n = con.execute("SELECT COUNT(*) n FROM usuarios WHERE papel=%s", (nome,)).fetchone()["n"]
+        if n:
+            raise HTTPException(409, f"{n} usuário(s) usam este perfil; troque o perfil deles antes de excluir")
+        con.execute("DELETE FROM perfis WHERE nome=%s", (nome,))
+        con.commit()
+    return {"ok": True}
+
 
 @app.get("/")
 def index(u=Depends(usuario_opt)):

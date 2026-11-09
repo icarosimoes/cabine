@@ -78,8 +78,7 @@ Localizacao do item = destino da ultima transferencia do lote que o continha (`I
 ## Rotas
 
 Auth: `/ingest` = `WEBHOOK_*`; `POST /api/saida` = `SAIDA_*`; `/api/agente/{config,status,comandos/..}` = `X-Agent-Token`;
-demais `/api/*` e `/` = login (cookie de sessao ou Basic) com papel minimo por rota: `painel` (so `/api/dashboard`, `/api/summary`, `/api/me`)
-< `leitura` (le tudo) < `operador` (grava operacao) < `admin` (cadastros, usuarios, alertas, agentes). Abertos: `/health`, `/login`, `/api/login`,
+demais `/api/*` e `/` = login (cookie de sessao ou Basic) com a **permissao** da rota (tabela `perfis`: dashboard, consultar, operar_cabine, excluir_lotes, catalogo_editar, conferencia, cadastros, exportar, alertas_whatsapp, usuarios, auditoria, sistema; o perfil `admin` e fixo e tem todas; `/api/summary` e `/api/me` valem para qualquer logado; detalhes em `docs/api.md`). Abertos: `/health`, `/login`, `/api/login`,
 `/api/logout` e os arquivos PWA. Falhas de login/Basic/webhook entram no rate limit (8 em 5 min por IP; usa o ultimo IP do `X-Forwarded-For`).
 
 | Area | Rotas |

@@ -28,7 +28,7 @@ Dados de exemplo: `scripts/seed_exemplo.py`. Config do leitor: Enable Webhook Ou
 
 ## API
 
-Rotas em [`docs/mapa.md`](docs/mapa.md); detalhes em [`docs/api.md`](docs/api.md). Exigem login (cookie ou Basic) com o papel da rota, exceto
+Rotas em [`docs/mapa.md`](docs/mapa.md); detalhes em [`docs/api.md`](docs/api.md). Exigem login (cookie ou Basic) com a permissao da rota (perfis em `docs/api.md`), exceto
 `/ingest` (`WEBHOOK_*`), `POST /api/saida` (`SAIDA_*`), `/api/agente/*` (`X-Agent-Token`), `/health`, `/login` e os arquivos do PWA.
 
 ## Aviso

@@ -96,7 +96,8 @@ def test_login_papeis_e_cookie(client):
     assert anon.post("/api/login", json={"usuario": "bia", "senha": "qualquer"}).status_code == 401  # sem senha não loga
     assert anon.post("/api/login", json={"usuario": "ana", "senha": "errada"}).status_code == 401
     assert anon.post("/api/login", json={"usuario": "ana", "senha": "senha-forte-1"}).status_code == 200
-    assert anon.get("/api/me").json() == {"usuario": "ana", "nome": "ana", "papel": "leitura"}
+    me = anon.get("/api/me").json()
+    assert (me["usuario"], me["papel"]) == ("ana", "leitura") and "consultar" in me["permissoes"] and "catalogo_editar" not in me["permissoes"]
     assert anon.get("/api/summary").status_code == 200
     assert anon.post("/api/itens", json={"epc": "AB01", "tipo": "x"}).status_code == 403  # leitura não escreve
     assert anon.get("/api/usuarios").status_code == 403
@@ -630,3 +631,56 @@ def test_auditoria_de_logins_so_admin_e_sem_senha(client):
         anon.post("/api/login", json={"usuario": "x", "senha": "y"})
     main._falhas.clear()  # o IP do teste (também do admin) está bloqueado
     assert client.get("/api/auditoria/logins?resultado=bloqueado").json()["resumo"]["bloqueado"] >= 1
+
+
+def test_perfis_criar_editar_excluir_e_admin_fixo(client):
+    r = client.get("/api/perfis").json()
+    assert [p["nome"] for p in r["perfis"]][0] == "admin" and r["perfis"][0]["fixo"] is True
+    assert set(r["perfis"][0]["permissoes"]) == {p["id"] for p in r["permissoes"]}  # admin tem todas
+    assert {p["nome"] for p in r["perfis"]} >= {"operador", "leitura", "painel"}
+    for ruim in ({"nome": "x", "permissoes": []}, {"nome": "admin", "permissoes": []}, {"nome": "Novo", "permissoes": ["voar"]}):
+        assert client.post("/api/perfis", json=ruim).status_code in (400, 409)
+    assert client.post("/api/perfis", json={"nome": "Supervisor", "descricao": "d", "permissoes": ["dashboard", "consultar", "excluir_lotes"]}).status_code == 200
+    assert client.post("/api/perfis", json={"nome": "supervisor", "permissoes": []}).status_code == 409  # nome igual sem diferenciar caixa
+    assert client.put("/api/perfis/Supervisor", json={"permissoes": ["dashboard", "consultar"]}).status_code == 200
+    assert client.put("/api/perfis/admin", json={"permissoes": []}).status_code == 403
+    assert client.delete("/api/perfis/admin").status_code == 403
+    assert client.put("/api/perfis/naoexiste", json={"permissoes": []}).status_code == 404
+    client.post("/api/usuarios", json={"usuario": "sup", "papel": "Supervisor", "senha": "senha-forte-1"})
+    assert client.delete("/api/perfis/Supervisor").status_code == 409  # em uso
+    uid = next(u["id"] for u in client.get("/api/usuarios").json() if u["usuario"] == "sup")
+    client.patch(f"/api/usuarios/{uid}", json={"papel": "leitura"})
+    assert client.delete("/api/perfis/Supervisor").status_code == 200
+    assert client.post("/api/usuarios", json={"usuario": "z", "papel": "Supervisor"}).status_code == 400  # perfil inexistente
+    assert client.delete("/api/perfis/painel").status_code == 200  # perfis padrão também podem ser excluídos
+    main.init_db()  # reiniciar não recria o perfil excluído
+    assert "painel" not in [p["nome"] for p in client.get("/api/perfis").json()["perfis"]]
+
+
+def test_permissoes_granulares_por_rota(client):
+    client.post("/api/perfis", json={"nome": "Cadastrista", "permissoes": ["consultar", "catalogo_editar"]})
+    client.post("/api/usuarios", json={"usuario": "cad", "papel": "Cadastrista", "senha": "senha-forte-1"})
+    c = client.__class__(client.app)
+    assert c.post("/api/login", json={"usuario": "cad", "senha": "senha-forte-1"}).status_code == 200
+    assert c.post("/api/itens", json={"epc": "AB01", "tipo": "x"}).status_code == 200  # catalogo_editar
+    assert c.get("/api/itens").status_code == 200  # consultar
+    assert c.get("/api/dashboard").status_code == 403  # sem a permissão dashboard
+    assert c.post("/api/lotes/registrar").status_code == 403  # sem operar_cabine
+    assert c.delete("/api/lotes/1").status_code == 403  # sem excluir_lotes
+    assert c.get("/api/export/inventario.csv").status_code == 403  # sem exportar
+    assert c.post("/api/destinos", json={"nome": "x", "tipo": "hospede"}).status_code == 403  # sem cadastros
+    assert c.get("/api/auditoria/logins").status_code == 403 and c.get("/api/perfis").status_code == 403
+    assert c.get("/api/me").status_code == 200  # qualquer logado
+
+
+def test_quem_gerencia_usuarios_nao_escala_privilegio(client):
+    client.post("/api/perfis", json={"nome": "RH", "permissoes": ["usuarios", "consultar"]})
+    client.post("/api/usuarios", json={"usuario": "rh", "papel": "RH", "senha": "senha-forte-1"})
+    c = client.__class__(client.app)
+    c.post("/api/login", json={"usuario": "rh", "senha": "senha-forte-1"})
+    assert c.post("/api/perfis", json={"nome": "Poderoso", "permissoes": ["auditoria"]}).status_code == 403  # não tem 'auditoria'
+    assert c.post("/api/perfis", json={"nome": "Basico", "permissoes": ["consultar"]}).status_code == 200  # subconjunto do que ele tem
+    assert c.post("/api/usuarios", json={"usuario": "novo", "papel": "admin", "senha": "senha-forte-1"}).status_code == 403
+    assert c.post("/api/usuarios", json={"usuario": "novo", "papel": "Basico", "senha": "senha-forte-1"}).status_code == 200
+    uid_admin_like = next(u["id"] for u in c.get("/api/usuarios").json() if u["usuario"] == "novo")
+    assert c.patch(f"/api/usuarios/{uid_admin_like}", json={"papel": "operador"}).status_code == 403  # operador tem mais poder

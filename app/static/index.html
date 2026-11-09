@@ -33,6 +33,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Ar
 .nav-section:hover{color:var(--text)}
 .nav-section .chev{width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);transition:transform .15s;margin-top:-3px}
 .nav-group.fechado .nav-section .chev{transform:rotate(-45deg);margin-top:0}
+.pfBox{border:1px solid var(--line);border-radius:var(--r-md);padding:12px;background:var(--navy-mid)}
+.pfBox b{font-size:13px;font-weight:700;color:var(--text)}
+.pfGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:6px 16px;margin-top:10px}
+.pfGrid label{font-size:12px}.pfGrid b{font-size:12px}
 .nav-solo{margin:var(--sp-2) 0 2px;font-size:13px}
 .nav-sub{margin:2px 0 4px 18px;padding-left:6px;border-left:2px solid color-mix(in srgb,var(--muted) 45%,transparent)}
 .nav-sub .nav-item.active{box-shadow:-8px 0 0 -6px var(--teal)}
@@ -71,9 +75,6 @@ button:disabled{opacity:.5;cursor:default}
 .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--navy-light)}
 .pill.setor{color:var(--teal)}.pill.lavanderia{color:var(--yellow)}
 .pill.alerta{background:var(--red-soft);color:var(--red)}.pill.ok,.pill.ativo{background:var(--green-soft);color:var(--green)}.pill.inativo{background:var(--red-soft);color:var(--red)}
-body.so-painel .nav-section,body.so-painel .nav-item:not([data-nav=painel]):not(#tema):not(#sair){display:none}
-body.so-painel .nav-group.fechado .nav-sub{display:block}
-body.so-painel .nav-sub{margin:0;padding:0;border:0}
 .banner{border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-weight:700;display:flex;gap:10px;align-items:center}
 .banner.ok{background:var(--green-soft);color:var(--green);border-color:var(--green)}.banner.bad{background:var(--red-soft);color:var(--red);border-color:var(--red)}
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr));gap:16px}.grid2>section{margin-bottom:0}
@@ -451,7 +452,7 @@ table.rt td[colspan]::before{content:none}}
 <div class="view" data-view="eventos" hidden>
 <section>
   <h2><span>Eventos ao vivo</span><button id="limpar" hidden>limpar filtro</button></h2>
-  <div class="scroll"><table><thead><tr><th>Hora</th><th>EPC</th><th>Item</th><th>Antena</th><th>RSSI</th></tr></thead><tbody id="evs"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Data e hora</th><th>EPC</th><th>Item</th><th>Antena</th><th>RSSI</th></tr></thead><tbody id="evs"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="conferencia" hidden>
@@ -510,13 +511,20 @@ table.rt td[colspan]::before{content:none}}
   <div class="row">
     <input id="usLogin" type="text" placeholder="login (sem espaços)">
     <input id="usNome" type="text" placeholder="nome">
-    <select id="usPapel"><option value="operador">operador</option><option value="leitura">leitura</option><option value="painel">painel (só dashboard)</option><option value="admin">admin</option></select>
+    <select id="usPapel"></select>
     <input id="usSenha" type="password" placeholder="senha (mín. 8) — opcional" autocomplete="new-password">
     <button class="acc" id="usSalvar">Cadastrar</button>
   </div>
   <div id="usMsg" class="msg"></div>
-  <div class="mut" style="padding:0 16px 8px">Papéis: <b>leitura</b> só consulta · <b>operador</b> também registra leituras, transfere, cadastra itens e faz conferências · <b>admin</b> também gerencia destinos, estados, antenas, acomodações e usuários. Sem senha cadastrada o usuário não consegue entrar.</div>
+  <div class="mut" style="padding:0 16px 8px">O que cada usuário pode fazer vem do <b>perfil</b> dele (veja e edite os perfis logo abaixo). O perfil <b>admin</b> é fixo e tem todas as permissões.</div>
   <div class="scroll"><table><thead><tr><th>Login</th><th>Nome</th><th>Papel</th><th>Senha</th><th>Status</th><th></th></tr></thead><tbody id="usuarios"></tbody></table></div>
+</section>
+<section>
+  <h2><span>Perfis de acesso</span></h2>
+  <div class="row"><input id="pfNome" type="text" placeholder="nome do novo perfil" style="width:200px"><input id="pfDesc" type="text" placeholder="descrição (opcional)" style="flex:1;min-width:180px"><button class="acc" id="pfCriar">Criar perfil</button></div>
+  <div id="pfMsg" class="msg"></div>
+  <div class="mut" style="padding:0 16px 8px">Marque as permissões do novo perfil abaixo (na primeira linha, "novo perfil") e clique em Criar; nos demais, marque e clique em Salvar. Só o admin é fixo.</div>
+  <div id="perfis" style="padding:0 16px 16px;display:grid;gap:12px"></div>
 </section>
 </div>
 <div class="view" data-view="relatorios" hidden>
@@ -608,7 +616,7 @@ const LOADERS={
   inventario:async()=>{await carregarOpcoesInventario();await carregarInventario()},
   conferencia:()=>carregarConferencias(),
   antenas:()=>carregarAntenas(),
-  usuarios:()=>carregarUsuarios(),
+  usuarios:()=>{if(!usCarregado)return carregarUsuarios()},
   alertaswa:async()=>{await carregarAlertasWa();if(!document.activeElement||!/^(INPUT|SELECT)$/.test(document.activeElement.tagName))await carregarDestinatariosWa()},
   acomodacoes:()=>carregarAcomodacoes(),
   catalogo:()=>carregarCatalogo(),
@@ -620,7 +628,7 @@ const LOADERS={
   tags:async()=>{const t=await j('/api/tags?hours='+$('hours').value);
     $('tags').innerHTML=t.map(t=>`<tr><td class="epc" data-e="${esc(t.epc)}">${esc(t.epc)}</td><td>${itemTipo(t.tipo)}</td><td>${t.reads}</td><td>${dt(t.last)}</td><td>${esc(t.antennas)}</td><td>${t.best_rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=6>sem leituras</td></tr>'},
   eventos:async()=>{const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
-    $('evs').innerHTML=evs.map(e=>`<tr><td>${hm(e.received_at)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${itemTipo(e.tipo)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>'},
+    $('evs').innerHTML=evs.map(e=>`<tr><td>${dt(e.received_at)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${itemTipo(e.tipo)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>'},
 };
 const ROTULO_ALERTA={antena_offline:'Antena offline',agente_offline:'Agente sem contato',webhook_falha:'Webhook do rádio',sem_sinal:'Rádio sem sinal',falhas:'Falhas no /ingest',divergencia:'Divergência',teste:'Teste'};
 const ha=t=>{if(!t)return '–';const a=Date.now()/1000-t;return a<5?'agora':a<90?Math.round(a)+'s atrás':a<5400?Math.round(a/60)+' min atrás':a<172800?Math.round(a/3600)+' h atrás':Math.round(a/86400)+' d atrás'};
@@ -637,7 +645,7 @@ async function carregarDashboard(){
   set('dAgentes',d.agentes.length?`${agOn}/${d.agentes.length}`:'–',d.agentes.length&&agOn<d.agentes.length?'ruim':'bom');
   set('dAlertas',d.alertas.enviados_24h,d.alertas.falhas_24h?'ruim':'');
   set('dTransfHoje',d.cabine.pecas_hoje);set('dItens',d.inventario.total);
-  if(eu&&eu.papel==='painel'){$('cPend').textContent=d.cabine.lotes_aguardando;$('cEvasao').textContent=d.evasao.nao_documentadas_24h}
+  if(!tem('consultar')){$('cPend').textContent=d.cabine.lotes_aguardando;$('cEvasao').textContent=d.evasao.nao_documentadas_24h}
   $('antCount').textContent=d.antenas.length?'· '+d.antenas.length:'';
   $('dAntenasTb').innerHTML=d.antenas.map(a=>{
     const x=a.extra||{},w=x.webhook,det=[a.detalhe||'',x.uptime?'uptime '+x.uptime:'',w&&w.status!=='active'?'webhook '+w.status:''].filter(Boolean).join(' · ');
@@ -662,7 +670,7 @@ async function tick(){
     $('dot').className='dot '+(ok?'ok':'bad');
     const dur=a=>a<90?Math.round(a)+'s':Math.round(a/60)+' min';
     $('status').textContent=age===null?'rádio: sem sinal':'rádio: '+(ok?'enviando sinal':'sem sinal há '+dur(age))+(s.gravando?' · gravando':'');
-    if(!eu||eu.papel!=='painel'){ // o perfil 'painel' só acessa /api/dashboard e /api/summary
+    if(tem('consultar')){ // sem 'consultar' só chegam /api/dashboard e /api/summary
       const [pend,nao]=await Promise.all([j('/api/lotes?status=aguardando&limit=500'),j('/api/saida?documentado=false&limit=200')]);
       $('cPend').textContent=pend.length;$('cEvasao').textContent=nao.length;$('badgeEvasao').textContent=nao.length||'';
     }
@@ -671,7 +679,8 @@ async function tick(){
 }
 function rota(){
   const h=(location.hash||'#painel').slice(1);
-  view=TITULOS[h]&&!(eu&&eu.papel==='painel'&&h!=='painel')?h:'painel';
+  view=TITULOS[h]&&podeVer(h)?h:(Object.keys(TITULOS).find(podeVer)||'painel');
+  if(view!==h&&location.hash.slice(1)!==view)history.replaceState(null,'','#'+view);
   document.querySelectorAll('.view').forEach(v=>v.hidden=v.dataset.view!==view);
   document.querySelectorAll('[data-nav]').forEach(a=>a.classList.toggle('active',a.dataset.nav===view));
   const ativo=document.querySelector(`.nav-sub [data-nav="${view}"]`);if(ativo){const g=ativo.closest('.nav-group');g.classList.remove('fechado');g.querySelector('.nav-section').setAttribute('aria-expanded','true')}
@@ -1020,25 +1029,58 @@ $('confFinalizar').onclick=async()=>{
   try{await j('/api/conferencias/'+confId+'/finalizar',{method:'POST'});await carregarConferencias()}catch(e){alert(e.message)}
 };
 let eu=null;
+const tem=p=>!eu||(eu.permissoes||[]).includes(p);
+const NAV_PERM={painel:'dashboard',usuarios:'usuarios',alertaswa:'alertas_whatsapp',auditoria:'auditoria'};
+const podeVer=h=>tem(NAV_PERM[h]||'consultar');
+function aplicaPermissoes(){
+  document.querySelectorAll('[data-nav]').forEach(a=>a.hidden=!podeVer(a.dataset.nav));
+  document.querySelectorAll('.nav-group').forEach(g=>g.hidden=![...g.querySelectorAll('.nav-item')].some(a=>!a.hidden));
+}
 async function carregarMe(){
   try{eu=await j('/api/me')}catch(e){return}
   $('usuarioBox').textContent=`${eu.nome||eu.usuario} · ${eu.papel}`;
-  $('navUsuarios').hidden=eu.papel!=='admin';$('navAlertasWa').hidden=eu.papel!=='admin';$('navAuditoria').hidden=eu.papel!=='admin';$('navAdmin').hidden=eu.papel!=='admin';
-  document.body.classList.toggle('so-painel',eu.papel==='painel');if(eu.papel==='painel'&&location.hash!=='#painel')location.hash='#painel';
+  aplicaPermissoes();
 }
 let pedidoInstalar=null;
 addEventListener('beforeinstallprompt',e=>{e.preventDefault();pedidoInstalar=e;$('instalarApp').hidden=false});
 addEventListener('appinstalled',()=>{pedidoInstalar=null;$('instalarApp').hidden=true});
 $('instalarApp').onclick=async()=>{if(!pedidoInstalar)return;pedidoInstalar.prompt();try{await pedidoInstalar.userChoice}catch(e){}pedidoInstalar=null;$('instalarApp').hidden=true};
 $('sair').onclick=async()=>{try{await fetch('/api/logout',{method:'POST'})}catch(e){}location.href='/login'};
+let perfisCache=null,usCarregado=false;
+const pfChecks=(sel,marcadas,travado)=>perfisCache.permissoes.map(p=>`<label class="mut" style="display:flex;gap:6px;align-items:flex-start"><input type="checkbox" class="pfChk" value="${p.id}" ${marcadas.includes(p.id)?'checked':''} ${travado?'disabled':''}><span><b>${esc(p.id)}</b> — ${esc(p.rotulo)}</span></label>`).join('');
 async function carregarUsuarios(){
-  const rows=await j('/api/usuarios');
+  const [rows,pf]=await Promise.all([j('/api/usuarios'),j('/api/perfis')]);
+  perfisCache=pf;usCarregado=true;
+  const nomes=pf.perfis.map(p=>p.nome);
+  const sel=$('usPapel'),atualSel=sel.value;sel.innerHTML=nomes.map(n=>`<option>${esc(n)}</option>`).join('');if(nomes.includes(atualSel))sel.value=atualSel;
   $('usuarios').innerHTML=rows.map(u=>`<tr><td>${esc(u.usuario)}</td><td>${esc(u.nome||'–')}</td>
-    <td><select class="usPapelSel" data-id="${u.id}">${['painel','leitura','operador','admin'].map(p=>`<option ${p===u.papel?'selected':''}>${p}</option>`).join('')}</select></td>
+    <td><select class="usPapelSel" data-id="${u.id}">${(nomes.includes(u.papel)?nomes:[...nomes,u.papel]).map(p=>`<option ${p===u.papel?'selected':''}>${esc(p)}</option>`).join('')}</select></td>
     <td>${u.tem_senha?'<span class="pill ok">definida</span>':'<span class="pill alerta">sem senha</span>'}</td>
     <td>${u.ativo?'ativo':'inativo'}</td>
     <td><button class="usSenhaBtn" data-id="${u.id}">definir senha</button> <button class="usAtivoBtn" data-id="${u.id}" data-ativo="${u.ativo}">${u.ativo?'desativar':'reativar'}</button></td></tr>`).join('')||'<tr><td colspan=6>nenhum usuário</td></tr>';
+  $('perfis').innerHTML=`<div class="pfBox" data-novo="1"><b>novo perfil</b><div class="pfGrid">${pfChecks('novo',[],false)}</div></div>`+
+    pf.perfis.map(p=>`<div class="pfBox" data-perfil="${esc(p.nome)}">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span><b>${esc(p.nome)}</b> ${p.fixo?'<span class="pill ok">fixo</span>':''} <span class="mut">· ${p.usuarios} usuário(s)${p.descricao?' · '+esc(p.descricao):''}</span></span>
+      <span>${p.fixo?'':`<button class="acc pfSalvar" data-nome="${esc(p.nome)}">Salvar</button> <button class="pfExcluir" data-nome="${esc(p.nome)}">Excluir</button>`}</span></div>
+      <div class="pfGrid">${pfChecks(p.nome,p.permissoes,p.fixo)}</div></div>`).join('');
 }
+const pfMarcadas=el=>[...el.querySelectorAll('.pfChk:checked')].map(c=>c.value);
+$('pfCriar').onclick=async()=>{
+  const msg=$('pfMsg'),nome=$('pfNome').value.trim();
+  try{await j('/api/perfis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome,descricao:$('pfDesc').value.trim()||null,permissoes:pfMarcadas(document.querySelector('[data-novo]'))})});
+    msg.className='msg ok';msg.textContent='perfil criado';$('pfNome').value='';$('pfDesc').value='';await carregarUsuarios()}
+  catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
+document.addEventListener('click',async e=>{
+  const sv=e.target.closest('.pfSalvar'),ex=e.target.closest('.pfExcluir'),msg=$('pfMsg');
+  try{
+    if(sv){const card=sv.closest('[data-perfil]');
+      await j('/api/perfis/'+encodeURIComponent(sv.dataset.nome),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({permissoes:pfMarcadas(card),descricao:(perfisCache.perfis.find(p=>p.nome===sv.dataset.nome)||{}).descricao||null})});
+      msg.className='msg ok';msg.textContent=`perfil ${sv.dataset.nome} salvo (vale na hora para quem usa)`;await carregarUsuarios()}
+    if(ex){if(!confirm(`Excluir o perfil "${ex.dataset.nome}"?`))return;
+      await j('/api/perfis/'+encodeURIComponent(ex.dataset.nome),{method:'DELETE'});msg.className='msg ok';msg.textContent='perfil excluído';await carregarUsuarios()}
+  }catch(x){msg.className='msg bad';msg.textContent=x.message}
+});
 const patchUs=(id,b)=>j('/api/usuarios/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
 document.addEventListener('change',async e=>{const s=e.target.closest('.usPapelSel');if(!s)return;try{await patchUs(s.dataset.id,{papel:s.value})}catch(x){alert(x.message);carregarUsuarios()}});
 document.addEventListener('click',async e=>{

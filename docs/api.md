@@ -237,3 +237,18 @@ Obrigatorias: `DATABASE_URL`, `WEBHOOK_USER/PASS`, `UI_USER/PASS`, `SAIDA_USER/P
 No `impinj-stack.yml` nao use parenteses nem espacos extras no texto de `${VAR:?mensagem}` (quebra a interpolacao do `docker stack deploy`).
 
 | `GET` | `/api/auditoria/logins?usuario=&resultado=&dias=30&limit=300` | Admin. Tentativas de login (`ok`/`falha`/`bloqueado`) com IP e navegador, mais `resumo`. Versao CSV em `/api/auditoria/logins.csv`. Senha nunca e guardada. |
+
+### Perfis e permissões (2026-11-08)
+
+Cada usuário tem um `papel` = nome de um perfil em `perfis`; o perfil é um conjunto de permissões: `dashboard`, `consultar`, `operar_cabine`, `excluir_lotes`,
+`catalogo_editar`, `conferencia`, `cadastros`, `exportar`, `alertas_whatsapp`, `usuarios`, `auditoria`, `sistema`. `/api/me` devolve `permissoes`.
+Sem a permissão a rota responde 403. `/api/summary` e `/api/me` valem para qualquer usuário logado.
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/api/perfis` | Permissão `usuarios`. Lista perfis (com nº de usuários) e o catálogo de permissões. |
+| `POST` | `/api/perfis` | Body `{nome, descricao?, permissoes[]}`. 409 se o nome existe (ou é `admin`). |
+| `PUT` | `/api/perfis/{nome}` | Body `{descricao?, permissoes[]}`. `admin` é fixo (403). |
+| `DELETE` | `/api/perfis/{nome}` | 409 se há usuários no perfil; `admin` é fixo (403). |
+
+Quem não é admin só concede (em perfil ou usuário) permissões que ele próprio tem.
