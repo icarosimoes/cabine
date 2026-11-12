@@ -160,6 +160,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
       <button type="button" class="nav-section" aria-expanded="true"><span>Operação</span><i class="chev" aria-hidden="true"></i></button>
       <div class="nav-sub">
         <a class="nav-item" href="#leitura" data-nav="leitura">Leitura da cabine</a>
+        <a class="nav-item" href="#sessoesleit" data-nav="sessoesleit">Sessões de leitura <span class="badge" id="badgeReportes"></span></a>
         <a class="nav-item" href="#conferencia" data-nav="conferencia">Conferência de estoque</a>
         <a class="nav-item" href="#transferencias" data-nav="transferencias">Transferências</a>
       </div>
@@ -374,6 +375,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <span class="mut">o leitor só grava durante essa janela, depois do clique (economiza banco)</span>
   </div>
   <div id="registrarMsg" class="msg"></div>
+  <div class="row" id="reportarBox" hidden style="padding-top:0"><button id="reportarProblema" type="button">Reportar problema</button><span class="mut">avisa a equipe de suporte sobre esta leitura (aparece em Sessões de leitura)</span></div>
   <div id="loteResultado" hidden>
     <div class="row" style="padding-top:0"><b id="loteResumo"></b><button id="reiniciar" type="button">Reiniciar leitura</button></div>
     <div class="mut" style="padding:0 16px 8px">Leitura concluída. Se a quantidade detectada for diferente do esperado, <a href="#" id="divergLink">clique aqui para avisar</a> (WhatsApp).</div>
@@ -402,6 +404,22 @@ table.rt-sel td:nth-child(2)::before{content:none}
 <section>
   <h2><span>Lotes aguardando transferência <span id="pendCount" class="mut"></span></span><span><button id="excluirTodosLotes" hidden>Excluir todos</button></span></h2>
   <div class="scroll"><table class="rt"><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Obs.</th><th></th></tr></thead><tbody id="pendentes"></tbody></table></div>
+</section>
+</div>
+<div class="view" data-view="sessoesleit" hidden>
+<section>
+  <h2><span>Sessões de leitura <span id="slResumo" class="mut"></span></span></h2>
+  <div class="row">
+    <select id="slDias"><option value="1">Últimas 24 h</option><option value="7" selected>Últimos 7 dias</option><option value="30">Últimos 30 dias</option></select>
+    <label class="mut"><input type="checkbox" id="slZero"> só com 0 peças</label>
+    <label class="mut"><input type="checkbox" id="slSinal"> só sinalizadas</label>
+    <label class="mut"><input type="checkbox" id="slRep"> só com problema reportado</label>
+    <button id="slAtualizar">Atualizar</button>
+    <label class="mut"><input type="checkbox" id="slAuto" checked> atualizar a cada 30 s</label>
+  </div>
+  <div class="mut" style="padding:0 16px 8px">“Sinalizada” é uma leitura que terminou com 0 peças logo depois (até 5 min) de uma leitura com peças na mesma cabine: costuma ser falha do leitor, não falta de peças.
+  “Leitor sem comunicação” = o rádio não mandou nenhum sinal durante a leitura. Os registros ficam 30 dias.</div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Início</th><th>Usuário</th><th>Duração</th><th>Peças</th><th>Resultado</th><th>Causa provável</th><th>Problema</th></tr></thead><tbody id="slTb"></tbody></table></div>
 </section>
 </div>
 <dialog id="dlg" style="margin:auto;padding:24px;border:1px solid var(--line);border-radius:12px;background:var(--navy-mid);color:var(--text);min-width:340px;max-width:560px">
@@ -800,7 +818,7 @@ async function j(u,opts){
 const itemTipo=(t,nome)=>t?(nome?`<b>${esc(nome)}</b> <span class="mut">${esc(t)}</span>`:esc(t)):'<span class="mut">não cadastrada</span>';
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
-const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Dashboard',controle:'Monitor ao vivo',monitoramento:'Monitoramento',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
+const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Dashboard',controle:'Monitor ao vivo',monitoramento:'Monitoramento',leitura:'Leitura da cabine',sessoesleit:'Sessões de leitura',transferencias:'Transferências',evasao:'Alertas de evasão',
   inventario:'Inventário',catalogo:'Catálogo de itens',manual:'Leitor manual',auditoria:'Auditoria de logins',acoes:'Auditoria de ações',revisao:'Revisão do inventário',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
 let view='painel';
 const LOADERS={
@@ -808,6 +826,7 @@ const LOADERS={
   monitoramento:()=>carregarMonitoramento(),
   controle:()=>iniciaControle(),
   leitura:async()=>{await carregarPendentes();await carregarSessoes()},
+  sessoesleit:()=>carregarSessoesLeitura(),
   relatorios:()=>carregarHoras(),
   transferencias:async()=>{await carregarDestinos();await carregarTransferencias()},
   evasao:async()=>{await carregarDestinos();await carregarEvasoes()},
@@ -1173,15 +1192,55 @@ $('registrar').onclick=async()=>{
   const janela=Number($('janela').value)||15,msg=$('registrarMsg'),btn=$('registrar');
   btn.disabled=true;msg.className='msg';msg.textContent=`lendo tags por ${janela}s…`;
   try{
-    await j('/api/leitura/armar?segundos='+(janela+3),{method:'POST'});
+    const arm=await j('/api/leitura/armar?segundos='+(janela+3),{method:'POST'});
+    sessaoLeitura=arm.sessao_id;$('reportarBox').hidden=true;
     await new Promise(r=>setTimeout(r,janela*1000));
-    const r=await j('/api/lotes/registrar?janela_segundos='+(janela+2),{method:'POST'});
+    const r=await j('/api/lotes/registrar?janela_segundos='+(janela+2)+'&sessao_id='+sessaoLeitura,{method:'POST'});
+    $('reportarBox').hidden=false;
     msg.className='msg ok';msg.textContent=`lote #${r.id} registrado: ${r.quantidade} tag(s) distinta(s).`;
     await abrirLote(r.id);
     await carregarPendentes();
-  }catch(e){msg.className='msg bad';msg.textContent=e.message}
+  }catch(e){msg.className='msg bad';msg.textContent=e.message;if(sessaoLeitura)$('reportarBox').hidden=false}
   btn.disabled=false;
 };
+let sessaoLeitura=null;
+function reportarDialogo(id){
+  dialogo(`<h3>Reportar problema na leitura #${Number(id)}</h3><p class="mut" style="padding:8px 0">Descreva o que aconteceu (ex.: “antena não leu as toalhas”, “veio 0 peças com a cabine cheia”).</p>
+    <textarea id="rpMsg" rows="4" maxlength="500" style="width:100%"></textarea>`,[
+    ['Cancelar','',()=>{}],['Enviar reporte','acc',async()=>{
+      const m=$('rpMsg').value.trim();if(m.length<3){alert('descreva o problema');return false}
+      try{await j('/api/leitura-sessoes/'+id+'/reportar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mensagem:m})});
+        $('reportarBox').hidden=true;atualizaReportes();if(view==='sessoesleit')carregarSessoesLeitura()}
+      catch(err){alert(err.message);return false}}]]);
+}
+$('reportarProblema').onclick=()=>{if(sessaoLeitura)reportarDialogo(sessaoLeitura)};
+async function atualizaReportes(){
+  try{const r=await j('/api/leitura-sessoes/reportes');$('badgeReportes').textContent=r.abertos||''}catch(e){}
+}
+setInterval(()=>{if(eu)atualizaReportes()},60000);
+const SL_RES={andamento:['cinza','Em andamento'],reiniciada:['cinza','Reiniciada antes de concluir'],concluida:['ok','Concluída com peças']};
+async function carregarSessoesLeitura(){
+  const p=new URLSearchParams({dias:$('slDias').value});
+  if($('slZero').checked)p.set('zero','true');if($('slSinal').checked)p.set('sinalizadas','true');if($('slRep').checked)p.set('reportadas','true');
+  const d=await j('/api/leitura-sessoes?'+p);
+  $('slResumo').textContent=`· ${d.total} sessão(ões), ${d.com_zero} com 0 peças`;
+  $('slTb').innerHTML=d.sessoes.map(s=>{
+    let res=SL_RES[s.status]||['cinza',s.status];
+    if(s.status==='vazia')res=s.radio_ok?['alerta','Concluída com 0 peças (leitor comunicando)']:['alerta','Concluída com 0 peças (leitor sem comunicação)'];
+    const dur=s.fim?Math.max(0,Math.round(s.fim-s.inicio))+' s':'em andamento';
+    const prob=s.problema?`<b>${esc(s.problema)}</b><br><span class="mut">${esc(s.problema_por||'')} · ${dt(s.problema_em)}${s.resolvido_em?' · resolvido':''}</span>`
+      +(s.resolvido_em?'':` <button data-sl-res="${s.id}">Marcar resolvido</button>`):`<button data-sl-rep="${s.id}">Reportar</button>`;
+    return `<tr><td>${dt(s.inicio)}</td><td>${esc(s.usuario||'–')}</td><td>${dur}</td><td>${s.pecas}</td>
+      <td><span class="pill ${res[0]}">${res[1]}</span>${s.sinalizada?' <span class="pill alerta" title="0 peças logo depois de uma leitura com peças">sinalizada</span>':''}</td>
+      <td>${esc(s.causa||'')}</td><td>${prob}</td></tr>`}).join('')||'<tr><td colspan=7>nenhuma sessão de leitura no período</td></tr>';
+}
+['slDias','slZero','slSinal','slRep'].forEach(i=>$(i).onchange=carregarSessoesLeitura);
+$('slAtualizar').onclick=carregarSessoesLeitura;
+setInterval(()=>{if(view==='sessoesleit'&&$('slAuto').checked)carregarSessoesLeitura().catch(()=>{})},30000);
+$('slTb').addEventListener('click',async e=>{
+  const r=e.target.closest('[data-sl-rep]');if(r){reportarDialogo(r.dataset.slRep);return}
+  const o=e.target.closest('[data-sl-res]');if(o){try{await j('/api/leitura-sessoes/'+o.dataset.slRes+'/resolver',{method:'POST'});atualizaReportes();carregarSessoesLeitura()}catch(err){alert(err.message)}}
+});
 
 function montaFiltroTransf(){
   const p=new URLSearchParams();
@@ -1368,7 +1427,7 @@ function aplicaPermissoes(){
 async function carregarMe(){
   try{eu=await j('/api/me')}catch(e){return}
   $('usuarioBox').textContent=`${eu.nome||eu.usuario} · ${eu.papel}`;
-  aplicaPermissoes();
+  aplicaPermissoes();atualizaReportes();
 }
 let pedidoInstalar=null;
 addEventListener('beforeinstallprompt',e=>{e.preventDefault();pedidoInstalar=e;$('instalarApp').hidden=false});

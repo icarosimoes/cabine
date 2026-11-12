@@ -244,6 +244,16 @@ def init_db():
           tags INTEGER NOT NULL DEFAULT 0, lote_id INTEGER REFERENCES lotes(id))""")
 
         con.execute("""
+        CREATE TABLE IF NOT EXISTS leitura_sessoes(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          inicio DOUBLE PRECISION NOT NULL, fim DOUBLE PRECISION,
+          status TEXT NOT NULL DEFAULT 'andamento',   -- andamento | concluida | vazia | reiniciada
+          pecas INTEGER NOT NULL DEFAULT 0, lote_id INTEGER, usuario TEXT,
+          sinais_ini BIGINT NOT NULL DEFAULT 0, radio_ok BOOLEAN,   -- o rádio enviou sinal durante a janela?
+          sinalizada BOOLEAN NOT NULL DEFAULT FALSE,   -- 0 peças logo depois de uma leitura com peças na mesma cabine
+          causa TEXT, problema TEXT, problema_em DOUBLE PRECISION, problema_por TEXT, resolvido_em DOUBLE PRECISION)""")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_leitura_sessoes_inicio ON leitura_sessoes(inicio)")
+        con.execute("""
         CREATE TABLE IF NOT EXISTS auditoria_login(
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           criado_em DOUBLE PRECISION NOT NULL, usuario TEXT, resultado TEXT NOT NULL,
@@ -583,7 +593,7 @@ def parse_event(ev):
 
 
 INICIO = time.time()
-state = {"alertas": {}, "falhas_ingest": [], "last_push": None, "ultimo_sinal": None, "armado_ate": 0.0, "conf_ate": 0.0, "conf_ativa": False}
+state = {"sinais": 0, "alertas": {}, "falhas_ingest": [], "last_push": None, "ultimo_sinal": None, "armado_ate": 0.0, "conf_ate": 0.0, "conf_ativa": False}
 
 
 def gravando() -> bool:
@@ -1036,6 +1046,7 @@ async def background():
                 with closing(db()) as con:
                     con.execute("DELETE FROM events WHERE received_at<%s", (cutoff,))
                     con.execute("DELETE FROM monitor_checagens WHERE quando<%s", (time.time() - 30 * 86400,))
+                    con.execute("DELETE FROM leitura_sessoes WHERE inicio<%s", (time.time() - 30 * 86400,))
                     con.commit()
             await asyncio.to_thread(purge)
             await asyncio.to_thread(purgar_clipes)
@@ -1081,6 +1092,7 @@ async def ingest(request: Request):
     events = data if isinstance(data, list) else data.get("events", [data]) if isinstance(data, dict) else []
     now = time.time()
     state["ultimo_sinal"] = now  # só em memória: prova que o rádio está enviando, sem gastar banco
+    state["sinais"] += 1
     if not await asyncio.to_thread(gravando):
         return {"ok": True, "received": len(events), "stored": 0}
     rows = []
@@ -1100,10 +1112,41 @@ async def ingest(request: Request):
 
 
 @app.post("/api/leitura/armar", dependencies=[Depends(P_OPERAR)])
-def armar_leitura(segundos: int = 15):
+def armar_leitura(segundos: int = 15, user: dict = Depends(P_OPERAR)):
     segundos = max(1, min(segundos, 600))
-    state["armado_ate"] = time.time() + segundos
-    return {"ok": True, "segundos": segundos, "armado_ate": state["armado_ate"]}
+    now = time.time()
+    state["armado_ate"] = now + segundos
+    with closing(db()) as con:
+        # leitura anterior que não foi concluída: o operador apertou de novo (ou recarregou a página) antes de terminar
+        con.execute("UPDATE leitura_sessoes SET status='reiniciada', fim=%s WHERE status='andamento'", (now,))
+        sid = con.execute("INSERT INTO leitura_sessoes(inicio,status,usuario,sinais_ini) VALUES(%s,'andamento',%s,%s) RETURNING id",
+                          (now, user["usuario"], state["sinais"])).fetchone()["id"]
+        con.commit()
+    return {"ok": True, "segundos": segundos, "armado_ate": state["armado_ate"], "sessao_id": sid}
+
+
+SESSAO_SINALIZADA_SEG = 300  # 0 peças em até 5 min depois de uma leitura com peças = "sinalizada" (suspeita de falha do leitor)
+
+
+def _fecha_sessao(con, sessao_id: int | None, pecas: int, lote_id: int | None = None):
+    """Conclui a sessão de leitura: com peças, ou vazia com a causa provável (rádio mandou sinal ou não)."""
+    if not sessao_id:
+        return
+    s = con.execute("SELECT * FROM leitura_sessoes WHERE id=%s AND status='andamento'", (sessao_id,)).fetchone()
+    if not s:
+        return
+    now = time.time()
+    radio_ok = state["sinais"] > s["sinais_ini"]
+    if pecas > 0:
+        con.execute("UPDATE leitura_sessoes SET status='concluida', fim=%s, pecas=%s, lote_id=%s, radio_ok=%s WHERE id=%s",
+                    (now, pecas, lote_id, radio_ok, sessao_id))
+        return
+    anterior = con.execute("SELECT 1 FROM leitura_sessoes WHERE status='concluida' AND pecas>0 AND fim>%s AND id<%s LIMIT 1",
+                           (now - SESSAO_SINALIZADA_SEG, sessao_id)).fetchone()
+    causa = ("Tags fora do campo da antena ou sem peças na cabine (o leitor está comunicando)" if radio_ok
+             else "Leitor/gateway/broker: nenhum sinal do rádio durante a leitura")
+    con.execute("UPDATE leitura_sessoes SET status='vazia', fim=%s, pecas=0, radio_ok=%s, sinalizada=%s, causa=%s WHERE id=%s",
+                (now, radio_ok, bool(anterior), causa, sessao_id))
 
 
 @app.middleware("http")
@@ -1668,7 +1711,7 @@ def classificar_epcs(con, epcs):
 
 
 @app.post("/api/lotes/registrar", dependencies=[Depends(P_OPERAR)])
-def registrar_lote(janela_segundos: int = 15):
+def registrar_lote(janela_segundos: int = 15, sessao_id: int | None = None):
     janela_segundos = max(1, min(janela_segundos, 600))
     now = time.time()
     with closing(db()) as con:
@@ -1676,12 +1719,15 @@ def registrar_lote(janela_segundos: int = 15):
             "SELECT DISTINCT epc FROM events WHERE epc IS NOT NULL AND received_at>%s",
             (now - janela_segundos,)).fetchall()]
         if not epcs:
+            _fecha_sessao(con, sessao_id, 0)
+            con.commit()
             raise HTTPException(400, f"nenhuma tag lida nos últimos {janela_segundos}s")
         lote_id = con.execute(
             "INSERT INTO lotes(criado_em,janela_segundos,quantidade,status) VALUES(%s,%s,%s,'aguardando') RETURNING id",
             (now, janela_segundos, len(epcs))).fetchone()["id"]
         with con.cursor() as cur:
             cur.executemany("INSERT INTO lote_itens(lote_id,epc) VALUES(%s,%s)", [(lote_id, e) for e in epcs])
+        _fecha_sessao(con, sessao_id, len(epcs), lote_id)
         con.commit()
         identificados, novos = classificar_epcs(con, epcs)
     return {"id": lote_id, "criado_em": now, "quantidade": len(epcs), "epcs": epcs, "status": "aguardando",
@@ -3212,7 +3258,7 @@ def login(payload: LoginIn, request: Request):
 ROTULOS_ACAO = [  # (método, regex do caminho, descrição) — o que não casar aparece como "MÉTODO caminho"
     ("DELETE", r"/api/lotes/\d+", "Excluiu lote"), ("POST", r"/api/lotes/registrar", "Registrou lote"),
     ("POST", r"/api/lotes/\d+/transferir", "Transferiu lote"), ("POST", r"/api/lotes/\d+/estado", "Mudou estado do lote"),
-    ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/estacoes/heartbeat", "Estação de controle"), ("DELETE", r"/api/clipes/\d+", "Excluiu vídeo de ocorrência"), ("POST", r"/api/push/assinar", "Ativou notificações no aparelho"), ("POST", r"/api/push/cancelar", "Desativou notificações no aparelho"), ("POST", r"/api/leitura/armar", "Armou a leitura"),
+    ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/estacoes/heartbeat", "Estação de controle"), ("DELETE", r"/api/clipes/\d+", "Excluiu vídeo de ocorrência"), ("POST", r"/api/push/assinar", "Ativou notificações no aparelho"), ("POST", r"/api/push/cancelar", "Desativou notificações no aparelho"), ("POST", r"/api/leitura/armar", "Armou a leitura"), ("POST", r"/api/leitura-sessoes/\d+/reportar", "Reportou problema na leitura"), ("POST", r"/api/leitura-sessoes/\d+/resolver", "Resolveu reporte de leitura"),
     ("POST", r"/api/itens", "Cadastrou/atualizou item"), ("PATCH", r"/api/itens/[^/]+/nome", "Nomeou tag"), ("POST", r"/api/itens/editar-lote", "Editou itens em lote"),
     ("POST", r"/api/itens/cadastrar-lote", "Cadastrou itens em lote"), ("POST", r"/api/itens/importar-nomes", "Importou nomes de tags"), ("PATCH", r"/api/itens/[^/]+/estado", "Mudou estado do item"),
     ("POST", r"/api/conferencias", "Iniciou conferência"), ("POST", r"/api/conferencias/\d+/finalizar", "Finalizou conferência"),
@@ -3392,6 +3438,60 @@ def export_transferencias():
                               ORDER BY t.id DESC""").fetchall()
     return csv_resp("transferencias.csv", ["lote", "data", "destino", "tipo_destino", "usuario", "quantidade", "observacao"],
                     [(r["lote_id"], hora_local(r["criado_em"]), r["destino"], r["tipo"], r["usuario"] or "", r["quantidade"], r["observacao"] or "") for r in rows])
+
+
+@app.get("/api/leitura-sessoes", dependencies=[Depends(P_CONSULTAR)])
+def listar_leitura_sessoes(dias: int = 7, zero: bool = False, sinalizadas: bool = False, reportadas: bool = False, limit: int = 300):
+    """Histórico das leituras da cabine (cada clique em Registrar leitura), com o diagnóstico de quando voltou 0 peças."""
+    now = time.time()
+    where, args = ["inicio>%s"], [now - max(1, min(dias, 30)) * 86400]
+    if zero:
+        where.append("status='vazia'")
+    if sinalizadas:
+        where.append("sinalizada")
+    if reportadas:
+        where.append("problema IS NOT NULL")
+    with closing(db()) as con:
+        rows = con.execute(f"SELECT * FROM leitura_sessoes WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT %s", args + [min(limit, 1000)]).fetchall()
+        tot = con.execute("SELECT COUNT(*) n, COUNT(*) FILTER (WHERE status='vazia') z FROM leitura_sessoes WHERE inicio>%s", (args[0],)).fetchone()
+    for r in rows:
+        if r["status"] == "andamento" and now - r["inicio"] > 900:  # ninguém concluiu: página fechada no meio
+            r["status"] = "reiniciada"
+    return {"sessoes": rows, "total": tot["n"], "com_zero": tot["z"]}
+
+
+@app.get("/api/leitura-sessoes/reportes", dependencies=[Depends(P_CONSULTAR)])
+def contar_reportes():
+    with closing(db()) as con:
+        return {"abertos": con.execute("SELECT COUNT(*) n FROM leitura_sessoes WHERE problema IS NOT NULL AND resolvido_em IS NULL").fetchone()["n"]}
+
+
+class ReporteIn(BaseModel):
+    mensagem: str
+
+
+@app.post("/api/leitura-sessoes/{sessao_id}/reportar")
+def reportar_problema_leitura(sessao_id: int, b: ReporteIn, user: dict = Depends(P_OPERAR)):
+    msg = b.mensagem.strip()
+    if not 3 <= len(msg) <= 500:
+        raise HTTPException(400, "descreva o problema (3 a 500 caracteres)")
+    with closing(db()) as con:
+        n = con.execute("UPDATE leitura_sessoes SET problema=%s, problema_em=%s, problema_por=%s, resolvido_em=NULL WHERE id=%s",
+                        (msg, time.time(), user["usuario"], sessao_id)).rowcount
+        con.commit()
+    if not n:
+        raise HTTPException(404, "sessão de leitura não encontrada")
+    return {"ok": True}
+
+
+@app.post("/api/leitura-sessoes/{sessao_id}/resolver", dependencies=[Depends(P_OPERAR)])
+def resolver_reporte_leitura(sessao_id: int):
+    with closing(db()) as con:
+        n = con.execute("UPDATE leitura_sessoes SET resolvido_em=%s WHERE id=%s AND problema IS NOT NULL", (time.time(), sessao_id)).rowcount
+        con.commit()
+    if not n:
+        raise HTTPException(404, "reporte não encontrado")
+    return {"ok": True}
 
 
 @app.get("/api/sessoes", dependencies=[Depends(P_CONSULTAR)])

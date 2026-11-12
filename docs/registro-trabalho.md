@@ -135,3 +135,8 @@
 - Servidor: `/api/agente/saida` usa a localização (destino) da antena, deduplica por 30 s e ignora EPC fora do catálogo (`SAIDA_REGISTRA_DESCONHECIDAS=1` muda isso); segue o fluxo normal (evento, clipe, WhatsApp).
 - Testes: 3 em Python (tests/test_coleta_saida.py) + 3 em Go.
 - Deploy do servidor feito em 2026-11-12 (backup `impinj-20261112-1636-coleta.sql.gz`); agente 0.1.9 instalado no pcsom.
+
+## Sessões de leitura e reporte de problema (2026-11-12) — não deployado
+- Tabela `leitura_sessoes`; `POST /api/leitura/armar` abre a sessão (e marca a anterior como "reiniciada"), `POST /api/lotes/registrar?sessao_id=` conclui (ou marca "vazia" com a causa: rádio mandou sinal ou não); `GET /api/leitura-sessoes`, `/reportes`, `POST /{id}/reportar` e `/{id}/resolver`.
+- Painel: tela "Sessões de leitura" (menu Operação, contador de reportes) e botão "Reportar problema" na Leitura da cabine. 4 testes novos (91 no total).
+- Fonte: revisão das capturas do eTrace em `docs/modelo/` (ver backlog).
