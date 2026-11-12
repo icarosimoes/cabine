@@ -140,3 +140,7 @@
 - Tabela `leitura_sessoes`; `POST /api/leitura/armar` abre a sessão (e marca a anterior como "reiniciada"), `POST /api/lotes/registrar?sessao_id=` conclui (ou marca "vazia" com a causa: rádio mandou sinal ou não); `GET /api/leitura-sessoes`, `/reportes`, `POST /{id}/reportar` e `/{id}/resolver`.
 - Painel: tela "Sessões de leitura" (menu Operação, contador de reportes) e botão "Reportar problema" na Leitura da cabine. 4 testes novos (91 no total).
 - Fonte: revisão das capturas do eTrace em `docs/modelo/` (ver backlog).
+
+## Movimentações com filtro por usuário e impressão (2026-11-12)
+- `GET /api/transferencias?usuario=`; seletor de usuário e botão Imprimir na tela Transferências. 92 testes.
+- Deploy de 2026-11-12 (Sessões de leitura + Movimentações): backup `impinj-AAAAMMDD-HHMM-sessoes.sql.gz` na VPS (`/root/backup`).
