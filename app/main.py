@@ -177,6 +177,9 @@ def init_db():
           arquivo TEXT, tamanho BIGINT, erro TEXT, teste BOOLEAN NOT NULL DEFAULT FALSE,
           criado_em DOUBLE PRECISION NOT NULL, enviado_em DOUBLE PRECISION, concluido_em DOUBLE PRECISION)""")
         con.execute("CREATE INDEX IF NOT EXISTS ix_clipes_camera ON clipes(camera_id, t0)")
+        # tipo: dvr = o aparelho toca a gravação (playback RTSP, ex. DVR/NVR Intelbras); rtsp = só ao vivo (ex. Mibo iM): o agente grava um buffer
+        con.execute("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'dvr'")
+        con.execute("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS rtsp_path TEXT")
         con.execute("ALTER TABLE destinos ADD COLUMN IF NOT EXISTS alerta INTEGER NOT NULL DEFAULT 0")
         con.execute("""
         CREATE TABLE IF NOT EXISTS usuarios(
@@ -1909,7 +1912,9 @@ def agente_config(ag: dict = Depends(agente_auth)):
     with closing(db()) as con:
         antenas = con.execute("""SELECT id,nome,modelo,ip,porta,modo,alerta,evasao FROM antenas
                                  WHERE ip IS NOT NULL AND ip<>'' ORDER BY nome""").fetchall()
-    return {"agente": ag["nome"], "intervalo_seg": AGENTE_INTERVALO_SEG, "antenas": antenas}
+        # câmeras sem playback (tipo rtsp): o agente precisa gravar o ao vivo ANTES da evasão para ter o "10 s antes"
+        cameras = con.execute("""SELECT id, nome, ip, canal, rtsp_path FROM cameras WHERE tipo='rtsp' ORDER BY nome""").fetchall()
+    return {"agente": ag["nome"], "intervalo_seg": AGENTE_INTERVALO_SEG, "antenas": antenas, "cameras": cameras}
 
 
 class StatusAntenaIn(BaseModel):
@@ -1962,7 +1967,8 @@ def _clipes_para_agente(con, now: float) -> list:
                    WHERE status='aguardando' AND fim<%s""", (now, now - 6 * 3600))
     return con.execute("""UPDATE clipes c SET status='enviado', enviado_em=%s
                           FROM cameras m WHERE m.id=c.camera_id AND c.status='aguardando' AND c.fim+%s<=%s
-                          RETURNING c.id, c.t0, c.inicio, c.fim, m.nome camera, m.ip, m.porta, m.canal, m.gravacao""",
+                          RETURNING c.id, c.camera_id, c.t0, c.inicio, c.fim, m.nome camera, m.ip, m.porta, m.canal, m.gravacao,
+                                    m.tipo, m.rtsp_path""",
                        (now, CLIPE_MARGEM_SEG, now)).fetchall()
 
 
@@ -1981,6 +1987,11 @@ class CameraIn(BaseModel):
     porta: int = 80
     canal: int = 1
     gravacao: str = "continua"
+    tipo: str = "dvr"  # dvr | rtsp (Mibo iM e outras sem playback: o agente mantém um buffer do ao vivo)
+    rtsp_path: str | None = None  # só tipo rtsp; vazio = /cam/realmonitor?channel={canal}&subtype=0
+
+
+RTSP_PATH = re.compile(r"/?[A-Za-z0-9_\-/.?=&{}]{1,200}")
 
 
 def _valida_camera(p: CameraIn) -> dict:
@@ -1995,7 +2006,12 @@ def _valida_camera(p: CameraIn) -> dict:
         raise HTTPException(400, "canal inválido (1–256)")
     if p.gravacao not in ("continua", "movimento"):
         raise HTTPException(400, "gravação deve ser continua ou movimento")
-    return {"nome": nome, "ip": ip, "porta": p.porta, "canal": p.canal, "gravacao": p.gravacao}
+    if p.tipo not in ("dvr", "rtsp"):
+        raise HTTPException(400, "tipo deve ser dvr ou rtsp")
+    path = (p.rtsp_path or "").strip() or None
+    if path and (p.tipo != "rtsp" or not RTSP_PATH.fullmatch(path) or ".." in path):
+        raise HTTPException(400, "caminho RTSP inválido (só para o tipo rtsp; ex.: /cam/realmonitor?channel={canal}&subtype=0)")
+    return {"nome": nome, "ip": ip, "porta": p.porta, "canal": p.canal, "gravacao": p.gravacao, "tipo": p.tipo, "rtsp_path": path}
 
 
 @app.get("/api/cameras", dependencies=[Depends(P_CONSULTAR)])
@@ -2011,8 +2027,8 @@ def salvar_camera(payload: CameraIn):
     with closing(db()) as con:
         if con.execute("SELECT 1 FROM cameras WHERE nome=%s", (v["nome"],)).fetchone():
             raise HTTPException(409, "já existe câmera com esse nome (use Editar)")
-        cid = con.execute("""INSERT INTO cameras(nome,ip,porta,canal,gravacao,criado_em)
-                             VALUES(%(nome)s,%(ip)s,%(porta)s,%(canal)s,%(gravacao)s,%(t)s) RETURNING id""",
+        cid = con.execute("""INSERT INTO cameras(nome,ip,porta,canal,gravacao,tipo,rtsp_path,criado_em)
+                             VALUES(%(nome)s,%(ip)s,%(porta)s,%(canal)s,%(gravacao)s,%(tipo)s,%(rtsp_path)s,%(t)s) RETURNING id""",
                           {**v, "t": time.time()}).fetchone()["id"]
         con.commit()
     return {"ok": True, "id": cid}
@@ -2026,7 +2042,8 @@ def editar_camera(camera_id: int, payload: CameraIn):
             raise HTTPException(404, "câmera não encontrada")
         if con.execute("SELECT 1 FROM cameras WHERE nome=%s AND id<>%s", (v["nome"], camera_id)).fetchone():
             raise HTTPException(409, "já existe outra câmera com esse nome")
-        con.execute("UPDATE cameras SET nome=%(nome)s, ip=%(ip)s, porta=%(porta)s, canal=%(canal)s, gravacao=%(gravacao)s WHERE id=%(id)s",
+        con.execute("""UPDATE cameras SET nome=%(nome)s, ip=%(ip)s, porta=%(porta)s, canal=%(canal)s, gravacao=%(gravacao)s,
+                       tipo=%(tipo)s, rtsp_path=%(rtsp_path)s WHERE id=%(id)s""",
                     {**v, "id": camera_id})
         con.commit()
     return {"ok": True}
@@ -2048,12 +2065,18 @@ def excluir_camera(camera_id: int):
 def testar_camera(camera_id: int):
     """Pede ao agente um clipe já gravado (últimos ~70 s) para validar IP, canal, usuário e formato sem precisar de evasão."""
     now = time.time()
-    t0 = now - CLIPE_DEPOIS_SEG - CLIPE_MARGEM_SEG
     with closing(db()) as con:
-        if not con.execute("SELECT 1 FROM cameras WHERE id=%s", (camera_id,)).fetchone():
+        cam = con.execute("SELECT tipo FROM cameras WHERE id=%s", (camera_id,)).fetchone()
+        if not cam:
             raise HTTPException(404, "câmera não encontrada")
+        if cam["tipo"] == "rtsp":  # buffer: só existe o que o agente gravou desde que subiu; pede os últimos 30 s
+            fim = now - CLIPE_MARGEM_SEG
+            ini, t0 = fim - 30, fim - 20
+        else:
+            t0 = now - CLIPE_DEPOIS_SEG - CLIPE_MARGEM_SEG
+            ini, fim = t0 - CLIPE_ANTES_SEG, t0 + CLIPE_DEPOIS_SEG
         cid = con.execute("""INSERT INTO clipes(camera_id,t0,inicio,fim,teste,criado_em) VALUES(%s,%s,%s,%s,TRUE,%s) RETURNING id""",
-                          (camera_id, t0, t0 - CLIPE_ANTES_SEG, t0 + CLIPE_DEPOIS_SEG, now)).fetchone()["id"]
+                          (camera_id, t0, ini, fim, now)).fetchone()["id"]
         con.commit()
     return {"clipe_id": cid}
 

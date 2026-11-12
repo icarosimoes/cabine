@@ -32,10 +32,20 @@ type Antena struct {
 	Evasao bool   `json:"evasao"` // antena de saída: monitoramento prioritário
 }
 
+// CameraCfg é uma câmera em modo buffer (sem playback no aparelho, ex. Intelbras Mibo): o agente grava o ao vivo.
+type CameraCfg struct {
+	ID       int    `json:"id"`
+	Nome     string `json:"nome"`
+	IP       string `json:"ip"`
+	Canal    int    `json:"canal"`
+	RTSPPath string `json:"rtsp_path"` // vazio = padrão das Mibo/VIP: /cam/realmonitor?channel={canal}&subtype=0
+}
+
 type Config struct {
-	Agente       string   `json:"agente"`
-	IntervaloSeg int      `json:"intervalo_seg"`
-	Antenas      []Antena `json:"antenas"`
+	Agente       string      `json:"agente"`
+	IntervaloSeg int         `json:"intervalo_seg"`
+	Antenas      []Antena    `json:"antenas"`
+	Cameras      []CameraCfg `json:"cameras"`
 }
 
 type StatusAntena struct {
@@ -63,6 +73,9 @@ type Comando struct {
 // Clipe é um pedido de vídeo: trecho [Inicio, Fim] (unix, segundos) de um canal do DVR.
 type Clipe struct {
 	ID       int     `json:"id"`
+	CameraID int     `json:"camera_id"`
+	Tipo     string  `json:"tipo"` // dvr (playback no aparelho) | rtsp (buffer do ao vivo)
+	RTSPPath string  `json:"rtsp_path"`
 	Inicio   float64 `json:"inicio"`
 	Fim      float64 `json:"fim"`
 	Camera   string  `json:"camera"`

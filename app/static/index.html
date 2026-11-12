@@ -583,18 +583,21 @@ table.rt td[colspan]::before{content:none}}
   <div class="scroll"><table><thead><tr><th>Nome</th><th>Descrição</th><th>Modelo</th><th>Localização</th><th>Modo</th><th>Alerta</th><th>IP:porta</th><th>Status (agente)</th><th></th></tr></thead><tbody id="antenas"></tbody></table></div>
 </section>
 <section id="secCameras">
-  <h2><span id="cmTitulo">Câmeras (DVR Intelbras)</span></h2>
-  <div class="mut" style="padding:0 16px 8px">Cada câmera é um canal de um DVR. Vincule-a a uma antena de evasão acima: quando uma peça for detectada, o agente do hotel busca no DVR 10 s antes e 60 s depois e anexa o vídeo ao alerta. Usuário e senha do DVR ficam <b>apenas</b> no <code>config.json</code> do agente (<code>dvrUser</code>/<code>dvrPass</code>), nunca aqui.</div>
+  <h2><span id="cmTitulo">Câmeras (Intelbras)</span></h2>
+  <div class="mut" style="padding:0 16px 8px">Vincule a câmera a uma antena de evasão acima: quando uma peça for detectada, o vídeo de 10 s antes e 60 s depois é anexado ao alerta. Usuário e senha ficam <b>apenas</b> no <code>config.json</code> do agente (<code>dvrUser</code>/<code>dvrPass</code>, ou <code>cameras</code> por nome), nunca aqui.<br>
+    <b>DVR/NVR:</b> o aparelho toca a gravação, o agente pede o trecho depois. <b>Câmera Wi-Fi (Mibo iM e similares):</b> sem playback pela rede; o agente grava o vídeo ao vivo num buffer de ~6 min e recorta dele — o PC do agente precisa ficar ligado e na mesma rede, e a câmera precisa estar com RTSP ativo.</div>
   <div class="row">
-    <label class="mut">Nome <input id="cmNome" type="text" placeholder="ex. DVR recepção - saída" style="width:210px"></label>
-    <label class="mut">IP do DVR <input id="cmIp" type="text" placeholder="192.168.30.60" style="width:140px"></label>
-    <label class="mut">Porta HTTP <input id="cmPorta" type="number" min="1" max="65535" value="80" style="width:80px"></label>
-    <label class="mut">Canal <input id="cmCanal" type="number" min="1" max="256" value="1" style="width:70px"></label>
-    <label class="mut" title="Com gravação só por movimento, o trecho de antes/depois pode não existir no DVR">Gravação <select id="cmGravacao"><option value="continua">contínua (24 h)</option><option value="movimento">só por movimento</option></select></label>
+    <label class="mut">Nome <input id="cmNome" type="text" placeholder="ex. Mibo saída serviço" style="width:200px"></label>
+    <label class="mut">Tipo <select id="cmTipo"><option value="dvr">DVR/NVR Intelbras (playback)</option><option value="rtsp">Câmera Wi-Fi Mibo (ao vivo + buffer)</option></select></label>
+    <label class="mut">IP <input id="cmIp" type="text" placeholder="192.168.30.60" style="width:140px"></label>
+    <label class="mut" id="cmPortaBox">Porta HTTP <input id="cmPorta" type="number" min="1" max="65535" value="80" style="width:80px"></label>
+    <label class="mut" id="cmCanalLbl" title="Câmera Wi-Fi: normalmente 1">Canal <input id="cmCanal" type="number" min="1" max="256" value="1" style="width:70px"></label>
+    <label class="mut" id="cmGravBox" title="Com gravação só por movimento, o trecho de antes/depois pode não existir no DVR">Gravação <select id="cmGravacao"><option value="continua">contínua (24 h)</option><option value="movimento">só por movimento</option></select></label>
+    <label class="mut" id="cmPathBox" title="Deixe em branco para o padrão das Mibo iM. {canal} vira o número do canal." hidden>Caminho RTSP (avançado) <input id="cmPath" type="text" placeholder="/cam/realmonitor?channel={canal}&amp;subtype=0" style="width:300px"></label>
     <button class="acc" id="cmSalvar">Salvar</button><button id="cmCancelar" type="button" hidden>Cancelar edição</button>
   </div>
   <div id="cameraMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th>Nome</th><th>DVR (IP:porta)</th><th>Canal</th><th>Gravação</th><th>Antenas</th><th></th></tr></thead><tbody id="cameras"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Nome</th><th>Tipo</th><th>IP</th><th>Canal</th><th>Gravação</th><th>Antenas</th><th></th></tr></thead><tbody id="cameras"></tbody></table></div>
 </section>
 <section id="secAgentes" hidden>
   <h2><span>Agente do hotel (Windows)</span></h2>
@@ -1231,25 +1234,31 @@ async function carregarCameras(){
   const sel=$('anCamera'),cur=sel.value;
   sel.innerHTML='<option value="">sem câmera</option>'+camerasCache.map(c=>`<option value="${c.id}">${esc(c.nome)}</option>`).join('');
   if(cur)sel.value=cur;
-  $('cameras').innerHTML=camerasCache.map(c=>`<tr><td>${esc(c.nome)}</td><td>${esc(c.ip)}:${c.porta}</td><td>${c.canal}</td>
-    <td>${c.gravacao==='continua'?'contínua':'<span class="pill alerta" title="o trecho pode não existir">só movimento</span>'}</td><td>${esc(c.antenas||'–')}</td>
-    <td><button data-cedit="${c.id}">Editar</button> <button data-cteste="${c.id}">Testar</button> <button data-cdel="${c.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=6>nenhuma câmera cadastrada</td></tr>';
+  $('cameras').innerHTML=camerasCache.map(c=>`<tr><td>${esc(c.nome)}</td><td>${c.tipo==='rtsp'?'Wi-Fi (buffer)':'DVR/NVR'}</td><td>${esc(c.ip)}${c.tipo==='rtsp'?'':':'+c.porta}</td><td>${c.canal}</td>
+    <td>${c.tipo==='rtsp'?'<span class="mut" title="o agente grava o ao vivo">ao vivo</span>':c.gravacao==='continua'?'contínua':'<span class="pill alerta" title="o trecho pode não existir">só movimento</span>'}</td><td>${esc(c.antenas||'–')}</td>
+    <td><button data-cedit="${c.id}">Editar</button> <button data-cteste="${c.id}">Testar</button> <button data-cdel="${c.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=7>nenhuma câmera cadastrada</td></tr>';
 }
+function tipoCamera(){ // campos do formulário conforme o tipo (DVR: porta HTTP e gravação; Wi-Fi: caminho RTSP)
+  const w=$('cmTipo').value==='rtsp';$('cmPortaBox').hidden=w;$('cmGravBox').hidden=w;$('cmPathBox').hidden=!w;
+}
+$('cmTipo').onchange=tipoCamera;
 function limparCamera(){
-  cameraEdit=null;$('cmNome').value='';$('cmIp').value='';$('cmPorta').value=80;$('cmCanal').value=1;$('cmGravacao').value='continua';
-  $('cmTitulo').textContent='Câmeras (DVR Intelbras)';$('cmSalvar').textContent='Salvar';$('cmCancelar').hidden=true;
+  cameraEdit=null;$('cmNome').value='';$('cmIp').value='';$('cmPorta').value=80;$('cmCanal').value=1;$('cmGravacao').value='continua';$('cmTipo').value='dvr';$('cmPath').value='';tipoCamera();
+  $('cmTitulo').textContent='Câmeras (Intelbras)';$('cmSalvar').textContent='Salvar';$('cmCancelar').hidden=true;
 }
 $('cmCancelar').onclick=limparCamera;
 $('cmSalvar').onclick=async()=>{
   const msg=$('cameraMsg'),nome=$('cmNome').value.trim(),ip=$('cmIp').value.trim();
   if(!nome||!ip){msg.className='msg bad';msg.textContent='informe nome e IP do DVR';return}
-  const corpo={nome,ip,porta:Number($('cmPorta').value)||80,canal:Number($('cmCanal').value)||1,gravacao:$('cmGravacao').value};
+  const wifi=$('cmTipo').value==='rtsp';
+  const corpo={nome,ip,porta:Number($('cmPorta').value)||80,canal:Number($('cmCanal').value)||1,gravacao:wifi?'continua':$('cmGravacao').value,tipo:$('cmTipo').value,rtsp_path:wifi?($('cmPath').value.trim()||null):null};
   try{await j(cameraEdit?'/api/cameras/'+cameraEdit:'/api/cameras',{method:cameraEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)});
     msg.className='msg ok';msg.textContent=cameraEdit?'câmera atualizada':'câmera cadastrada';limparCamera();await carregarAntenas()}
   catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
 async function testarCamera(id){
-  const msg=$('cameraMsg');msg.className='msg';msg.textContent='pedindo ao agente um trecho dos últimos ~70 s do DVR… (leva de 1 a 3 min: o DVR entrega em tempo real)';
+  const msg=$('cameraMsg');msg.className='msg';const wifi=(camerasCache.find(c=>c.id===id)||{}).tipo==='rtsp';
+  msg.textContent=wifi?'pedindo ao agente os últimos 30 s do buffer da câmera… (precisa de pelo menos ~40 s de gravador ativo; se falhar, espere 1 min e teste de novo)':'pedindo ao agente um trecho dos últimos ~70 s do DVR… (leva de 1 a 3 min: o DVR entrega em tempo real)';
   try{
     const {clipe_id}=await j('/api/cameras/'+id+'/teste',{method:'POST'});
     for(let i=0;i<90;i++){
@@ -1264,7 +1273,7 @@ async function testarCamera(id){
 $('cameras').addEventListener('click',async e=>{
   const ed=e.target.closest('[data-cedit]'),te=e.target.closest('[data-cteste]'),de=e.target.closest('[data-cdel]');
   if(ed){const c=camerasCache.find(x=>x.id===Number(ed.dataset.cedit));if(!c)return;cameraEdit=c.id;
-    $('cmNome').value=c.nome;$('cmIp').value=c.ip;$('cmPorta').value=c.porta;$('cmCanal').value=c.canal;$('cmGravacao').value=c.gravacao;
+    $('cmNome').value=c.nome;$('cmIp').value=c.ip;$('cmPorta').value=c.porta;$('cmCanal').value=c.canal;$('cmGravacao').value=c.gravacao;$('cmTipo').value=c.tipo||'dvr';$('cmPath').value=c.rtsp_path||'';tipoCamera();
     $('cmTitulo').textContent='Editar câmera: '+c.nome;$('cmSalvar').textContent='Atualizar';$('cmCancelar').hidden=false;$('cmNome').scrollIntoView({block:'center'})}
   else if(te)testarCamera(Number(te.dataset.cteste));
   else if(de){const c=camerasCache.find(x=>x.id===Number(de.dataset.cdel));

@@ -177,12 +177,14 @@ Status do clipe: `aguardando` (gravando) → `enviado` (agente buscando) → `ok
 
 | Método | Rota | Descrição |
 |---|---|---|
-| `GET/POST/PUT/DELETE` | `/api/cameras[/{id}]` | Cadastro `{nome, ip, porta (HTTP, 80), canal, gravacao: continua\|movimento}`. GET: consultar; demais: cadastros. **Sem usuário/senha do DVR** (ficam no `config.json` do agente). |
-| `POST` | `/api/cameras/{id}/teste` | Cria um clipe de teste (últimos ~70 s) para validar IP/canal/credencial/ffmpeg sem esperar evasão. Retorna `{clipe_id}`. |
+| `GET/POST/PUT/DELETE` | `/api/cameras[/{id}]` | Cadastro `{nome, ip, porta (HTTP, 80), canal, gravacao: continua\|movimento, tipo: dvr\|rtsp, rtsp_path?}`. `tipo=dvr`: o aparelho toca a gravação (DVR/NVR Intelbras). `tipo=rtsp`: câmera só com ao vivo (Mibo iM e similares): o agente grava um buffer e recorta dele (`rtsp_path` opcional, só nesse tipo; padrão `/cam/realmonitor?channel={canal}&subtype=0`). GET: consultar; demais: cadastros. **Sem usuário/senha do DVR** (ficam no `config.json` do agente). |
+| `POST` | `/api/cameras/{id}/teste` | Cria um clipe de teste (últimos ~70 s no DVR; últimos 30 s do buffer no `tipo=rtsp`) para validar IP/canal/credencial/ffmpeg sem esperar evasão. Retorna `{clipe_id}`. |
 | `GET` | `/api/clipes/{id}` | Status do clipe (`status, tamanho, erro, t0, inicio, fim`). |
 | `GET` | `/api/clipes/{id}/video` | O mp4 (404 enquanto não estiver `ok`). |
 | `PUT` | `/api/agente/clipes/{id}/arquivo` | Agente envia o mp4 (corpo bruto, `X-Agent-Token`); valida `ftyp` e o limite. |
 | `POST` | `/api/agente/clipes/{id}/erro` | Agente informa a falha `{mensagem}`. |
+
+`GET /api/agente/config` devolve também `cameras[]` (`id, nome, ip, canal, rtsp_path`) só das de `tipo=rtsp`: o agente mantém um gravador para cada uma. Os pedidos em `clipes[]` trazem `camera_id`, `tipo` e `rtsp_path`.
 
 Antena: `antenas.camera_id` (campo `camera_id` em `POST/PUT /api/antenas`).
 

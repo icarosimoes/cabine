@@ -143,6 +143,9 @@ func Fetch(ctx context.Context, cam Camera, opt Options, ini, fim time.Time, out
 	return nil
 }
 
+// ResolveFFmpeg acha o ffmpeg (configurado, ao lado do agente ou no PATH).
+func ResolveFFmpeg(configured string) (string, error) { return resolveFFmpeg(configured) }
+
 func resolveFFmpeg(configured string) (string, error) {
 	if configured != "" {
 		return configured, nil

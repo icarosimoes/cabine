@@ -70,6 +70,8 @@
 - [x] **Video da evasao** (esqueleto): camera por antena de evasao, clipe 10 s antes/60 s depois, agente 0.1.7, player na tela de evasao. Ver `docs/infra/agente-hotel.md`.
 - [ ] Video: validar com o DVR Intelbras real (usar *Antenas > Cameras > Testar*): modelo/firmware, RTSP de playback, codec (H.265 -> `videoCodec: h264`), gravacao so por movimento, hora do DVR.
 - [ ] Video: instalar `ffmpeg.exe` ao lado do agente 0.1.7, criar usuario somente-leitura no DVR e preencher `dvrUser`/`dvrPass` no `config.json`; compilar/instalar o agente 0.1.7 e fazer deploy (volume `impinj_clipes`).
+- [x] Camera Wi-Fi Intelbras Mibo (iM/iMX): modo buffer por RTSP ao vivo (agente 0.1.8).
+- [ ] Mibo: validar com a camera real (RTSP ativo, usuario/senha, caminho, H.264 x H.265, estabilidade do Wi-Fi); confirmar se o modelo "iX" tem RTSP/ONVIF; fixar IP. Avaliar ONVIF Perfil G/leitura do cartao SD para nao depender do buffer, e substream (`subtype=1`) para reduzir banda.
 - [ ] Video: varios hoteis/agentes (hoje qualquer agente em contato pega o pedido; ligar camera a agente), alerta de WhatsApp com link do clipe, baixar varios clipes de uma vez.
 - [ ] **Gatilho real da evasao**: `bridge-saida/` ainda nao le o Acura (porta 8080); sem isso nenhum evento chama `/api/saida`. Capturar o protocolo primeiro.
 - [ ] Nome de tags em massa: importar CSV `EPC;nome`, aceitar `EPC;nome` por linha no Leitor manual, gerar nomes sequenciais ("Lencol 001..") no cadastro em lote, e mostrar o nome na Conferencia e no Inventario.

@@ -141,3 +141,28 @@ def test_retencao_apaga_clipe_e_arquivo(client, tmp_path, monkeypatch):
     main.purgar_clipes()
     assert not (tmp_path / f"{cid}.mp4").exists()
     assert client.get("/api/saida").json()[0]["clipe_id"] is None  # evento fica, o vídeo some
+
+
+def test_camera_modo_rtsp_validacao_e_config_do_agente(client):
+    base = {"nome": "Mibo saída", "ip": "192.168.30.70", "canal": 1}
+    assert client.post("/api/cameras", json={**base, "tipo": "onvif"}).status_code == 400
+    assert client.post("/api/cameras", json={**base, "tipo": "dvr", "rtsp_path": "/x"}).status_code == 400  # caminho só no modo rtsp
+    assert client.post("/api/cameras", json={**base, "tipo": "rtsp", "rtsp_path": "/a/../b"}).status_code == 400
+    assert client.post("/api/cameras", json={**base, "tipo": "rtsp", "rtsp_path": "/x y;rm"}).status_code == 400
+    cid = client.post("/api/cameras", json={**base, "tipo": "rtsp"}).json()["id"]
+    client.post("/api/cameras", json={"nome": "DVR", "ip": "192.168.30.60"})  # dvr: fora da lista de gravação
+    ag = client.post("/api/agentes", json={"nome": "h"}).json()
+    cfg = client.get("/api/agente/config", headers={"X-Agent-Token": ag["token"]}, auth=None).json()
+    assert [(c["id"], c["nome"], c["rtsp_path"]) for c in cfg["cameras"]] == [(cid, "Mibo saída", None)]
+    assert client.put(f"/api/cameras/{cid}", json={**base, "tipo": "rtsp", "rtsp_path": "/live/ch{canal}"}).status_code == 200
+    assert client.get("/api/cameras").json()[1]["rtsp_path"] == "/live/ch{canal}"
+
+
+def test_clipe_rtsp_carrega_tipo_e_teste_pede_o_passado_recente(client):
+    cid = client.post("/api/cameras", json={"nome": "Mibo", "ip": "1.1.1.1", "tipo": "rtsp"}).json()["id"]
+    ag = client.post("/api/agentes", json={"nome": "h"}).json()
+    h = {"X-Agent-Token": ag["token"]}
+    cl = client.post(f"/api/cameras/{cid}/teste").json()["clipe_id"]
+    pedido = _status(client, h)["clipes"][0]
+    assert (pedido["id"], pedido["tipo"], pedido["camera_id"]) == (cl, "rtsp", cid)
+    assert pedido["fim"] <= time.time() and 25 <= pedido["fim"] - pedido["inicio"] <= 35  # só o que o buffer já tem

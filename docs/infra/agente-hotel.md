@@ -63,7 +63,7 @@ Teste manual: `LIVE=1 READER_USER=.. READER_PASS=.. go test ./internal/reader -r
   Senha `acura@autoid` **recusada** na pagina de administracao dos dois (login volta para o index).
 - Antes de capturar o protocolo na 8080 do `.104`: pode haver so 1 conexao por vez (o eTrace pode usa-la); fazer fora do horario de pico.
 
-## Vídeo da evasão (DVR Intelbras) — agente 0.1.7
+## Vídeo da evasão (DVR Intelbras e câmera Wi-Fi Mibo) — agente 0.1.8
 
 Quando uma antena de evasão tem câmera (painel: Antenas > Câmeras), o servidor pede ao agente o trecho `[−10 s, +60 s]` da detecção
 (`clipes[]` na resposta de `POST /api/agente/status`). O agente roda em segundo plano (até 2 downloads simultâneos; não atrasa o status):
@@ -80,6 +80,22 @@ Quando uma antena de evasão tem câmera (painel: Antenas > Câmeras), o servido
 { "dvrUser": "cabine", "dvrPass": "...", "cameras": { "DVR recepção - saída": {"user": "x", "pass": "y"} },
   "rtspPort": 554, "ffmpegPath": "", "videoCodec": "copy" }
 ```
+
+### Câmera Wi-Fi Intelbras Mibo (modo "buffer", agente 0.1.8)
+
+As Mibo (iM3/iM4/iM5, iMX...) têm RTSP ao vivo (`rtsp://usuário:senha@IP:554/cam/realmonitor?channel=1&subtype=0`) e ONVIF perfil S, mas **não achei API
+local para tocar o que está no cartão SD**; por isso o agente não "pede o trecho depois": ele mantém um gravador por câmera cadastrada com
+tipo *Câmera Wi-Fi Mibo* (painel: Antenas > Câmeras):
+
+1. `ffmpeg` lê o ao vivo (RTSP por TCP, sem reencodar) e grava segmentos de ~5 s em `ProgramData\CabineAgent\buffer\<id>\AAAAMMDD_hhmmss.ts`;
+   cai? reinicia em 5 s. Segmentos com mais de ~6 min são apagados (uns poucos MB por câmera).
+2. Na evasão, o agente junta os segmentos de `[−10 s, +60 s]` (`ffmpeg -f concat -c copy`, corte com `-ss`) em mp4 e envia, como no DVR.
+
+**Consequências:** o PC do agente precisa estar **ligado e na rede** (o "10 s antes" só existe se o gravador já estava rodando; use o agente da
+máquina 24 h), o RTSP da câmera tem que estar ativo e com usuário/senha conhecidos (app Mibo Cam; fixe o IP da câmera no roteador), e o consumo
+é contínuo (~1–4 Mbps por câmera, por Wi-Fi). Sem buffer (agente recém-iniciado), o erro do clipe explica. Em *Testar* o servidor pede os últimos 30 s.
+O caminho RTSP é configurável por câmera (`rtsp_path`) caso o modelo/firmware use outro. **Não confirmado:** o modelo "Mibo iX" (não achei na documentação da Intelbras; as linhas
+iM e iMX seguem o padrão acima) — confirme o RTSP no manual do seu modelo e teste com VLC antes.
 
 `videoCodec`: `copy` (padrão, não reencoda) ou `h264` (use se o DVR grava em H.265 e o navegador não reproduz; exige CPU). A senha nunca vai
 ao servidor e é mascarada nas mensagens de erro. **Pendente:** validar com o modelo real do DVR (RTSP de playback, formato do CGI, codec).
