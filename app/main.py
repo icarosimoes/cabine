@@ -67,7 +67,7 @@ PERFIS_PADRAO = {  # criados só na primeira vez; depois podem ser editados ou e
 }
 
 ITENS_VIEW_SQL = """
-SELECT i.epc, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, i.criado_em, i.atualizado_em,
+SELECT i.epc, i.nome, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, i.criado_em, i.atualizado_em,
        i.data_compra, d.nome AS localizacao, e.nome AS estado
 FROM itens i
 JOIN estados_inventario e ON e.id = i.estado_id
@@ -146,6 +146,7 @@ def init_db():
           estado_id INTEGER NOT NULL REFERENCES estados_inventario(id),
           criado_em DOUBLE PRECISION NOT NULL, atualizado_em DOUBLE PRECISION NOT NULL)""")
         con.execute("ALTER TABLE itens ADD COLUMN IF NOT EXISTS data_compra TEXT")  # AAAA-MM-DD
+        con.execute("ALTER TABLE itens ADD COLUMN IF NOT EXISTS nome TEXT")  # apelido da tag (ex.: "Lençol 12, suíte 301"); opcional, não único
         con.execute("CREATE INDEX IF NOT EXISTS ix_itens_tipo ON itens(tipo)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_lote_itens_epc ON lote_itens(epc)")
 
@@ -1150,7 +1151,7 @@ def tags(hours: float = 24, limit: int = 200):
     since = time.time() - hours * 3600
     with closing(db()) as con:
         rows = con.execute("""
-          SELECT t.*, i.tipo FROM (
+          SELECT t.*, i.tipo, i.nome FROM (
             SELECT epc, COUNT(*) reads, MAX(received_at) last, MIN(received_at) first,
                    MAX(rssi) best_rssi, STRING_AGG(DISTINCT antenna, ',') antennas
             FROM events WHERE epc IS NOT NULL AND received_at>%s
@@ -1162,7 +1163,7 @@ def tags(hours: float = 24, limit: int = 200):
 
 @app.get("/api/events", dependencies=[Depends(P_CONSULTAR)])
 def events(limit: int = 100, epc: str | None = None, after_id: int = 0, raw: bool = False):
-    sql = ("SELECT e.id,e.received_at,e.event_type,e.epc,e.tid,e.antenna,e.rssi,e.seen_at,i.tipo"
+    sql = ("SELECT e.id,e.received_at,e.event_type,e.epc,e.tid,e.antenna,e.rssi,e.seen_at,i.tipo,i.nome"
            + (",e.raw" if raw else "") + " FROM events e LEFT JOIN itens i ON i.epc=e.epc WHERE e.id>%s")
     args: list = [after_id]
     if epc:
@@ -1193,7 +1194,7 @@ def classificar_epcs(con, epcs):
         return [], []
     placeholders = ",".join(["%s"] * len(epcs))
     cadastrados = {r["epc"]: r for r in con.execute(
-        f"""SELECT i.epc, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, e.nome estado,
+        f"""SELECT i.epc, i.nome, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, e.nome estado,
                    (SELECT d.nome FROM lote_itens li JOIN transferencias t ON t.lote_id=li.lote_id
                       JOIN destinos d ON d.id=t.destino_id WHERE li.epc=i.epc ORDER BY t.criado_em DESC LIMIT 1) localizacao
             FROM itens i JOIN estados_inventario e ON e.id=i.estado_id WHERE i.epc IN ({placeholders})""", epcs).fetchall()}
@@ -1414,9 +1415,21 @@ def listar_transferencias(destino_id: int | None = None, tipo: str | None = None
         return con.execute(sql, args).fetchall()
 
 
+NOME_MAX = 80
+
+
+def nome_item(valor):
+    """Nome/apelido da tag: texto livre, sem espaços nas pontas, vazio vira None."""
+    v = " ".join(str(valor or "").split())
+    if len(v) > NOME_MAX:
+        raise HTTPException(400, f"nome muito longo (máximo {NOME_MAX} caracteres)")
+    return v or None
+
+
 class ItemIn(BaseModel):
     epc: str
     tipo: str
+    nome: str | None = None  # em branco numa atualização mantém o nome atual (para apagar: PATCH /api/itens/{epc}/nome)
     fabricante: str | None = None
     tamanho: str | None = None
     composicao: str | None = None
@@ -1431,19 +1444,36 @@ def cadastrar_item(payload: ItemIn):
         raise HTTPException(400, "epc e tipo são obrigatórios")
     exige_epc_valido(epc)
     data_compra = data_iso(payload.data_compra)
+    nome = nome_item(payload.nome)
     now = time.time()
     with closing(db()) as con:
         estado_padrao = con.execute("SELECT id FROM estados_inventario WHERE padrao=1 LIMIT 1").fetchone()["id"]
-        con.execute("""INSERT INTO itens(epc,tipo,fabricante,tamanho,composicao,cor,data_compra,estado_id,criado_em,atualizado_em)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                        ON CONFLICT(epc) DO UPDATE SET tipo=excluded.tipo, fabricante=excluded.fabricante,
+        con.execute("""INSERT INTO itens(epc,nome,tipo,fabricante,tamanho,composicao,cor,data_compra,estado_id,criado_em,atualizado_em)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT(epc) DO UPDATE SET nome=COALESCE(excluded.nome, itens.nome), tipo=excluded.tipo,
+                          fabricante=excluded.fabricante,
                           tamanho=excluded.tamanho, composicao=excluded.composicao, cor=excluded.cor,
                           data_compra=excluded.data_compra, atualizado_em=excluded.atualizado_em""",
-                    (epc, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor, data_compra,
+                    (epc, nome, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor, data_compra,
                      estado_padrao, now, now))
         con.commit()
         row = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v WHERE v.epc=%s", (epc,)).fetchone()
     return row
+
+
+class NomeIn(BaseModel):
+    nome: str | None = None  # vazio/None apaga o nome
+
+
+@app.patch("/api/itens/{epc}/nome", dependencies=[Depends(P_CATALOGO)])
+def nomear_item(epc: str, payload: NomeIn):
+    epc = epc_manual(epc) or ""
+    nome = nome_item(payload.nome)
+    with closing(db()) as con:
+        if not con.execute("UPDATE itens SET nome=%s, atualizado_em=%s WHERE epc=%s RETURNING epc", (nome, time.time(), epc)).fetchone():
+            raise HTTPException(404, "tag não cadastrada (cadastre o item antes de dar um nome)")
+        con.commit()
+    return {"epc": epc, "nome": nome}
 
 
 class LoteEdicaoIn(BaseModel):
@@ -1568,8 +1598,8 @@ def listar_itens(q: str | None = None, limit: int = 200):
     sql = f"SELECT * FROM ({ITENS_VIEW_SQL}) v"
     args: list = []
     if q:
-        sql += " WHERE v.epc ILIKE %s OR v.tipo ILIKE %s"
-        like = f"%{q}%"; args += [like, like]
+        sql += " WHERE v.epc ILIKE %s OR v.tipo ILIKE %s OR v.nome ILIKE %s"
+        like = f"%{q}%"; args += [like, like, like]
     sql += " ORDER BY v.atualizado_em DESC LIMIT %s"; args.append(min(limit, 1000))
     with closing(db()) as con:
         return con.execute(sql, args).fetchall()
@@ -1715,8 +1745,9 @@ def registrar_saida(payload: SaidaIn):
 def listar_saidas(documentado: bool | None = None, destino_id: int | None = None,
                    desde: float | None = None, ate: float | None = None, limit: int = 200):
     sql = """SELECT s.id, s.epc, s.destino_id, d.nome destino_nome, s.detectado_em, s.documentado, s.transferencia_id,
-                    s.antena_id, s.clipe_id, c.status clipe_status, c.erro clipe_erro
-             FROM eventos_saida s JOIN destinos d ON d.id=s.destino_id LEFT JOIN clipes c ON c.id=s.clipe_id"""
+                    s.antena_id, s.clipe_id, c.status clipe_status, c.erro clipe_erro, i.nome item_nome, i.tipo item_tipo
+             FROM eventos_saida s JOIN destinos d ON d.id=s.destino_id LEFT JOIN clipes c ON c.id=s.clipe_id
+             LEFT JOIN itens i ON i.epc=s.epc"""
     cond, args = [], []
     if documentado is not None:
         cond.append("s.documentado=%s"); args.append(1 if documentado else 0)
@@ -2338,7 +2369,7 @@ ROTULOS_ACAO = [  # (método, regex do caminho, descrição) — o que não casa
     ("DELETE", r"/api/lotes/\d+", "Excluiu lote"), ("POST", r"/api/lotes/registrar", "Registrou lote"),
     ("POST", r"/api/lotes/\d+/transferir", "Transferiu lote"), ("POST", r"/api/lotes/\d+/estado", "Mudou estado do lote"),
     ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/leitura/armar", "Armou a leitura"),
-    ("POST", r"/api/itens", "Cadastrou/atualizou item"), ("POST", r"/api/itens/editar-lote", "Editou itens em lote"),
+    ("POST", r"/api/itens", "Cadastrou/atualizou item"), ("PATCH", r"/api/itens/[^/]+/nome", "Nomeou tag"), ("POST", r"/api/itens/editar-lote", "Editou itens em lote"),
     ("POST", r"/api/itens/cadastrar-lote", "Cadastrou itens em lote"), ("PATCH", r"/api/itens/[^/]+/estado", "Mudou estado do item"),
     ("POST", r"/api/conferencias", "Iniciou conferência"), ("POST", r"/api/conferencias/\d+/finalizar", "Finalizou conferência"),
     ("POST", r"/api/destinos", "Criou destino"), ("PATCH", r"/api/destinos/\d+", "Alterou destino"),
@@ -2504,9 +2535,9 @@ def export_leituras(horas: int = 168):
 def export_inventario():
     with closing(db()) as con:
         rows = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v ORDER BY v.tipo, v.epc").fetchall()
-    return csv_resp("inventario.csv", ["epc", "item", "fabricante", "tamanho", "composicao", "cor", "data_compra", "localizacao", "estado"],
+    return csv_resp("inventario.csv", ["epc", "item", "fabricante", "tamanho", "composicao", "cor", "data_compra", "localizacao", "estado", "nome"],
                     [(r["epc"], r["tipo"], r["fabricante"] or "", r["tamanho"] or "", r["composicao"] or "", r["cor"] or "",
-                      r["data_compra"] or "", r["localizacao"] or "", r["estado"]) for r in rows])
+                      r["data_compra"] or "", r["localizacao"] or "", r["estado"], r["nome"] or "") for r in rows])  # "nome" por último: não desloca colunas de quem já consome o CSV
 
 
 @app.get("/api/export/transferencias.csv", dependencies=[Depends(P_EXPORTAR)])

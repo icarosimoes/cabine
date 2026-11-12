@@ -55,7 +55,7 @@ topbar + drawer no celular). Itens agrupados por tarefa, nao em lista unica:
 | Operacao | Transferencias (auditoria) | `#transferencias` |
 | Controle | Alertas de evasao (badge com nao documentados) | `#evasao` |
 | Cadastros | Inventario | `#inventario` |
-| Cadastros | Catalogo de itens | `#catalogo` |
+| Cadastros | Catalogo de itens (cadastro manual de tag + nome + editar) | `#catalogo` |
 | Cadastros | Destinos (ambientes, com alerta) | `#destinos` |
 | Cadastros | Antenas (leitor -> ambiente) | `#antenas` |
 | Cadastros | Acomodações (enxoval por UH) | `#acomodacoes` |
@@ -73,7 +73,7 @@ Cada tela carrega so os dados dela (polling de 3s apenas da view aberta + resumo
 
 `events` (leituras brutas, expiram por `RETENTION_DAYS`) · `destinos` (setor|lavanderia) ·
 `lotes` -> `lote_itens` (EPCs) -> 0..1 `transferencias` (append-only) · `estados_inventario` ·
-`conferencias` -> `conferencia_itens` (snapshot dos EPCs esperados) · `antenas` (leitor -> ambiente) · `acomodacoes` -> `acomodacao_itens` (qtd por UH x fluxo) · `destinos.alerta` · `itens` (catalogo por EPC) · `usuarios` (papel painel|leitura|operador|admin) · `sessoes` · `leituras_hora` (agregado) · `config` (WhatsApp/limiares) · `alerta_destinatarios` · `alerta_envios` · `alerta_estado` (alertas de antena/agente ja enviados) · `agentes` (token so como hash) · `antena_status` (1 linha por antena) · `comandos` (fila para o agente) · `antenas.{descricao,modo,alerta,ip,porta,evasao}` · `eventos_saida` (deteccoes nas saidas, `documentado` 0/1, `antena_id`, `clipe_id`) · `cameras` (canal de DVR; sem senha) -> `clipes` (video 10 s antes/60 s depois de uma saida; mp4 em `CLIPES_DIR`) · `antenas.camera_id`.
+`conferencias` -> `conferencia_itens` (snapshot dos EPCs esperados) · `antenas` (leitor -> ambiente) · `acomodacoes` -> `acomodacao_itens` (qtd por UH x fluxo) · `destinos.alerta` · `itens` (catalogo por EPC; `nome` = apelido opcional da tag) · `usuarios` (papel painel|leitura|operador|admin) · `sessoes` · `leituras_hora` (agregado) · `config` (WhatsApp/limiares) · `alerta_destinatarios` · `alerta_envios` · `alerta_estado` (alertas de antena/agente ja enviados) · `agentes` (token so como hash) · `antena_status` (1 linha por antena) · `comandos` (fila para o agente) · `antenas.{descricao,modo,alerta,ip,porta,evasao}` · `eventos_saida` (deteccoes nas saidas, `documentado` 0/1, `antena_id`, `clipe_id`) · `cameras` (canal de DVR; sem senha) -> `clipes` (video 10 s antes/60 s depois de uma saida; mp4 em `CLIPES_DIR`) · `antenas.camera_id`.
 Localizacao do item = destino da ultima transferencia do lote que o continha (`ITENS_VIEW_SQL`).
 
 ## Rotas

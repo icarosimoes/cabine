@@ -125,13 +125,14 @@ BASE_URL=http://localhost:8000 UI_USER=... UI_PASS=... WEBHOOK_USER=... WEBHOOK_
 
 | Método | Rota | Descrição |
 |---|---|---|
-| `POST` | `/api/itens` | Body `{epc, tipo, fabricante?, tamanho?, composicao?, cor?, data_compra?}` (data AAAA-MM-DD ou DD/MM/AAAA). EPC deve ser hex, par, 4-64 caracteres (400 se não). Upsert por EPC (substitui tudo). |
+| `POST` | `/api/itens` | Body `{epc, tipo, nome?, fabricante?, tamanho?, composicao?, cor?, data_compra?}` (data AAAA-MM-DD ou DD/MM/AAAA). EPC deve ser hex, par, 4-64 caracteres (400 se não). Upsert por EPC (substitui os campos; `nome` em branco **mantém** o nome atual). `nome` = apelido livre da tag (até 80 caracteres, espaços normalizados, não único). |
+| `PATCH` | `/api/itens/{epc}/nome` | Body `{nome}` (vazio/`null` apaga). Dá nome a uma tag já cadastrada; 404 se o EPC não está no catálogo, 400 se passar de 80 caracteres. Permissão `catalogo_editar`. |
 | `POST` | `/api/itens/editar-lote` | Body `{epcs[], tipo?, fabricante?, tamanho?, composicao?, cor?, data_compra?, estado_id?}`. Só altera os campos enviados. Devolve `{alterados, nao_encontrados}`. Operador. |
 | `POST` | `/api/itens/consulta` | Body `{epcs[]}` (até 2000). Devolve `{identificados, novos, invalidos}`. Leitor manual. |
 | `POST` | `/api/itens/cadastrar-lote` | Body `{epcs[], tipo, ...atributos}`. Cadastra os novos; já existentes não mudam. Devolve `{cadastrados, ja_existiam, invalidos}`. Operador. |
 | `GET` | `/api/inventario/revisao?dias=30` | EPCs cadastrados fora do padrão e tags lidas sem cadastro (`lidas_sem_cadastro`). |
 | `GET` | `/api/conferencias/{id}/export.csv` | CSV da conferência (epc, item, situação, conferido_em). |
-| `GET` | `/api/itens?q=&limit=` | Lista o catálogo (busca por EPC/tipo), já com `localizacao`/`estado` calculados. |
+| `GET` | `/api/itens?q=&limit=` | Lista o catálogo (busca por EPC, nome ou tipo), já com `localizacao`/`estado` calculados. |
 | `GET` | `/api/itens/opcoes` | Valores distintos pra preencher os filtros da tela (tipos, fabricantes, tamanhos, composições, cores, localizações, estados). |
 | `GET` | `/api/inventario?localizacao=&estado=&tipo=&fabricante=&tamanho=&composicao=&cor=` | `{total, resumo:[{tipo, quantidade}]}` — contagem agrupada por tipo, com todos os filtros combináveis. |
 | `GET` | `/api/estados` | Lista os estados de inventário cadastrados. |
