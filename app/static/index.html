@@ -397,6 +397,8 @@ table.rt-sel td:nth-child(2)::before{content:none}
   <div id="confMsg" class="msg"></div>
   <div class="row" style="padding-top:0"><b id="invResumo">Resumo — carregando…</b></div>
   <div class="scroll"><table class="rt"><thead><tr><th>Tipo</th><th>Quantidade</th><th>Esperado</th><th>Diferença</th></tr></thead><tbody id="invTabela"></tbody></table></div>
+  <div class="row"><input id="invBusca" type="text" placeholder="buscar peça por nome, EPC ou tipo" style="flex:1;min-width:180px"><span class="mut" id="invPecasInfo"></span></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Nome</th><th>Tag RFID</th><th>Tipo</th><th>Cor</th><th>Tamanho</th><th>Localização</th><th>Estado</th></tr></thead><tbody id="invPecas"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="catalogo" hidden>
@@ -434,8 +436,19 @@ table.rt-sel td:nth-child(2)::before{content:none}
 </div>
 <div class="view" data-view="manual" hidden>
 <section>
+  <h2><span>Importar nomes (CSV)</span></h2>
+  <div class="mut" style="padding:10px 16px 0">Arquivo com uma tag por linha: <code>EPC;nome</code> (separador ; , ou tab; cabeçalho opcional). Dá nome às tags já cadastradas; informando um tipo, cadastra também as que faltam.</div>
+  <div class="row" style="gap:8px;flex-wrap:wrap">
+    <input id="imFile" type="file" accept=".csv,.txt,text/csv,text/plain">
+    <input id="imTipo" type="text" placeholder="tipo p/ cadastrar as que faltam (opcional)" style="width:260px">
+    <label class="mut"><input type="checkbox" id="imSobre" checked> sobrescrever nomes existentes</label>
+    <button class="acc" id="imEnviar">Importar</button>
+  </div>
+  <div id="imMsg" class="msg"></div>
+</section>
+<section>
   <h2><span>Leitor manual</span></h2>
-  <div class="mut" style="padding:10px 16px 0">Cole ou digite EPCs (um por linha, ou separados por espaço, vírgula ou ponto e vírgula) para ver o que já está cadastrado e cadastrar os novos de uma vez.</div>
+  <div class="mut" style="padding:10px 16px 0">Cole ou digite EPCs (um por linha, ou separados por espaço ou vírgula) para ver o que já está cadastrado e cadastrar os novos de uma vez. Para já dar nome, use uma linha por tag no formato <code>EPC;nome</code> (ex.: <code>E28011606000020A1B2C3D4E;Lençol 001</code>).</div>
   <div class="row"><textarea id="mnEpcs" rows="6" style="flex:1;min-width:240px;font-family:ui-monospace,monospace" placeholder="E2801160600002..."></textarea></div>
   <div class="row" style="padding-top:0"><button class="acc" id="mnConsultar">Consultar</button> <button id="mnLimpar">limpar</button> <span class="mut" id="mnResumo"></span></div>
   <div id="mnMsg" class="msg"></div>
@@ -450,6 +463,13 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <input id="mnCor" type="text" placeholder="cor">
     <input id="mnCompra" type="date" title="data de compra">
     <button class="acc" id="mnCadastrar">Cadastrar novos</button>
+  </div>
+  <div class="row" style="padding-top:0;gap:8px;flex-wrap:wrap" title="Dá nome sequencial aos novos que vieram sem nome">
+    <span class="mut">Nomes sequenciais:</span>
+    <input id="mnPrefixo" type="text" placeholder="prefixo (ex.: Lençol)" style="width:180px">
+    <input id="mnInicio" type="number" min="0" value="1" style="width:90px" title="começa em">
+    <input id="mnDigitos" type="number" min="0" max="8" value="3" style="width:80px" title="dígitos (3 → 001)">
+    <span class="mut" id="mnExemplo"></span>
   </div>
 </section>
 <section id="mnIdBox" hidden>
@@ -565,7 +585,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <div class="card"><b id="cfPct" style="color:var(--teal)">–</b><span>percentual · <span id="cfDur">–</span> min</span></div>
   </div>
   <div class="row"><span class="mut" id="cfInfo"></span><label class="mut"><input type="checkbox" id="cfSoNao"> exibir só não conferidos</label></div>
-  <div class="scroll"><table class="rt"><thead><tr><th>Status</th><th>Tag RFID</th><th>Item</th><th>Conferido em</th></tr></thead><tbody id="cfItens"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Status</th><th>Tag RFID</th><th>Nome</th><th>Item</th><th>Conferido em</th></tr></thead><tbody id="cfItens"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="alertaswa" hidden>
@@ -1159,13 +1179,16 @@ function montaFiltroInventario(){
   INV_FILTROS.forEach(([id,,param])=>{if($(id).value)p.set(param,$(id).value)});
   return p.toString();
 }
+let invBuscaT=null;
 async function carregarInventario(){
   const qs=montaFiltroInventario();
   const estado=$('invEstado').value;
   const soEstado=INV_FILTROS.filter(([id])=>$(id).value&&id!=='invEstado').length===0&&estado;
-  const [r,esp]=await Promise.all([j('/api/inventario'+(qs?'?'+qs:'')),soEstado?j('/api/enxoval/esperado?estado='+encodeURIComponent(estado)):Promise.resolve(null)]);
+  const [r,esp]=await Promise.all([j('/api/inventario?pecas=1'+(qs?'&'+qs:'')+($('invBusca').value.trim()?'&q='+encodeURIComponent($('invBusca').value.trim()):'')),soEstado?j('/api/enxoval/esperado?estado='+encodeURIComponent(estado)):Promise.resolve(null)]);
   const ativos=INV_FILTROS.filter(([id])=>$(id).value).map(([id])=>`${INV_ROTULOS[id].toLowerCase()} "${$(id).value}"`);
   $('invResumo').textContent=`Resumo - ${r.total} itens`+(ativos.length?' com '+ativos.join(', '):' cadastrados');
+  $('invPecas').innerHTML=r.pecas.map(x=>`<tr><td data-l="Nome">${esc(x.nome||'–')}</td><td class="epc" data-l="Tag RFID">${esc(x.epc)}</td><td data-l="Tipo">${esc(x.tipo)}</td><td data-l="Cor">${esc(x.cor||'–')}</td><td data-l="Tamanho">${esc(x.tamanho||'–')}</td><td data-l="Localização">${esc(x.localizacao||'–')}</td><td data-l="Estado">${esc(x.estado)}</td></tr>`).join('')||'<tr><td colspan=7>nenhuma peça</td></tr>';
+  $('invPecasInfo').textContent=r.total>r.pecas.length?`mostrando ${r.pecas.length} de ${r.total} (refine os filtros)`:'';
   const mapa=new Map(r.resumo.map(x=>[x.tipo,{atual:x.quantidade,esperado:0}]));
   if(esp)esp.linhas.forEach(l=>{const o=mapa.get(l.tipo)||{atual:0,esperado:0};o.esperado=l.esperado;mapa.set(l.tipo,o)});
   const linhas=[...mapa].sort((a,b)=>a[0].localeCompare(b[0],'pt-BR'));
@@ -1176,6 +1199,7 @@ async function carregarInventario(){
     +(linhas.length?`<tr style="font-weight:700"><td>Total</td><td>${totA}</td>${cel(totA,totE)}</tr>`:'<tr><td colspan=4>nenhum item encontrado</td></tr>');
 }
 INV_FILTROS.forEach(([id])=>{$(id).onchange=carregarInventario});
+$('invBusca').oninput=()=>{clearTimeout(invBuscaT);invBuscaT=setTimeout(carregarInventario,300)};
 let confId=null;
 $('iniciarConf').onclick=async()=>{
   const f={};INV_FILTROS.forEach(([id,,param])=>{if($(id).value)f[param]=$(id).value});
@@ -1201,7 +1225,7 @@ async function carregarConfDetalhe(){
   $('cfInfo').textContent=`Por ${c.usuario||'–'} · iniciada ${dt(c.iniciada_em)}${c.finalizada_em?' · finalizada '+dt(c.finalizada_em):''} · filtros: ${c.filtros_desc}`;
   $('confFinalizar').hidden=c.status!=='andamento';$('cfCsv').href='/api/conferencias/'+c.id+'/export.csv';
   $('cfItens').innerHTML=c.itens.map(i=>`<tr><td>${i.conferido_em?'<span class="pill ok">✓ conferido</span>':'<span class="pill alerta">não conferido</span>'}</td>
-    <td class="epc">${esc(i.epc)}</td><td>${esc(i.tipo)}</td><td>${i.conferido_em?dt(i.conferido_em):'–'}</td></tr>`).join('')||'<tr><td colspan=4>nenhum item</td></tr>';
+    <td class="epc">${esc(i.epc)}</td><td>${esc(i.nome||'–')}</td><td>${esc(i.tipo)}</td><td>${i.conferido_em?dt(i.conferido_em):'–'}</td></tr>`).join('')||'<tr><td colspan=5>nenhum item</td></tr>';
 }
 document.addEventListener('click',async e=>{const b=e.target.closest('.verConf');if(!b)return;confId=Number(b.dataset.id);await carregarConfDetalhe();$('confDetalhe').scrollIntoView()});
 $('cfSoNao').onchange=()=>confId&&carregarConfDetalhe();
@@ -1652,7 +1676,19 @@ $('cadastrarItem').onclick=async()=>{
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
 
-function lerEpcs(){return $('mnEpcs').value.split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean)}
+let manualNomes={};
+function lerEpcs(){ // linha "EPC;nome" (ou EPC<tab>nome) dá nome; sem ; nem tab, EPCs separados por espaço/vírgula como antes
+  manualNomes={};const out=[];
+  $('mnEpcs').value.split(/\r?\n/).forEach(l=>{
+    l=l.trim();if(!l)return;
+    const m=l.match(/^([^;\t]+)[;\t](.*)$/);
+    if(m){const e=m[1].trim().toUpperCase(),n=m[2].trim();if(e){out.push(e);if(n)manualNomes[e]=n}}
+    else l.split(/[\s,]+/).filter(Boolean).forEach(x=>out.push(x));
+  });
+  return out;
+}
+function exemploSeq(){const p=$('mnPrefixo').value.trim();$('mnExemplo').textContent=p?'ex.: '+p+' '+String($('mnInicio').value||0).padStart(Number($('mnDigitos').value)||0,'0'):''}
+['mnPrefixo','mnInicio','mnDigitos'].forEach(id=>$(id).oninput=exemploSeq);
 $('mnLimpar').onclick=()=>{$('mnEpcs').value='';['mnNovosBox','mnIdBox','mnInvBox'].forEach(id=>$(id).hidden=true);$('mnResumo').textContent='';$('mnMsg').textContent=''};
 async function consultarManual(){
   const msg=$('mnMsg'),epcs=lerEpcs();
@@ -1669,17 +1705,30 @@ async function consultarManual(){
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
 }
 let manualNovos=[];
+$('imEnviar').onclick=async()=>{
+  const msg=$('imMsg'),f=$('imFile').files[0];
+  if(!f){msg.className='msg bad';msg.textContent='escolha o arquivo CSV';return}
+  try{
+    const texto=await f.text();
+    const r=await j('/api/itens/importar-nomes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto,tipo:$('imTipo').value.trim()||null,sobrescrever:$('imSobre').checked})});
+    msg.className='msg ok';
+    msg.textContent=`${r.nomeados} nomeada(s), ${r.cadastrados} cadastrada(s), ${r.ignorados_com_nome} mantida(s) com o nome atual`
+      +(r.total_nao_cadastrados?`, ${r.total_nao_cadastrados} EPC(s) não cadastrados (informe um tipo para cadastrá-los)`:'')
+      +(r.total_invalidos?`, ${r.total_invalidos} linha(s) inválida(s): ${r.invalidos.slice(0,5).join(' | ')}`:'');
+    await Promise.all([carregarCatalogo(),carregarInventario()]);
+  }catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
 $('mnConsultar').onclick=consultarManual;
 $('mnCadastrar').onclick=async()=>{
   const msg=$('mnMsg'),tipo=$('mnTipo').value.trim();
   if(!tipo){msg.className='msg bad';msg.textContent='informe o tipo dos itens novos';return}
   try{
     const r=await j('/api/itens/cadastrar-lote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      epcs:manualNovos,tipo,fabricante:$('mnFabricante').value.trim()||null,tamanho:$('mnTamanho').value.trim()||null,
+      epcs:manualNovos,tipo,nomes:manualNomes,prefixo:$('mnPrefixo').value.trim()||null,inicio:Number($('mnInicio').value)||0,digitos:Number($('mnDigitos').value)||0,fabricante:$('mnFabricante').value.trim()||null,tamanho:$('mnTamanho').value.trim()||null,
       composicao:$('mnComposicao').value.trim()||null,cor:$('mnCor').value.trim()||null,data_compra:$('mnCompra').value||null})});
     await consultarManual();
     msg.className='msg ok';msg.textContent=`${r.cadastrados} item(ns) cadastrado(s)`;
-    ['mnTipo','mnFabricante','mnTamanho','mnComposicao','mnCor','mnCompra'].forEach(id=>$(id).value='');
+    ['mnTipo','mnFabricante','mnTamanho','mnComposicao','mnCor','mnCompra','mnPrefixo'].forEach(id=>$(id).value='');if(r.proximo_numero!=null)$('mnInicio').value=r.proximo_numero;exemploSeq();
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
 let acoCarregada=false;

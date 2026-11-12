@@ -1711,6 +1711,10 @@ def consultar_itens(payload: ConsultaIn):
 class CadastroLoteIn(BaseModel):
     epcs: list[str]
     tipo: str
+    nomes: dict[str, str] | None = None  # EPC -> nome (linhas "EPC;nome" do Leitor manual); vale só para EPC novo
+    prefixo: str | None = None  # nomes sequenciais para os novos sem nome: "<prefixo> 001", "<prefixo> 002"…
+    inicio: int = 1
+    digitos: int = 3
     fabricante: str | None = None
     tamanho: str | None = None
     composicao: str | None = None
@@ -1728,18 +1732,81 @@ def cadastrar_itens_lote(payload: CadastroLoteIn):
     invalidos = [e for e in lista if not epc_valido(e)]
     validos = [e for e in lista if epc_valido(e)]
     data_compra = data_iso(payload.data_compra)
+    nomes_in = {epc_manual(k): nome_item(v) for k, v in (payload.nomes or {}).items()}
+    prefixo = " ".join((payload.prefixo or "").split())
+    if not 0 <= payload.digitos <= 8 or not 0 <= payload.inicio <= 10_000_000:
+        raise HTTPException(400, "início/dígitos da numeração inválidos")
+    if prefixo and len(prefixo) + payload.digitos + 8 > NOME_MAX:
+        raise HTTPException(400, "prefixo muito longo")
     now = time.time()
     with closing(db()) as con:
         padrao = con.execute("SELECT id FROM estados_inventario WHERE padrao=1 LIMIT 1").fetchone()["id"]
-        antes = con.execute("SELECT COUNT(*) n FROM itens WHERE epc = ANY(%s)", (validos,)).fetchone()["n"]
+        existentes = {r["epc"] for r in con.execute("SELECT epc FROM itens WHERE epc = ANY(%s)", (validos,)).fetchall()}
+        antes = len(existentes)
+        seq, linhas = payload.inicio, []
+        for e in validos:
+            if e in existentes:
+                continue
+            nome = nomes_in.get(e)
+            if not nome and prefixo:  # numera só quem não veio com nome, na ordem em que foram informados
+                nome = f"{prefixo} {str(seq).zfill(payload.digitos)}"; seq += 1
+            linhas.append((e, nome, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor, data_compra, padrao, now, now))
         with con.cursor() as cur:
             cur.executemany(
-                """INSERT INTO itens(epc,tipo,fabricante,tamanho,composicao,cor,data_compra,estado_id,criado_em,atualizado_em)
-                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(epc) DO NOTHING""",
-                [(e, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor, data_compra, padrao, now, now)
-                 for e in validos])
+                """INSERT INTO itens(epc,nome,tipo,fabricante,tamanho,composicao,cor,data_compra,estado_id,criado_em,atualizado_em)
+                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(epc) DO NOTHING""", linhas)
         con.commit()
-    return {"cadastrados": len(validos) - antes, "ja_existiam": antes, "invalidos": invalidos}
+    r = {"cadastrados": len(validos) - antes, "ja_existiam": antes, "invalidos": invalidos}
+    if prefixo:
+        r["proximo_numero"] = seq  # onde a próxima numeração continua
+    return r
+
+
+class ImportaNomesIn(BaseModel):
+    texto: str  # linhas "EPC;nome" (aceita ; , ou tab; cabeçalho "epc;nome" é ignorado)
+    tipo: str | None = None  # com tipo, EPC ainda não cadastrado é cadastrado com ele; sem tipo, é só listado
+    sobrescrever: bool = True  # False mantém o nome que o item já tem
+
+
+@app.post("/api/itens/importar-nomes", dependencies=[Depends(P_CATALOGO)])
+def importar_nomes(payload: ImportaNomesIn):
+    """Importa CSV EPC;nome: dá nome às tags já cadastradas (e, com `tipo`, cadastra as que faltam)."""
+    pares, invalidos, vistos = [], [], set()
+    for bruta in payload.texto.splitlines()[:5001]:
+        linha = bruta.strip().lstrip("\ufeff")
+        if not linha:
+            continue
+        partes = re.split(r"[;\t,]", linha, maxsplit=1)
+        epc = epc_manual(partes[0].strip().strip('"'))
+        if epc in ("EPC",) and len(pares) == 0 and not invalidos:
+            continue  # cabeçalho
+        nome = nome_item(partes[1].strip().strip('"')) if len(partes) > 1 else None
+        if not epc_valido(epc) or not nome:
+            invalidos.append(linha[:80]); continue
+        if epc not in vistos:
+            vistos.add(epc); pares.append((epc, nome))
+    if not pares and not invalidos:
+        raise HTTPException(400, "nenhuma linha EPC;nome encontrada")
+    if len(pares) > 5000:
+        raise HTTPException(400, "máximo de 5000 linhas por importação")
+    tipo = (payload.tipo or "").strip() or None
+    now = time.time()
+    with closing(db()) as con:
+        existentes = {r["epc"]: r["nome"] for r in con.execute(
+            "SELECT epc, nome FROM itens WHERE epc = ANY(%s)", ([p[0] for p in pares],)).fetchall()}
+        novos = [(e, n) for e, n in pares if e not in existentes]
+        a_nomear = [(n, now, e) for e, n in pares if e in existentes and (payload.sobrescrever or not existentes[e])]
+        with con.cursor() as cur:
+            cur.executemany("UPDATE itens SET nome=%s, atualizado_em=%s WHERE epc=%s", a_nomear)
+            if tipo and novos:
+                padrao = con.execute("SELECT id FROM estados_inventario WHERE padrao=1 LIMIT 1").fetchone()["id"]
+                cur.executemany("""INSERT INTO itens(epc,nome,tipo,estado_id,criado_em,atualizado_em) VALUES(%s,%s,%s,%s,%s,%s)
+                                   ON CONFLICT(epc) DO NOTHING""", [(e, n, tipo, padrao, now, now) for e, n in novos])
+        con.commit()
+    return {"nomeados": len(a_nomear), "cadastrados": len(novos) if tipo else 0,
+            "ignorados_com_nome": sum(1 for e, _ in pares if e in existentes) - len(a_nomear),
+            "nao_cadastrados": [] if tipo else [e for e, _ in novos][:200], "total_nao_cadastrados": 0 if tipo else len(novos),
+            "invalidos": invalidos[:200], "total_invalidos": len(invalidos)}
 
 
 @app.get("/api/inventario/revisao", dependencies=[Depends(P_CONSULTAR)])
@@ -1841,8 +1908,10 @@ def definir_estado_item(epc: str, payload: EstadoItemIn):
 @app.get("/api/inventario", dependencies=[Depends(P_CONSULTAR)])
 def inventario(localizacao: str | None = None, estado: str | None = None, tipo: str | None = None,
                 fabricante: str | None = None, tamanho: str | None = None,
-                composicao: str | None = None, cor: str | None = None):
+                composicao: str | None = None, cor: str | None = None, q: str | None = None, pecas: int = 0):
     cond, args = [], []
+    if q:  # busca por nome, EPC ou tipo
+        cond.append("(v.nome ILIKE %s OR v.epc ILIKE %s OR v.tipo ILIKE %s)"); args += [f"%{q}%"] * 3
     for campo, valor in (("localizacao", localizacao), ("estado", estado), ("tipo", tipo),
                           ("fabricante", fabricante), ("tamanho", tamanho),
                           ("composicao", composicao), ("cor", cor)):
@@ -1854,7 +1923,11 @@ def inventario(localizacao: str | None = None, estado: str | None = None, tipo: 
             f"SELECT v.tipo, COUNT(*) quantidade FROM ({ITENS_VIEW_SQL}) v{where} GROUP BY v.tipo ORDER BY quantidade DESC",
             args).fetchall()
         total = list(con.execute(f"SELECT COUNT(*) FROM ({ITENS_VIEW_SQL}) v{where}", args).fetchone().values())[0]
-    return {"total": total, "resumo": resumo}
+        lista = []
+        if pecas:  # peças individuais (com nome) dentro dos mesmos filtros
+            lista = con.execute(f"""SELECT v.epc, v.nome, v.tipo, v.cor, v.tamanho, v.localizacao, v.estado
+                                    FROM ({ITENS_VIEW_SQL}) v{where} ORDER BY v.tipo, v.nome NULLS LAST, v.epc LIMIT 300""", args).fetchall()
+    return {"total": total, "resumo": resumo, "pecas": lista}
 
 
 class SaidaIn(BaseModel):
@@ -2499,12 +2572,14 @@ def detalhe_conferencia(cid: int, somente: str | None = None, limit: int = 5000)
         if not c:
             raise HTTPException(404, "conferência não encontrada")
         if c["status"] == "andamento":  # conferido = visto pelo leitor desde o início
-            itens = con.execute("""SELECT ci.epc, ci.tipo, e.m AS conferido_em FROM conferencia_itens ci
+            itens = con.execute("""SELECT ci.epc, ci.tipo, it.nome, e.m AS conferido_em FROM conferencia_itens ci
                 LEFT JOIN (SELECT epc, MIN(received_at) m FROM events WHERE received_at>=%s GROUP BY epc) e ON e.epc=ci.epc
+                LEFT JOIN itens it ON it.epc=ci.epc
                 WHERE ci.conferencia_id=%s ORDER BY ci.tipo, ci.epc""", (c["iniciada_em"], cid)).fetchall()
         else:
-            itens = con.execute("""SELECT epc, tipo, conferido_em FROM conferencia_itens
-                                   WHERE conferencia_id=%s ORDER BY tipo, epc""", (cid,)).fetchall()
+            itens = con.execute("""SELECT ci.epc, ci.tipo, it.nome, ci.conferido_em FROM conferencia_itens ci
+                                   LEFT JOIN itens it ON it.epc=ci.epc
+                                   WHERE ci.conferencia_id=%s ORDER BY ci.tipo, ci.epc""", (cid,)).fetchall()
     stats = _stats(itens, c["iniciada_em"], c["finalizada_em"], now)
     if somente == "nao_conferidos":
         itens = [i for i in itens if not i["conferido_em"]]
@@ -2516,9 +2591,9 @@ def detalhe_conferencia(cid: int, somente: str | None = None, limit: int = 5000)
 @app.get("/api/conferencias/{cid}/export.csv", dependencies=[Depends(P_EXPORTAR)])
 def export_conferencia(cid: int):
     d = detalhe_conferencia(cid, None, 10000)
-    return csv_resp(f"conferencia-{cid}.csv", ["epc", "item", "situacao", "conferido_em"],
+    return csv_resp(f"conferencia-{cid}.csv", ["epc", "item", "situacao", "conferido_em", "nome"],
                     [(i["epc"], i["tipo"], "conferido" if i["conferido_em"] else "nao_conferido",
-                      hora_local(i["conferido_em"]) if i["conferido_em"] else "") for i in d["itens"]])
+                      hora_local(i["conferido_em"]) if i["conferido_em"] else "", i["nome"] or "") for i in d["itens"]])
 
 
 @app.post("/api/conferencias/{cid}/finalizar", dependencies=[Depends(P_CONF)])
@@ -2581,7 +2656,7 @@ ROTULOS_ACAO = [  # (método, regex do caminho, descrição) — o que não casa
     ("POST", r"/api/lotes/\d+/transferir", "Transferiu lote"), ("POST", r"/api/lotes/\d+/estado", "Mudou estado do lote"),
     ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/leitura/armar", "Armou a leitura"),
     ("POST", r"/api/itens", "Cadastrou/atualizou item"), ("PATCH", r"/api/itens/[^/]+/nome", "Nomeou tag"), ("POST", r"/api/itens/editar-lote", "Editou itens em lote"),
-    ("POST", r"/api/itens/cadastrar-lote", "Cadastrou itens em lote"), ("PATCH", r"/api/itens/[^/]+/estado", "Mudou estado do item"),
+    ("POST", r"/api/itens/cadastrar-lote", "Cadastrou itens em lote"), ("POST", r"/api/itens/importar-nomes", "Importou nomes de tags"), ("PATCH", r"/api/itens/[^/]+/estado", "Mudou estado do item"),
     ("POST", r"/api/conferencias", "Iniciou conferência"), ("POST", r"/api/conferencias/\d+/finalizar", "Finalizou conferência"),
     ("POST", r"/api/destinos", "Criou destino"), ("PATCH", r"/api/destinos/\d+", "Alterou destino"),
     ("POST", r"/api/estados", "Criou estado"), ("POST", r"/api/antenas", "Criou antena"), ("PUT", r"/api/antenas/\d+", "Alterou antena"),
