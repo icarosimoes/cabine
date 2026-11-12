@@ -2,6 +2,8 @@
 import asyncio, datetime, re, threading, base64, csv, io, binascii, hashlib, hmac, json, os, secrets, time, urllib.parse, urllib.request
 from pathlib import Path
 
+from app import armazenamento
+
 import psycopg
 from psycopg.rows import dict_row
 from contextlib import asynccontextmanager, closing
@@ -35,7 +37,8 @@ CLIPE_MARGEM_SEG = int(os.environ.get("CLIPE_MARGEM_SEGUNDOS", "5"))      # espe
 CLIPE_AGRUPAR_SEG = int(os.environ.get("CLIPE_AGRUPAR_SEGUNDOS", "30"))   # leituras da mesma câmera nessa janela dividem 1 clipe
 CLIPE_TIMEOUT_SEG = int(os.environ.get("CLIPE_TIMEOUT_SEGUNDOS", "900"))  # agente pegou o clipe e não concluiu
 CLIPE_MAX_MB = int(os.environ.get("CLIPE_MAX_MB", "100"))
-CLIPES_RETENCAO_DIAS = int(os.environ.get("CLIPES_RETENCAO_DIAS", "30"))
+CLIPES_RETENCAO_DIAS = int(os.environ.get("CLIPES_RETENCAO_DIAS", "365"))  # vídeos de ocorrências ficam guardados este tempo (só quem tem "excluir_videos" apaga antes)
+CLIPES_TESTE_DIAS = int(os.environ.get("CLIPES_TESTE_DIAS", "7"))  # clipes do botão Testar da câmera
 CLIPES_DIR = Path(os.environ.get("CLIPES_DIR", "/srv/clipes"))
 CLIPE_LINK_HORAS = int(os.environ.get("CLIPE_LINK_HORAS", "72"))  # validade do link do clipe enviado por WhatsApp
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://cabine.solidsd.com.br").rstrip("/")
@@ -54,6 +57,7 @@ PERMISSOES = {
     "consultar": "Consultar telas (inventário, lotes, transferências, evasão, relatórios, tags, eventos, conferências)",
     "operar_cabine": "Operar a cabine (registrar lotes, transferir, divergência, estado do lote)",
     "excluir_lotes": "Excluir lotes aguardando transferência",
+    "excluir_videos": "Excluir os vídeos das ocorrências de evasão (e câmeras que tenham vídeos guardados)",
     "catalogo_editar": "Cadastrar e editar itens (catálogo, lote, leitor manual, estado do item)",
     "conferencia": "Iniciar e finalizar conferências de estoque",
     "cadastros": "Manter destinos, estados, antenas e acomodações",
@@ -284,6 +288,8 @@ def init_db():
         for col in ("descricao TEXT", "modo TEXT NOT NULL DEFAULT 'automatico'", "alerta BOOLEAN NOT NULL DEFAULT TRUE",
                     "ip TEXT", "porta INTEGER", "evasao BOOLEAN NOT NULL DEFAULT FALSE"):
             con.execute(f"ALTER TABLE antenas ADD COLUMN IF NOT EXISTS {col}")
+        con.execute("ALTER TABLE clipes ADD COLUMN IF NOT EXISTS excluido_por TEXT")  # status 'excluido': o vídeo foi apagado de propósito; a ocorrência fica
+        con.execute("ALTER TABLE clipes ADD COLUMN IF NOT EXISTS excluido_em DOUBLE PRECISION")
         con.execute("ALTER TABLE clipes ADD COLUMN IF NOT EXISTS alertado BOOLEAN NOT NULL DEFAULT FALSE")  # aviso de evasão já enviado
         con.execute("ALTER TABLE clipes ADD COLUMN IF NOT EXISTS link_enviado BOOLEAN NOT NULL DEFAULT FALSE")
         con.execute("ALTER TABLE antenas ADD COLUMN IF NOT EXISTS camera_id INTEGER REFERENCES cameras(id) ON DELETE SET NULL")
@@ -496,6 +502,7 @@ def exige(perm: str):
 
 
 P_DASH, P_CONSULTAR, P_OPERAR, P_EXCLUIR = exige("dashboard"), exige("consultar"), exige("operar_cabine"), exige("excluir_lotes")
+P_EXCLUIR_VIDEO = exige("excluir_videos")
 P_CATALOGO, P_CONF, P_CADASTROS, P_EXPORTAR = exige("catalogo_editar"), exige("conferencia"), exige("cadastros"), exige("exportar")
 P_WHATSAPP, P_USUARIOS, P_AUDITORIA, P_SISTEMA = exige("alertas_whatsapp"), exige("usuarios"), exige("auditoria"), exige("sistema")
 P_MONITOR = exige("monitoramento")
@@ -1047,6 +1054,10 @@ def init_db_retry(tentativas=30):
 @asynccontextmanager
 async def lifespan(_):
     await asyncio.to_thread(init_db_retry)
+    try:
+        await asyncio.to_thread(armazenamento.garantir_bucket)
+    except Exception as e:  # noqa: BLE001
+        print(f"S3 indisponível na subida (o upload tenta de novo): {e}", flush=True)
     await asyncio.to_thread(carregar_estado_alertas)
     t = asyncio.create_task(background())
     ts = asyncio.create_task(loop_sessao()) if SESSAO_AUTO else None
@@ -2310,7 +2321,7 @@ def registrar_saida(payload: SaidaIn, background: BackgroundTasks):
 def listar_saidas(documentado: bool | None = None, destino_id: int | None = None,
                    desde: float | None = None, ate: float | None = None, limit: int = 200):
     sql = """SELECT s.id, s.epc, s.destino_id, d.nome destino_nome, s.detectado_em, s.documentado, s.transferencia_id,
-                    s.antena_id, s.clipe_id, c.status clipe_status, c.erro clipe_erro, i.nome item_nome, i.tipo item_tipo
+                    s.antena_id, s.clipe_id, c.status clipe_status, c.erro clipe_erro, c.excluido_por clipe_excluido_por, c.excluido_em clipe_excluido_em, c.tamanho clipe_tamanho, i.nome item_nome, i.tipo item_tipo
              FROM eventos_saida s JOIN destinos d ON d.id=s.destino_id LEFT JOIN clipes c ON c.id=s.clipe_id
              LEFT JOIN itens i ON i.epc=s.epc"""
     cond, args = [], []
@@ -2558,13 +2569,46 @@ def _clipes_para_agente(con, now: float, agente_id: int | None = None) -> list:
                        (now, agente_id, CLIPE_MARGEM_SEG, now, agente_id)).fetchall()
 
 
+def apagar_arquivo_clipe(clipe_id: int):
+    """Remove o vídeo onde ele estiver (disco local e/ou bucket S3). Falha do S3 não derruba a operação: só avisa no log."""
+    (CLIPES_DIR / f"{clipe_id}.mp4").unlink(missing_ok=True)
+    try:
+        armazenamento.apagar(clipe_id)
+    except Exception as e:  # noqa: BLE001
+        print(f"não consegui apagar o vídeo {clipe_id} no S3: {e}", flush=True)
+
+
+def _servir_clipe(clipe_id: int, request: Request, cabecalhos: dict | None = None):
+    """Entrega o mp4 (com suporte a Range, para o player buscar trechos): do disco se ainda estiver lá, senão do S3."""
+    from starlette.responses import StreamingResponse
+    arq = CLIPES_DIR / f"{clipe_id}.mp4"  # nome vem só do id numérico
+    if arq.is_file():
+        return FileResponse(arq, media_type="video/mp4", headers=cabecalhos)
+    if not armazenamento.ativo():
+        raise HTTPException(404, "vídeo não disponível")
+    faixa = request.headers.get("range")
+    if faixa and not re.fullmatch(r"bytes=\d*-\d*", faixa):
+        faixa = None
+    try:
+        status, cab, blocos = armazenamento.abrir(clipe_id, faixa)
+    except Exception as e:  # noqa: BLE001
+        print(f"leitura do vídeo {clipe_id} no S3 falhou: {e}", flush=True)
+        raise HTTPException(404, "vídeo não disponível")
+    return StreamingResponse(blocos, status_code=status, media_type="video/mp4", headers={**cab, **(cabecalhos or {})})
+
+
 def purgar_clipes():
-    cutoff = time.time() - CLIPES_RETENCAO_DIAS * 86400
+    agora = time.time()
     with closing(db()) as con:
-        velhos = con.execute("DELETE FROM clipes WHERE criado_em<%s RETURNING id", (cutoff,)).fetchall()
+        velhos = con.execute("DELETE FROM clipes WHERE (NOT teste AND criado_em<%s) OR (teste AND criado_em<%s) RETURNING id",
+                             (agora - CLIPES_RETENCAO_DIAS * 86400, agora - CLIPES_TESTE_DIAS * 86400)).fetchall()
         con.commit()
     for r in velhos:
-        (CLIPES_DIR / f"{r['id']}.mp4").unlink(missing_ok=True)
+        apagar_arquivo_clipe(r["id"])
+    if armazenamento.ativo():  # sobe para o bucket o que ficou no disco de antes
+        n = armazenamento.migrar_locais(CLIPES_DIR)
+        if n:
+            print(f"{n} vídeo(s) migrado(s) do disco para o S3", flush=True)
 
 
 # ---------- aviso de evasão por WhatsApp (com link do vídeo) ----------
@@ -2630,16 +2674,15 @@ def avisar_video_pronto(clipe_id: int):
 
 
 @app.get("/v/{clipe_id}")
-def video_publico(clipe_id: int, e: int, s: str):
+def video_publico(clipe_id: int, e: int, s: str, request: Request):
     """Vídeo do clipe pelo link assinado do WhatsApp (sem login). Expira; a assinatura vale só para este clipe."""
     if e < time.time() or not hmac.compare_digest(s, _assina_clipe(clipe_id, e)):
         raise HTTPException(403, "link inválido ou expirado")
-    arq = CLIPES_DIR / f"{clipe_id}.mp4"
     with closing(db()) as con:
         ok = con.execute("SELECT 1 FROM clipes WHERE id=%s AND status='ok'", (clipe_id,)).fetchone()
-    if not ok or not arq.is_file():
+    if not ok:
         raise HTTPException(404, "vídeo não disponível")
-    return FileResponse(arq, media_type="video/mp4", headers={"Cache-Control": "private, no-store", "X-Robots-Tag": "noindex"})
+    return _servir_clipe(clipe_id, request, {"Cache-Control": "private, no-store", "X-Robots-Tag": "noindex"})
 
 
 @app.get("/api/clipes-zip", dependencies=[Depends(P_CONSULTAR)])
@@ -2660,10 +2703,20 @@ def baixar_clipes(ids: str):
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:  # mp4 já é comprimido
         for r in rows:
             arq = CLIPES_DIR / f"{r['id']}.mp4"
+            nome_cam = re.sub(r"[^A-Za-z0-9_-]+", "_", r["camera"])[:30]
+            nome_zip = f"evasao-{time.strftime('%Y%m%d-%H%M%S', time.localtime(r['t0']))}-{nome_cam}-{r['id']}.mp4"
             if arq.is_file():
-                nome_cam = re.sub(r"[^A-Za-z0-9_-]+", "_", r["camera"])[:30]
-                z.write(arq, f"evasao-{time.strftime('%Y%m%d-%H%M%S', time.localtime(r['t0']))}-{nome_cam}-{r['id']}.mp4")
+                z.write(arq, nome_zip)
                 n += 1
+            elif armazenamento.ativo():
+                try:
+                    _, _, blocos = armazenamento.abrir(r["id"])
+                    with z.open(nome_zip, "w", force_zip64=True) as dst:
+                        for b in blocos:
+                            dst.write(b)
+                    n += 1
+                except Exception as e:  # noqa: BLE001
+                    print(f"zip: vídeo {r['id']} indisponível no S3: {e}", flush=True)
     if not n:
         tmp.close()
         raise HTTPException(404, "nenhum dos clipes está disponível")
@@ -2753,12 +2806,16 @@ def editar_camera(camera_id: int, payload: CameraIn):
 @app.delete("/api/cameras/{camera_id}", dependencies=[Depends(P_CADASTROS)])
 def excluir_camera(camera_id: int):
     with closing(db()) as con:
+        guardados = con.execute("SELECT COUNT(*) n FROM clipes WHERE camera_id=%s AND NOT teste AND status='ok'", (camera_id,)).fetchone()["n"]
+        if guardados:  # excluir a câmera levaria junto os vídeos das ocorrências
+            raise HTTPException(409, f"esta câmera tem {guardados} vídeo(s) de ocorrência guardado(s): exclua-os antes (Alertas de evasão), "
+                                     "ou apenas desligue a câmera da antena")
         ids = [r["id"] for r in con.execute("SELECT id FROM clipes WHERE camera_id=%s", (camera_id,)).fetchall()]
         if not con.execute("DELETE FROM cameras WHERE id=%s RETURNING id", (camera_id,)).fetchone():
             raise HTTPException(404, "câmera não encontrada")
         con.commit()
     for i in ids:
-        (CLIPES_DIR / f"{i}.mp4").unlink(missing_ok=True)
+        apagar_arquivo_clipe(i)
     return {"ok": True}
 
 
@@ -2782,6 +2839,22 @@ def testar_camera(camera_id: int):
     return {"clipe_id": cid}
 
 
+@app.delete("/api/clipes/{clipe_id}")
+def excluir_clipe(clipe_id: int, user: dict = Depends(P_EXCLUIR_VIDEO)):
+    """Apaga o arquivo do vídeo. A ocorrência continua na lista, marcada com quem excluiu e quando."""
+    with closing(db()) as con:
+        c = con.execute("SELECT status FROM clipes WHERE id=%s", (clipe_id,)).fetchone()
+        if not c:
+            raise HTTPException(404, "clipe não encontrado")
+        if c["status"] not in ("ok", "erro"):
+            raise HTTPException(409, f"o clipe está '{c['status']}' e ainda não pode ser excluído")
+        con.execute("""UPDATE clipes SET status='excluido', arquivo=NULL, tamanho=NULL, excluido_por=%s, excluido_em=%s WHERE id=%s""",
+                    (user["usuario"], time.time(), clipe_id))
+        con.commit()
+    apagar_arquivo_clipe(clipe_id)
+    return {"ok": True}
+
+
 @app.get("/api/clipes/{clipe_id}", dependencies=[Depends(P_CONSULTAR)])
 def ler_clipe(clipe_id: int):
     with closing(db()) as con:
@@ -2793,13 +2866,12 @@ def ler_clipe(clipe_id: int):
 
 
 @app.get("/api/clipes/{clipe_id}/video", dependencies=[Depends(P_CONSULTAR)])
-def video_clipe(clipe_id: int):
+def video_clipe(clipe_id: int, request: Request):
     with closing(db()) as con:
         c = con.execute("SELECT status FROM clipes WHERE id=%s", (clipe_id,)).fetchone()
-    arq = CLIPES_DIR / f"{clipe_id}.mp4"  # nome vem só do id numérico
-    if not c or c["status"] != "ok" or not arq.is_file():
+    if not c or c["status"] != "ok":
         raise HTTPException(404, "vídeo ainda não disponível")
-    return FileResponse(arq, media_type="video/mp4")
+    return _servir_clipe(clipe_id, request)
 
 
 @app.put("/api/agente/clipes/{clipe_id}/arquivo")
@@ -2827,7 +2899,15 @@ async def agente_clipe_arquivo(clipe_id: int, request: Request, ag: dict = Depen
                 f.write(chunk)
         if total == 0 or inicio[4:8] != b"ftyp":
             raise HTTPException(400, "o arquivo não é um mp4 válido")
-        os.replace(tmp, CLIPES_DIR / f"{clipe_id}.mp4")
+        if armazenamento.ativo():  # vai para o bucket; o disco só serve de área de passagem
+            try:
+                await asyncio.to_thread(armazenamento.guardar, clipe_id, tmp)
+            except Exception as e:  # noqa: BLE001
+                print(f"envio do vídeo {clipe_id} ao S3 falhou: {e}", flush=True)
+                raise HTTPException(503, "armazenamento de vídeos indisponível; tente de novo")
+            tmp.unlink(missing_ok=True)
+        else:
+            os.replace(tmp, CLIPES_DIR / f"{clipe_id}.mp4")
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
@@ -3100,7 +3180,7 @@ def login(payload: LoginIn, request: Request):
 ROTULOS_ACAO = [  # (método, regex do caminho, descrição) — o que não casar aparece como "MÉTODO caminho"
     ("DELETE", r"/api/lotes/\d+", "Excluiu lote"), ("POST", r"/api/lotes/registrar", "Registrou lote"),
     ("POST", r"/api/lotes/\d+/transferir", "Transferiu lote"), ("POST", r"/api/lotes/\d+/estado", "Mudou estado do lote"),
-    ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/estacoes/heartbeat", "Estação de controle"), ("POST", r"/api/push/assinar", "Ativou notificações no aparelho"), ("POST", r"/api/push/cancelar", "Desativou notificações no aparelho"), ("POST", r"/api/leitura/armar", "Armou a leitura"),
+    ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/estacoes/heartbeat", "Estação de controle"), ("DELETE", r"/api/clipes/\d+", "Excluiu vídeo de ocorrência"), ("POST", r"/api/push/assinar", "Ativou notificações no aparelho"), ("POST", r"/api/push/cancelar", "Desativou notificações no aparelho"), ("POST", r"/api/leitura/armar", "Armou a leitura"),
     ("POST", r"/api/itens", "Cadastrou/atualizou item"), ("PATCH", r"/api/itens/[^/]+/nome", "Nomeou tag"), ("POST", r"/api/itens/editar-lote", "Editou itens em lote"),
     ("POST", r"/api/itens/cadastrar-lote", "Cadastrou itens em lote"), ("POST", r"/api/itens/importar-nomes", "Importou nomes de tags"), ("PATCH", r"/api/itens/[^/]+/estado", "Mudou estado do item"),
     ("POST", r"/api/conferencias", "Iniciou conferência"), ("POST", r"/api/conferencias/\d+/finalizar", "Finalizou conferência"),

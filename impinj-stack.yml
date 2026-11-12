@@ -37,6 +37,34 @@ services:
       restart_policy:
         condition: any
 
+  # Armazenamento S3 dos vídeos das evasões. Só na rede interna (sem Traefik). Usa a mesma imagem dos MinIO das outras stacks.
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:?Informe MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:?Informe MINIO_ROOT_PASSWORD}"
+    volumes:
+      - impinj_minio:/data
+    networks:
+      - impinj-internal
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == ${IMPINJ_NODE_HOSTNAME:-vmi3286141}
+      resources:
+        limits:
+          memory: 256M
+      restart_policy:
+        condition: any
+
   impinj:
     image: impinj-rfid:local
     environment:
@@ -56,8 +84,17 @@ services:
       WHATSAPP_INSTANCE: "${WHATSAPP_INSTANCE:-}"
       WHATSAPP_APIKEY: "${WHATSAPP_APIKEY:-}"
       ALERTA_SEM_SINAL_SEGUNDOS: "${ALERTA_SEM_SINAL_SEGUNDOS:-60}"
-      CLIPES_RETENCAO_DIAS: "${CLIPES_RETENCAO_DIAS:-30}"
+      CLIPES_RETENCAO_DIAS: "${CLIPES_RETENCAO_DIAS:-365}"
       PUBLIC_URL: "https://${RFID_HOST:-cabine.solidsd.com.br}"
+      # Armazenamento dos vídeos: padrão S3. Hoje o MinIO desta stack; para outro servidor S3 (outra VPS, AWS, Wasabi...)
+      # basta trocar estas variáveis no .env (CLIPES_S3_ENDPOINT/BUCKET/ACCESS_KEY/SECRET_KEY/REGION) e remover o serviço minio.
+      # Deixando CLIPES_S3_ENDPOINT vazio, volta a gravar em disco (volume impinj_clipes).
+      CLIPES_S3_ENDPOINT: "${CLIPES_S3_ENDPOINT-http://minio:9000}"
+      CLIPES_S3_BUCKET: "${CLIPES_S3_BUCKET:-cabine-clipes}"
+      CLIPES_S3_ACCESS_KEY: "${CLIPES_S3_ACCESS_KEY:?Informe CLIPES_S3_ACCESS_KEY (usuário do MinIO)}"
+      CLIPES_S3_SECRET_KEY: "${CLIPES_S3_SECRET_KEY:?Informe CLIPES_S3_SECRET_KEY (senha do MinIO)}"
+      CLIPES_S3_REGION: "${CLIPES_S3_REGION:-us-east-1}"
+      CLIPES_S3_PATH_STYLE: "${CLIPES_S3_PATH_STYLE:-1}"
     volumes:
       - impinj_clipes:/srv/clipes   # vídeos das evasões (mp4 enviados pelo agente)
     networks:
@@ -76,7 +113,7 @@ services:
           - node.hostname == ${IMPINJ_NODE_HOSTNAME:-vmi3286141}
       resources:
         limits:
-          memory: 128M
+          memory: 256M
       restart_policy:
         condition: any
       labels:
@@ -90,6 +127,7 @@ services:
 volumes:
   impinj_pgdata:
   impinj_clipes:
+  impinj_minio:
 
 networks:
   traefik-public:

@@ -116,3 +116,47 @@ def test_download_em_lote_zip(client, tmp_path, monkeypatch):
     assert client.get("/api/clipes-zip?ids=9999").status_code == 404
     assert client.get("/api/clipes-zip?ids=a,b").status_code == 400
     assert client.get("/api/clipes-zip?ids=" + ",".join(map(str, range(1, 60)))).status_code == 400
+
+
+def test_excluir_video_so_com_permissao_e_ocorrencia_continua(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "CLIPES_DIR", tmp_path)
+    cam, antena, dest, h = _setup(client)
+    cid = _saida(client, antena, dest)["clipe_id"]
+    assert client.delete(f"/api/clipes/{cid}").status_code == 409  # ainda gravando
+    _envelhece(cid, 70); _status(client, h)
+    client.put(f"/api/agente/clipes/{cid}/arquivo", content=MP4, headers=h, auth=None)
+    arq = tmp_path / f"{cid}.mp4"
+    assert arq.exists()
+    # perfil sem 'excluir_videos' (operador) não exclui; vê o vídeo
+    client.post("/api/usuarios", json={"usuario": "ana", "papel": "operador", "senha": "senha-forte-1"})
+    ana = client.__class__(client.app)
+    ana.post("/api/login", json={"usuario": "ana", "senha": "senha-forte-1"})
+    assert ana.get(f"/api/clipes/{cid}/video").status_code == 200
+    assert ana.delete(f"/api/clipes/{cid}").status_code == 403 and arq.exists()
+    # câmera com vídeo de ocorrência guardado não pode ser excluída
+    assert client.delete(f"/api/cameras/{cam}").status_code == 409
+    # perfil com a permissão
+    assert client.post("/api/perfis", json={"nome": "gestor", "descricao": "x", "permissoes": ["dashboard", "consultar", "excluir_videos"]}).status_code == 200
+    client.post("/api/usuarios", json={"usuario": "gil", "papel": "gestor", "senha": "senha-forte-1"})
+    gil = client.__class__(client.app)
+    gil.post("/api/login", json={"usuario": "gil", "senha": "senha-forte-1"})
+    assert gil.delete(f"/api/clipes/{cid}").status_code == 200 and not arq.exists()
+    ev = client.get("/api/saida").json()[0]
+    assert ev["clipe_status"] == "excluido" and ev["clipe_excluido_por"] == "gil" and ev["clipe_id"] == cid  # a ocorrência fica
+    assert client.get(f"/api/clipes/{cid}/video").status_code == 404
+    assert client.delete(f"/api/clipes/{cid}").status_code == 409  # já excluído
+    acoes = [a["acao"] for a in client.get("/api/auditoria/acoes").json()["acoes"]]
+    assert "Excluiu vídeo de ocorrência" in acoes
+    assert client.delete(f"/api/cameras/{cam}").status_code == 200  # sem vídeo guardado, pode
+
+
+def test_retencao_clipes_de_teste_curta_e_de_ocorrencia_longa(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "CLIPES_DIR", tmp_path)
+    cam, antena, dest, h = _setup(client)
+    oc = _saida(client, antena, dest)["clipe_id"]
+    teste = client.post(f"/api/cameras/{cam}/teste").json()["clipe_id"]
+    with main.closing(main.db()) as con:  # 10 dias: o de teste (7) já expira, o da ocorrência (365) não
+        con.execute("UPDATE clipes SET criado_em=criado_em-%s", (10 * 86400,)); con.commit()
+    main.purgar_clipes()
+    ids = [r["id"] for r in main.db().execute("SELECT id FROM clipes").fetchall()]
+    assert ids == [oc] and teste not in ids

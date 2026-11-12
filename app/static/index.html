@@ -1221,7 +1221,9 @@ function montaFiltroEvasao(){
 }
 function videoCelula(s){
   if(!s.clipe_id)return '<span class="mut">–</span>';
-  if(s.clipe_status==='ok')return `<label class="mut" title="marcar para baixar"><input type="checkbox" class="evSel" value="${s.clipe_id}"></label> <button data-clipe="${s.clipe_id}" data-when="${esc(dt(s.detectado_em))}">▶ assistir</button>`;
+  if(s.clipe_status==='excluido')return `<span class="pill cinza" title="o vídeo foi apagado; a ocorrência foi mantida">vídeo excluído</span> <span class="mut">${esc(s.clipe_excluido_por||'')} · ${s.clipe_excluido_em?dt(s.clipe_excluido_em):''}</span>`;
+  if(s.clipe_status==='ok')return `<label class="mut" title="marcar para baixar"><input type="checkbox" class="evSel" value="${s.clipe_id}"></label> <button class="acc" data-clipe="${s.clipe_id}" data-when="${esc(dt(s.detectado_em))}">▶ Ver vídeo</button>`
+    +(tem('excluir_videos')?` <button data-clipe-del="${s.clipe_id}" data-when="${esc(dt(s.detectado_em))}" title="apaga só o vídeo; a ocorrência continua">🗑 Excluir vídeo</button>`:'');
   if(s.clipe_status==='erro')return `<span class="pill alerta" title="${esc(s.clipe_erro||'')}">falhou</span> <span class="mut">${esc((s.clipe_erro||'').slice(0,60))}</span>`;
   return `<span class="mut">${s.clipe_status==='enviado'?'buscando no DVR…':'gravando (aguarda 60 s depois da leitura)…'}</span>`;
 }
@@ -1230,7 +1232,16 @@ function tocarClipe(id,titulo){
     <p class="mut" style="padding-top:6px">10 s antes e 60 s depois da leitura. <a style="color:var(--teal)" href="/api/clipes/${Number(id)}/video" download="clipe-${Number(id)}.mp4">baixar</a></p>`,[['Fechar','',()=>{$('dlgBody').innerHTML=''}]]);
 }
 $('dlg').addEventListener('close',()=>{$('dlgBody').innerHTML=''}); // ESC também para o vídeo
-$('evasoes').addEventListener('click',e=>{const b=e.target.closest('[data-clipe]');if(b)tocarClipe(b.dataset.clipe,'Evasão — '+b.dataset.when)});
+async function cliqueVideo(e){
+  const d=e.target.closest('[data-clipe-del]');
+  if(d){
+    if(!confirm('Excluir o vídeo da ocorrência de '+d.dataset.when+'?\n\nO arquivo será apagado e NÃO poderá ser recuperado. A ocorrência continua na lista.'))return;
+    try{await j('/api/clipes/'+d.dataset.clipeDel,{method:'DELETE'});if(view==='controle')ctCiclo();else await carregarEvasoes()}catch(err){alert(err.message)}
+    return;
+  }
+  const b=e.target.closest('[data-clipe]');if(b)tocarClipe(b.dataset.clipe,'Evasão — '+b.dataset.when)
+}
+$('evasoes').addEventListener('click',cliqueVideo);$('ctEvTb').addEventListener('click',cliqueVideo);
 async function carregarEvasoes(){
   $('evDestino').innerHTML='<option value="">todos os destinos</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
   const qs=montaFiltroEvasao();
