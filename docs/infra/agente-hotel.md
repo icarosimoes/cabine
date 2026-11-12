@@ -63,6 +63,27 @@ Teste manual: `LIVE=1 READER_USER=.. READER_PASS=.. go test ./internal/reader -r
   Senha `acura@autoid` **recusada** na pagina de administracao dos dois (login volta para o index).
 - Antes de capturar o protocolo na 8080 do `.104`: pode haver so 1 conexao por vez (o eTrace pode usa-la); fazer fora do horario de pico.
 
+## Vídeo da evasão (DVR Intelbras) — agente 0.1.7
+
+Quando uma antena de evasão tem câmera (painel: Antenas > Câmeras), o servidor pede ao agente o trecho `[−10 s, +60 s]` da detecção
+(`clipes[]` na resposta de `POST /api/agente/status`). O agente roda em segundo plano (até 2 downloads simultâneos; não atrasa o status):
+
+1. Lê a hora do DVR por HTTP (`/cgi-bin/global.cgi?action=getCurrentTime`, digest ou basic) e corrige o deslocamento do relógio.
+2. Roda o **ffmpeg** no playback RTSP `rtsp://<ip>:554/cam/playback?channel=N&subtype=0&starttime=AAAA_MM_DD_hh_mm_ss&endtime=...` (TCP),
+   sem áudio, gravando mp4. O DVR entrega em **tempo real** (um trecho de 70 s leva ~70 s).
+3. Envia o mp4 (`PUT /api/agente/clipes/{id}/arquivo`) ou a mensagem de erro (`POST .../erro`). O arquivo temporário é apagado.
+
+**Requisitos no PC do hotel:** `ffmpeg.exe` na mesma pasta do `cabine-agent.exe` (ou no PATH, ou `ffmpegPath`), e, no `config.json`
+(pasta restrita a SYSTEM/Administradores), as credenciais do DVR — de preferência um usuário **somente leitura/reprodução** criado no DVR:
+
+```json
+{ "dvrUser": "cabine", "dvrPass": "...", "cameras": { "DVR recepção - saída": {"user": "x", "pass": "y"} },
+  "rtspPort": 554, "ffmpegPath": "", "videoCodec": "copy" }
+```
+
+`videoCodec`: `copy` (padrão, não reencoda) ou `h264` (use se o DVR grava em H.265 e o navegador não reproduz; exige CPU). A senha nunca vai
+ao servidor e é mascarada nas mensagens de erro. **Pendente:** validar com o modelo real do DVR (RTSP de playback, formato do CGI, codec).
+
 ## Baixar e testar no Windows
 
 **Onde baixar:** painel do Cabine (logado como admin) > **Antenas** > secao **Agente do hotel (Windows)** > links

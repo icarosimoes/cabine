@@ -4,13 +4,16 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"cabine.solidsd.com.br/agent/internal/cloud"
 	"cabine.solidsd.com.br/agent/internal/config"
+	"cabine.solidsd.com.br/agent/internal/dvr"
 	"cabine.solidsd.com.br/agent/internal/reader"
 )
 
@@ -23,6 +26,13 @@ type Runner struct {
 	Probe  func(*config.Config, cloud.Antena) reader.Probe
 	Exec   func(*config.Config, cloud.Antena, string, string, *string) cloud.Resultado
 	Now    func() time.Time
+	// Fetch grava o trecho do DVR em outPath (padrão: dvr.Fetch). Troca-se nos testes.
+	Fetch func(ctx context.Context, cam dvr.Camera, opt dvr.Options, ini, fim time.Time, outPath string) error
+
+	clipesMu   sync.Mutex
+	clipesNoAr map[int]bool  // ids em andamento (o servidor pode reenviar enquanto o download corre)
+	clipesSem  chan struct{} // limita downloads simultâneos
+	clipesWG   sync.WaitGroup
 
 	antenas   []cloud.Antena
 	falhas    map[int]int
@@ -31,7 +41,8 @@ type Runner struct {
 
 func New(cfg *config.Config) *Runner {
 	return &Runner{Cfg: cfg, Client: cloud.New(cfg.Server, cfg.Token), Probe: reader.Check, Exec: reader.Exec,
-		Now: time.Now, falhas: map[int]int{}, intervalo: 15 * time.Second}
+		Now: time.Now, Fetch: dvr.Fetch, falhas: map[int]int{}, intervalo: 15 * time.Second,
+		clipesNoAr: map[int]bool{}, clipesSem: make(chan struct{}, 2)}
 }
 
 // Cycle executa um ciclo completo e devolve o estado gravado.
@@ -93,6 +104,9 @@ func (r *Runner) Cycle() *config.State {
 		for _, cmd := range resp.Comandos {
 			r.run(cmd)
 		}
+		for _, cl := range resp.Clipes {
+			r.startClipe(cl) // em segundo plano: o playback corre em tempo real e não pode travar o status
+		}
 	}
 	if err := config.WriteState(st); err != nil {
 		log.Printf("[runner] gravar estado: %v", err)
@@ -118,6 +132,65 @@ func (r *Runner) run(cmd cloud.Comando) {
 		log.Printf("[runner] resultado do comando #%d: %v", cmd.ID, err)
 	}
 }
+
+// startClipe busca o trecho no DVR e envia ao servidor, sem bloquear o ciclo de status.
+func (r *Runner) startClipe(cl cloud.Clipe) {
+	r.clipesMu.Lock()
+	if r.clipesNoAr[cl.ID] {
+		r.clipesMu.Unlock()
+		return
+	}
+	r.clipesNoAr[cl.ID] = true
+	r.clipesMu.Unlock()
+	r.clipesWG.Add(1)
+	go func() {
+		defer r.clipesWG.Done()
+		r.clipesSem <- struct{}{}
+		defer func() {
+			<-r.clipesSem
+			r.clipesMu.Lock()
+			delete(r.clipesNoAr, cl.ID)
+			r.clipesMu.Unlock()
+		}()
+		if err := r.processaClipe(cl); err != nil {
+			log.Printf("[clipe #%d] %v", cl.ID, err)
+			if e2 := r.Client.PostClipeErro(cl.ID, err.Error()); e2 != nil {
+				log.Printf("[clipe #%d] avisar erro: %v", cl.ID, e2)
+			}
+		}
+	}()
+}
+
+func (r *Runner) camera(cl cloud.Clipe) dvr.Camera {
+	cam := dvr.Camera{Host: cl.IP, HTTPPort: cl.Porta, RTSPPort: r.Cfg.RTSPPort, Canal: cl.Canal, User: r.Cfg.DVRUser, Pass: r.Cfg.DVRPass}
+	if c, ok := r.Cfg.Cameras[cl.Camera]; ok {
+		cam.User, cam.Pass = c.User, c.Pass
+	}
+	return cam
+}
+
+func (r *Runner) processaClipe(cl cloud.Clipe) error {
+	dir := filepath.Join(config.DataDir(), "clipes")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	out := filepath.Join(dir, fmt.Sprintf("%d.mp4", cl.ID))
+	defer os.Remove(out)
+	ini, fim := time.Unix(int64(cl.Inicio), 0), time.Unix(int64(cl.Fim), 0)
+	log.Printf("[clipe #%d] %s canal %d, %s → %s", cl.ID, cl.Camera, cl.Canal, ini.Format("15:04:05"), fim.Format("15:04:05"))
+	opt := dvr.Options{FFmpeg: r.Cfg.FFmpeg, Codec: r.Cfg.VideoCodec}
+	if err := r.Fetch(context.Background(), r.camera(cl), opt, ini, fim, out); err != nil {
+		return err
+	}
+	if err := r.Client.PutClipe(cl.ID, out); err != nil {
+		return fmt.Errorf("enviar ao servidor: %w", err)
+	}
+	log.Printf("[clipe #%d] enviado", cl.ID)
+	return nil
+}
+
+// WaitClipes espera os downloads em andamento (usado nos testes e no desligamento).
+func (r *Runner) WaitClipes() { r.clipesWG.Wait() }
 
 // Loop roda até o contexto ser cancelado.
 func (r *Runner) Loop(ctx context.Context) {

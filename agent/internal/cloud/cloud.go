@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -59,9 +60,22 @@ type Comando struct {
 	Corpo    *string `json:"corpo"`
 }
 
+// Clipe é um pedido de vídeo: trecho [Inicio, Fim] (unix, segundos) de um canal do DVR.
+type Clipe struct {
+	ID       int     `json:"id"`
+	Inicio   float64 `json:"inicio"`
+	Fim      float64 `json:"fim"`
+	Camera   string  `json:"camera"`
+	IP       string  `json:"ip"`
+	Porta    int     `json:"porta"` // porta HTTP do DVR
+	Canal    int     `json:"canal"`
+	Gravacao string  `json:"gravacao"`
+}
+
 type StatusResp struct {
 	OK       bool      `json:"ok"`
 	Comandos []Comando `json:"comandos"`
+	Clipes   []Clipe   `json:"clipes"`
 }
 
 type Resultado struct {
@@ -114,6 +128,40 @@ func (c *Client) PostStatus(s *StatusReq) (*StatusResp, error) {
 
 func (c *Client) PostResultado(id int, r *Resultado) error {
 	return c.do("POST", fmt.Sprintf("/api/agente/comandos/%d/resultado", id), r, nil)
+}
+
+// PutClipe envia o mp4 do clipe (corpo bruto). O prazo é folgado: o arquivo tem dezenas de MB.
+func (c *Client) PutClipe(id int, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("PUT", fmt.Sprintf("%s/api/agente/clipes/%d/arquivo", c.Server, id), f)
+	if err != nil {
+		return err
+	}
+	req.ContentLength = fi.Size()
+	req.Header.Set("X-Agent-Token", c.Token)
+	req.Header.Set("Content-Type", "video/mp4")
+	resp, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("servidor recusou o clipe (HTTP %d): %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	return nil
+}
+
+func (c *Client) PostClipeErro(id int, msg string) error {
+	return c.do("POST", fmt.Sprintf("/api/agente/clipes/%d/erro", id), map[string]string{"mensagem": msg}, nil)
 }
 
 func truncate(s string, n int) string {

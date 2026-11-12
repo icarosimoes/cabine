@@ -71,3 +71,4 @@
 - Cadastrar o projeto em `erpsolid/docs/projetos/` (indice central de repos).
 
 - Evasao: antenas .32 e .104 so monitoramento de rede (online = pagina de status responde; agente 0.1.5 nao sonda a 8080). O Acura aceita 2 clientes na 8080 (hoje ocupadas por 192.168.30.18). Pendente: mapear protocolo da 8080, senha de administracao dos Acura.
+- Video da evasao: validar com o DVR Intelbras real (usar *Antenas > Cameras > Testar*): modelo/firmware, RTSP de playback, codec (H.265 -> `videoCodec: h264`), gravacao so por movimento, hora do DVR. Instalar `ffmpeg.exe` ao lado do agente 0.1.7 e criar usuario somente-leitura no DVR. Varios hoteis/agentes: hoje qualquer agente em contato pega o pedido (ligar camera a agente).

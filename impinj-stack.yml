@@ -56,6 +56,9 @@ services:
       WHATSAPP_INSTANCE: "${WHATSAPP_INSTANCE:-}"
       WHATSAPP_APIKEY: "${WHATSAPP_APIKEY:-}"
       ALERTA_SEM_SINAL_SEGUNDOS: "${ALERTA_SEM_SINAL_SEGUNDOS:-60}"
+      CLIPES_RETENCAO_DIAS: "${CLIPES_RETENCAO_DIAS:-30}"
+    volumes:
+      - impinj_clipes:/srv/clipes   # vídeos das evasões (mp4 enviados pelo agente)
     networks:
       - traefik-public
       - impinj-internal
@@ -85,6 +88,7 @@ services:
 
 volumes:
   impinj_pgdata:
+  impinj_clipes:
 
 networks:
   traefik-public:

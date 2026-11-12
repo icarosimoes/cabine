@@ -3,7 +3,7 @@ WORKDIR /srv
 RUN pip install --no-cache-dir fastapi==0.120.4 starlette==0.49.3 "uvicorn[standard]==0.34.0" "psycopg[binary]==3.2.3"
 COPY app/ ./app/
 COPY agent/dist/ ./agente/
-RUN useradd -r -u 10001 app
+RUN useradd -r -u 10001 app && mkdir -p /srv/clipes && chown app /srv/clipes
 USER app
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000

@@ -303,7 +303,7 @@ table.rt td[colspan]::before{content:none}}
     <button id="evAplicar">filtrar</button>
     <button id="evLimpar">limpar</button>
   </div>
-  <div class="scroll"><table><thead><tr><th>Data</th><th>EPC</th><th>Destino</th><th>Status</th></tr></thead><tbody id="evasoes"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Data</th><th>EPC</th><th>Destino</th><th>Status</th><th>Vídeo</th></tr></thead><tbody id="evasoes"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="inventario" hidden>
@@ -573,12 +573,27 @@ table.rt td[colspan]::before{content:none}}
     <label class="mut">Modo de operação <select id="anModo"><option value="automatico">Automático</option><option value="manual">Manual</option></select></label>
     <label class="mut"><input id="anAlerta" type="checkbox" checked> Ativar alerta</label>
     <label class="mut" title="Antena de saída: alertas prioritários; porta de comunicação fechada conta como offline"><input id="anEvasao" type="checkbox"> Antena de evasão (saída)</label>
+    <label class="mut" title="Canal do DVR que filma esta saída: a cada detecção, o agente busca 10 s antes e 60 s depois">Câmera (DVR) <select id="anCamera"></select></label>
     <label class="mut">Endereço IP <input id="anIp" type="text" placeholder="192.168.30.32" style="width:150px"></label>
     <label class="mut">Porta de comunicação <input id="anPorta" type="number" min="1" max="65535" placeholder="8080" style="width:100px"></label>
     <button class="acc" id="anSalvar">Salvar</button><button id="anCancelar" type="button" hidden>Cancelar edição</button>
   </div>
   <div id="antenaMsg" class="msg"></div>
   <div class="scroll"><table><thead><tr><th>Nome</th><th>Descrição</th><th>Modelo</th><th>Localização</th><th>Modo</th><th>Alerta</th><th>IP:porta</th><th>Status (agente)</th><th></th></tr></thead><tbody id="antenas"></tbody></table></div>
+</section>
+<section id="secCameras">
+  <h2><span id="cmTitulo">Câmeras (DVR Intelbras)</span></h2>
+  <div class="mut" style="padding:0 16px 8px">Cada câmera é um canal de um DVR. Vincule-a a uma antena de evasão acima: quando uma peça for detectada, o agente do hotel busca no DVR 10 s antes e 60 s depois e anexa o vídeo ao alerta. Usuário e senha do DVR ficam <b>apenas</b> no <code>config.json</code> do agente (<code>dvrUser</code>/<code>dvrPass</code>), nunca aqui.</div>
+  <div class="row">
+    <label class="mut">Nome <input id="cmNome" type="text" placeholder="ex. DVR recepção - saída" style="width:210px"></label>
+    <label class="mut">IP do DVR <input id="cmIp" type="text" placeholder="192.168.30.60" style="width:140px"></label>
+    <label class="mut">Porta HTTP <input id="cmPorta" type="number" min="1" max="65535" value="80" style="width:80px"></label>
+    <label class="mut">Canal <input id="cmCanal" type="number" min="1" max="256" value="1" style="width:70px"></label>
+    <label class="mut" title="Com gravação só por movimento, o trecho de antes/depois pode não existir no DVR">Gravação <select id="cmGravacao"><option value="continua">contínua (24 h)</option><option value="movimento">só por movimento</option></select></label>
+    <button class="acc" id="cmSalvar">Salvar</button><button id="cmCancelar" type="button" hidden>Cancelar edição</button>
+  </div>
+  <div id="cameraMsg" class="msg"></div>
+  <div class="scroll"><table><thead><tr><th>Nome</th><th>DVR (IP:porta)</th><th>Canal</th><th>Gravação</th><th>Antenas</th><th></th></tr></thead><tbody id="cameras"></tbody></table></div>
 </section>
 <section id="secAgentes" hidden>
   <h2><span>Agente do hotel (Windows)</span></h2>
@@ -963,6 +978,18 @@ function montaFiltroEvasao(){
   if($('evAte').value)p.set('ate',Math.floor(new Date($('evAte').value+'T23:59:59').getTime()/1000));
   return p.toString();
 }
+function videoCelula(s){
+  if(!s.clipe_id)return '<span class="mut">–</span>';
+  if(s.clipe_status==='ok')return `<button data-clipe="${s.clipe_id}" data-when="${esc(dt(s.detectado_em))}">▶ assistir</button>`;
+  if(s.clipe_status==='erro')return `<span class="pill alerta" title="${esc(s.clipe_erro||'')}">falhou</span> <span class="mut">${esc((s.clipe_erro||'').slice(0,60))}</span>`;
+  return `<span class="mut">${s.clipe_status==='enviado'?'buscando no DVR…':'gravando (aguarda 60 s depois da leitura)…'}</span>`;
+}
+function tocarClipe(id,titulo){
+  dialogo(`<h3>${esc(titulo)}</h3><video src="/api/clipes/${Number(id)}/video" controls autoplay playsinline style="width:min(80vw,720px);max-width:100%;margin-top:8px;background:#000"></video>
+    <p class="mut" style="padding-top:6px">10 s antes e 60 s depois da leitura. <a style="color:var(--teal)" href="/api/clipes/${Number(id)}/video" download="clipe-${Number(id)}.mp4">baixar</a></p>`,[['Fechar','',()=>{$('dlgBody').innerHTML=''}]]);
+}
+$('dlg').addEventListener('close',()=>{$('dlgBody').innerHTML=''}); // ESC também para o vídeo
+$('evasoes').addEventListener('click',e=>{const b=e.target.closest('[data-clipe]');if(b)tocarClipe(b.dataset.clipe,'Evasão — '+b.dataset.when)});
 async function carregarEvasoes(){
   $('evDestino').innerHTML='<option value="">todos os destinos</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
   const qs=montaFiltroEvasao();
@@ -972,7 +999,8 @@ async function carregarEvasoes(){
   $('evasoes').innerHTML=rows.map(s=>`<tr>
     <td>${dt(s.detectado_em)}</td><td class="epc">${esc(s.epc)}</td><td>${esc(s.destino_nome)}</td>
     <td>${s.documentado?pill('ok')+' documentado':pill('alerta')+' NÃO DOCUMENTADO'}</td>
-  </tr>`).join('')||'<tr><td colspan=4>nenhum evento de saída registrado</td></tr>';
+    <td>${videoCelula(s)}</td>
+  </tr>`).join('')||'<tr><td colspan=5>nenhum evento de saída registrado</td></tr>';
 }
 $('evAplicar').onclick=carregarEvasoes;
 $('evLimpar').onclick=()=>{$('evDestino').value='';$('evDocumentado').value='';$('evDesde').value='';$('evAte').value='';carregarEvasoes()};
@@ -1195,13 +1223,59 @@ async function carregarSessoes(){
   $('sessoes').innerHTML=r.sessoes.map(x=>`<tr><td>${dt(x.inicio)}</td><td>${x.fim?dt(x.fim):'–'}</td><td>${x.tags}</td><td>${x.lote_id?'#'+x.lote_id:'–'}</td>
     <td>${x.status==='aberta'?'<span class="pill alerta">aberta</span>':'<span class="pill ok">encerrada</span>'}</td></tr>`).join('')||'<tr><td colspan=5>nenhuma sessão registrada</td></tr>';
 }
+let camerasCache=[],cameraEdit=null;
+async function carregarCameras(){
+  camerasCache=await j('/api/cameras');
+  const sel=$('anCamera'),cur=sel.value;
+  sel.innerHTML='<option value="">sem câmera</option>'+camerasCache.map(c=>`<option value="${c.id}">${esc(c.nome)}</option>`).join('');
+  if(cur)sel.value=cur;
+  $('cameras').innerHTML=camerasCache.map(c=>`<tr><td>${esc(c.nome)}</td><td>${esc(c.ip)}:${c.porta}</td><td>${c.canal}</td>
+    <td>${c.gravacao==='continua'?'contínua':'<span class="pill alerta" title="o trecho pode não existir">só movimento</span>'}</td><td>${esc(c.antenas||'–')}</td>
+    <td><button data-cedit="${c.id}">Editar</button> <button data-cteste="${c.id}">Testar</button> <button data-cdel="${c.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=6>nenhuma câmera cadastrada</td></tr>';
+}
+function limparCamera(){
+  cameraEdit=null;$('cmNome').value='';$('cmIp').value='';$('cmPorta').value=80;$('cmCanal').value=1;$('cmGravacao').value='continua';
+  $('cmTitulo').textContent='Câmeras (DVR Intelbras)';$('cmSalvar').textContent='Salvar';$('cmCancelar').hidden=true;
+}
+$('cmCancelar').onclick=limparCamera;
+$('cmSalvar').onclick=async()=>{
+  const msg=$('cameraMsg'),nome=$('cmNome').value.trim(),ip=$('cmIp').value.trim();
+  if(!nome||!ip){msg.className='msg bad';msg.textContent='informe nome e IP do DVR';return}
+  const corpo={nome,ip,porta:Number($('cmPorta').value)||80,canal:Number($('cmCanal').value)||1,gravacao:$('cmGravacao').value};
+  try{await j(cameraEdit?'/api/cameras/'+cameraEdit:'/api/cameras',{method:cameraEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)});
+    msg.className='msg ok';msg.textContent=cameraEdit?'câmera atualizada':'câmera cadastrada';limparCamera();await carregarAntenas()}
+  catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
+async function testarCamera(id){
+  const msg=$('cameraMsg');msg.className='msg';msg.textContent='pedindo ao agente um trecho dos últimos ~70 s do DVR… (leva de 1 a 3 min: o DVR entrega em tempo real)';
+  try{
+    const {clipe_id}=await j('/api/cameras/'+id+'/teste',{method:'POST'});
+    for(let i=0;i<90;i++){
+      await new Promise(r=>setTimeout(r,2500));
+      const c=await j('/api/clipes/'+clipe_id);
+      if(c.status==='ok'){msg.className='msg ok';msg.textContent='✔ câmera OK — '+Math.round(c.tamanho/1024)+' KB';tocarClipe(clipe_id,'Teste — '+c.camera);return}
+      if(c.status==='erro'){msg.className='msg bad';msg.textContent='✖ '+(c.erro||'falhou');return}
+    }
+    msg.className='msg bad';msg.textContent='✖ sem resposta do agente (instalado, online e com ffmpeg?)';
+  }catch(e){msg.className='msg bad';msg.textContent=e.message}
+}
+$('cameras').addEventListener('click',async e=>{
+  const ed=e.target.closest('[data-cedit]'),te=e.target.closest('[data-cteste]'),de=e.target.closest('[data-cdel]');
+  if(ed){const c=camerasCache.find(x=>x.id===Number(ed.dataset.cedit));if(!c)return;cameraEdit=c.id;
+    $('cmNome').value=c.nome;$('cmIp').value=c.ip;$('cmPorta').value=c.porta;$('cmCanal').value=c.canal;$('cmGravacao').value=c.gravacao;
+    $('cmTitulo').textContent='Editar câmera: '+c.nome;$('cmSalvar').textContent='Atualizar';$('cmCancelar').hidden=false;$('cmNome').scrollIntoView({block:'center'})}
+  else if(te)testarCamera(Number(te.dataset.cteste));
+  else if(de){const c=camerasCache.find(x=>x.id===Number(de.dataset.cdel));
+    if(c&&confirm(`Excluir a câmera "${c.nome}" e os clipes dela?`)){try{await j('/api/cameras/'+c.id,{method:'DELETE'});await carregarAntenas()}catch(err){$('cameraMsg').className='msg bad';$('cameraMsg').textContent=err.message}}}
+});
 let antenasCache=[],antenaEdit=null;
 async function carregarAntenas(){
   await carregarDestinos();
   if(antenaEdit===null)$('anDestino').innerHTML='<option value="">–</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
   antenasCache=await j('/api/antenas');
+  await carregarCameras();
   carregarAgentes().catch(()=>{});
-  $('antenas').innerHTML=antenasCache.map(a=>`<tr><td>${esc(a.nome)}${a.evasao?' <span class="pill alerta" title="antena de evasão (saída)">🚨 evasão</span>':''}</td><td>${esc(a.descricao||'–')}</td><td>${esc(a.modelo||'–')}</td><td>${esc(a.destino_nome||'–')}</td>
+  $('antenas').innerHTML=antenasCache.map(a=>`<tr><td>${esc(a.nome)}${a.evasao?' <span class="pill alerta" title="antena de evasão (saída)">🚨 evasão</span>':''}${a.camera_id?' <span class="mut" title="câmera vinculada">🎥 '+esc((camerasCache.find(c=>c.id===a.camera_id)||{}).nome||'')+'</span>':''}</td><td>${esc(a.descricao||'–')}</td><td>${esc(a.modelo||'–')}</td><td>${esc(a.destino_nome||'–')}</td>
     <td>${a.modo==='manual'?'Manual':'Automático'}</td><td>${a.alerta?'<span class="pill ok">sim</span>':'não'}</td><td>${a.ip?esc(a.ip)+(a.porta?':'+a.porta:''):'–'}</td>
     <td>${statusAntena(a)}</td>
     <td><button data-edit="${a.id}">Editar</button> <button data-cfg="${a.id}">Configurar rádio</button></td></tr>`).join('')||'<tr><td colspan=9>nenhuma antena cadastrada</td></tr>';
@@ -1266,14 +1340,14 @@ function configurarRadio(a){
 }
 function limparAntena(){
   antenaEdit=null;['anNome','anDesc','anIp','anPorta'].forEach(i=>$(i).value='');$('anModelo').value='';$('anDestino').value='';
-  $('anModo').value='automatico';$('anAlerta').checked=true;$('anEvasao').checked=false;$('anTitulo').textContent='Antenas cadastradas';$('anSalvar').textContent='Salvar';$('anCancelar').hidden=true;
+  $('anModo').value='automatico';$('anAlerta').checked=true;$('anEvasao').checked=false;$('anCamera').value='';$('anTitulo').textContent='Antenas cadastradas';$('anSalvar').textContent='Salvar';$('anCancelar').hidden=true;
 }
 $('antenas').addEventListener('click',e=>{
   const cf=e.target.closest('[data-cfg]');if(cf){const a=antenasCache.find(x=>x.id===Number(cf.dataset.cfg));if(a)configurarRadio(a);return}
   const b=e.target.closest('[data-edit]');if(!b)return;
   const a=antenasCache.find(x=>x.id===Number(b.dataset.edit));if(!a)return;
   antenaEdit=a.id;$('anNome').value=a.nome;$('anDesc').value=a.descricao||'';$('anModelo').value=a.modelo||'';$('anDestino').value=a.destino_id||'';
-  $('anModo').value=a.modo;$('anAlerta').checked=a.alerta;$('anEvasao').checked=!!a.evasao;$('anIp').value=a.ip||'';$('anPorta').value=a.porta||'';
+  $('anModo').value=a.modo;$('anAlerta').checked=a.alerta;$('anEvasao').checked=!!a.evasao;$('anCamera').value=a.camera_id||'';$('anIp').value=a.ip||'';$('anPorta').value=a.porta||'';
   $('anTitulo').textContent='Editar antena: '+a.nome;$('anSalvar').textContent='Atualizar';$('anCancelar').hidden=false;
   $('anNome').scrollIntoView({block:'center'});
 });
@@ -1282,7 +1356,7 @@ $('anSalvar').onclick=async()=>{
   const msg=$('antenaMsg'),nome=$('anNome').value.trim();
   if(!nome){msg.className='msg bad';msg.textContent='informe o nome da antena';return}
   const corpo={nome,descricao:$('anDesc').value.trim()||null,modelo:$('anModelo').value||null,destino_id:$('anDestino').value?Number($('anDestino').value):null,
-    modo:$('anModo').value,alerta:$('anAlerta').checked,evasao:$('anEvasao').checked,ip:$('anIp').value.trim()||null,porta:$('anPorta').value?Number($('anPorta').value):null};
+    modo:$('anModo').value,alerta:$('anAlerta').checked,evasao:$('anEvasao').checked,camera_id:$('anCamera').value?Number($('anCamera').value):null,ip:$('anIp').value.trim()||null,porta:$('anPorta').value?Number($('anPorta').value):null};
   try{await j(antenaEdit?'/api/antenas/'+antenaEdit:'/api/antenas',{method:antenaEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)});
     msg.className='msg ok';msg.textContent=antenaEdit?'antena atualizada':'antena cadastrada';limparAntena();await carregarAntenas()}
   catch(e){msg.className='msg bad';msg.textContent=e.message}
