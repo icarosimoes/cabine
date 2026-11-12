@@ -44,6 +44,9 @@ type Config struct {
 	VideoCodec string `json:"videoCodec,omitempty"`
 	// Não abrir conexão na porta de dados dos Acura (ex.: 8080), nem rápida: monitora só a página de status (porta 80).
 	SkipCommPort bool `json:"skipCommPort,omitempty"`
+	// Liga a coleta de evasão: o agente LÊ a porta de dados (8080) dos Acura marcados como "evasão" no painel e
+	// reporta as tags ao Cabine. Desligado por padrão porque o Acura aceita só 2 clientes nessa porta.
+	ColetaEvasao bool `json:"coletaEvasao,omitempty"`
 }
 
 func DataDir() string {

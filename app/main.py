@@ -2290,12 +2290,19 @@ def _clipe_da_saida(con, antena_id, now: float):
 
 @app.post("/api/saida", dependencies=[Depends(saida_auth)])
 def registrar_saida(payload: SaidaIn, background: BackgroundTasks):
-    payload.epc = epc_manual(payload.epc) or ""
+    return _processa_saida(payload.epc, payload.destino_id, payload.antena_id, background)
+
+
+def _processa_saida(epc: str, destino_id: int, antena_id: int | None, background: BackgroundTasks, ignora_desconhecida: bool = False):
+    """Registra uma detecção na saída: documentada (houve transferência recente para o destino) ou não (evasão → aviso + vídeo)."""
+    payload = SaidaIn(epc=epc_manual(epc) or "", destino_id=destino_id, antena_id=antena_id)
     if not payload.epc:
         raise HTTPException(400, "epc é obrigatório")
     exige_epc_valido(payload.epc)
     now = time.time()
     with closing(db()) as con:
+        if ignora_desconhecida and not con.execute("SELECT 1 FROM itens WHERE epc=%s", (payload.epc,)).fetchone():
+            return {"epc": payload.epc, "ignorado": "EPC não cadastrado no catálogo"}  # tag de hóspede/outra coisa: não é enxoval
         destino = con.execute("SELECT * FROM destinos WHERE id=%s", (payload.destino_id,)).fetchone()
         if not destino:
             raise HTTPException(400, "destino inválido")
@@ -2428,6 +2435,31 @@ def agente_auth(request: Request) -> dict:
         con.execute("UPDATE agentes SET visto_em=%s WHERE id=%s", (time.time(), ag["id"]))
         con.commit()
     return ag
+
+
+SAIDA_DEDUP_SEG = int(os.environ.get("SAIDA_DEDUP_SEGUNDOS", "30"))  # mesma tag, mesma antena, dentro desta janela = uma só detecção
+SAIDA_REGISTRA_DESCONHECIDAS = os.environ.get("SAIDA_REGISTRA_DESCONHECIDAS", "0") == "1"
+
+
+class SaidaAgenteIn(BaseModel):
+    antena_id: int
+    epc: str
+
+
+@app.post("/api/agente/saida")
+def agente_saida(b: SaidaAgenteIn, background: BackgroundTasks, ag: dict = Depends(agente_auth)):
+    """Detecção na antena de saída lida pelo agente do hotel (porta 8080 do Acura): o destino vem da localização da antena."""
+    with closing(db()) as con:
+        a = con.execute("SELECT id, nome, destino_id, evasao FROM antenas WHERE id=%s", (b.antena_id,)).fetchone()
+        if not a:
+            raise HTTPException(404, "antena não encontrada")
+        if not a["destino_id"]:
+            raise HTTPException(409, f"a antena {a['nome']} não tem localização (destino) definida: ela diz para onde a peça está saindo")
+        epc = epc_manual(b.epc) or ""
+        if con.execute("SELECT 1 FROM eventos_saida WHERE epc=%s AND antena_id=%s AND detectado_em>%s LIMIT 1",
+                       (epc, a["id"], time.time() - SAIDA_DEDUP_SEG)).fetchone():
+            return {"epc": epc, "duplicado": True}
+    return _processa_saida(epc, a["destino_id"], a["id"], background, ignora_desconhecida=not SAIDA_REGISTRA_DESCONHECIDAS)
 
 
 AGENTE_DIST = Path(os.environ.get("AGENTE_DIST", "/srv/agente"))

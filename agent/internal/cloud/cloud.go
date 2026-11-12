@@ -139,6 +139,11 @@ func (c *Client) PostStatus(s *StatusReq) (*StatusResp, error) {
 	return &r, c.do("POST", "/api/agente/status", s, &r)
 }
 
+// PostSaida informa a leitura de uma tag na antena de saída; o servidor decide se é evasão.
+func (c *Client) PostSaida(antenaID int, epc string) error {
+	return c.do("POST", "/api/agente/saida", map[string]any{"antena_id": antenaID, "epc": epc}, nil)
+}
+
 func (c *Client) PostResultado(id int, r *Resultado) error {
 	return c.do("POST", fmt.Sprintf("/api/agente/comandos/%d/resultado", id), r, nil)
 }

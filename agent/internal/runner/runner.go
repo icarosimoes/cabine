@@ -32,6 +32,9 @@ type Runner struct {
 	Build  func(ctx context.Context, rec *dvr.Recorder, opt dvr.Options, ini, fim time.Time, outPath string) error
 	Record func(ctx context.Context, rec *dvr.Recorder)
 
+	saidaMu sync.Mutex
+	saidas  map[int]*saidaEntry
+
 	recMu     sync.Mutex
 	recorders map[int]*recEntry
 	recWG     sync.WaitGroup
@@ -49,7 +52,7 @@ type Runner struct {
 func New(cfg *config.Config) *Runner {
 	return &Runner{Cfg: cfg, Client: cloud.New(cfg.Server, cfg.Token), Probe: reader.Check, Exec: reader.Exec,
 		Now: time.Now, Fetch: dvr.Fetch, Build: dvr.BuildClip, Record: func(ctx context.Context, r *dvr.Recorder) { r.Run(ctx) },
-		recorders: map[int]*recEntry{}, falhas: map[int]int{}, intervalo: 15 * time.Second,
+		recorders: map[int]*recEntry{}, saidas: map[int]*saidaEntry{}, falhas: map[int]int{}, intervalo: 15 * time.Second,
 		clipesNoAr: map[int]bool{}, clipesSem: make(chan struct{}, 2)}
 }
 
@@ -59,6 +62,7 @@ func (r *Runner) Cycle() *config.State {
 	if c, err := r.Client.GetConfig(); err == nil {
 		r.antenas = c.Antenas
 		r.syncRecorders(c.Cameras)
+		r.syncSaida(c.Antenas)
 		if c.IntervaloSeg >= 5 {
 			r.intervalo = time.Duration(c.IntervaloSeg) * time.Second
 		}
