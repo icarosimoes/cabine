@@ -77,9 +77,9 @@
 - [x] Hikvision (DVR/NVR/camera com SD): `tipo=hikvision` (playback RTSP em UTC + hora por ISAPI); plano B `tipo=rtsp`.
 - [ ] Hikvision: validar em equipamento real (formato do horario, firmware que ignora o horario, RTSP bloqueado por permissao/criptografia); avaliar ISAPI de busca/download (`/ISAPI/ContentMgmt`) para baixar mais rapido que em tempo real.
 - [ ] **Hikvision via ISAPI (busca + download)** como caminho principal do `tipo=hikvision` (RTSP como alternativa, buffer como ultimo recurso): confirma a gravacao no intervalo, nao corre em tempo real e evita o firmware que ignora o horario. Pesquisa e incertezas em `video-evasao.md` > "APIs da Hikvision". **Precisa do modelo do aparelho** (DVR/NVR/camera com SD) para testar o XML; cuidado com download incompleto logo apos a gravacao parar.
-- [ ] Video: varios hoteis/agentes (hoje qualquer agente em contato pega o pedido; ligar camera a agente), alerta de WhatsApp com link do clipe, baixar varios clipes de uma vez.
+- [x] Video (2026-11-12): camera ligada a um agente (`cameras.agente_id`; vazio = qualquer), aviso de WhatsApp na evasao + 2a mensagem com link assinado do video (`/v/{id}`, 72 h), download de varios clipes em .zip (`/api/clipes-zip`, ate 40). Destinatarios ganharam "Evasao" e "Monitoramento".
 - [ ] **Gatilho real da evasao**: `bridge-saida/` ainda nao le o Acura (porta 8080); sem isso nenhum evento chama `/api/saida`. Capturar o protocolo primeiro.
-- [ ] Nome de tags em massa: importar CSV `EPC;nome`, aceitar `EPC;nome` por linha no Leitor manual, gerar nomes sequenciais ("Lencol 001..") no cadastro em lote, e mostrar o nome na Conferencia e no Inventario.
+- [x] Nome de tags em massa (2026-11-12): CSV `EPC;nome` (Catalogo > Importar nomes), `EPC;nome` por linha no Leitor manual, nomes sequenciais no cadastro em lote, nome na Conferencia (tela e CSV) e lista de pecas com busca no Inventario.
 
 ## Ideias
 
@@ -89,3 +89,13 @@
 
 - Evasao: antenas .32 e .104 so monitoramento de rede (online = pagina de status responde; agente 0.1.5 nao sonda a 8080). O Acura aceita 2 clientes na 8080 (hoje ocupadas por 192.168.30.18). Pendente: mapear protocolo da 8080, senha de administracao dos Acura.
 - Video da evasao: pendencias na secao "Nome de tags e video da evasao (2026-11-12)".
+
+## Monitoramento e alertas (2026-11-12)
+
+- [x] **Monitor ao vivo** (`#controle`): blocos de antenas, saidas sem documento, som (WebAudio), pausa, intervalo, relatorio CSV da sessao; cada tela e uma **estacao de controle** com heartbeat (`/api/estacoes/heartbeat`, listada em Monitoramento).
+- [x] Alerta de **uptime baixo** (antena monitorada < `uptime_min`% em 24 h, padrao 95; 0 desliga) e **status da Evolution** (consulta a cada 60 s; avisa ao reconectar com o tempo fora). Tipo de alerta `monitor`.
+- [x] **Divergencias da cabine gravadas** (`divergencias`, com a composicao do lote por tipo) no Dashboard + `GET /api/divergencias`.
+- [x] Grafico de **leituras por hora** (48 h) no Dashboard.
+- [x] **Web push no PWA** (VAPID; chave gerada e guardada em `config`; botao "Ativar notificacoes" para quem tem `consultar`). Dependencia nova `pywebpush` no Dockerfile. iPhone so recebe com o app instalado na tela inicial.
+- [ ] **Validar `/ingest` com leitor real**: impossivel sem o hardware; continua pendente.
+- [ ] Estacao de controle: alerta quando nenhuma estacao estiver ativa; escolher tipos de alerta por aparelho no push.
