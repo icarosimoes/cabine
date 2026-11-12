@@ -180,7 +180,11 @@ func (r *Runner) cred(nome string) (string, string) {
 
 func (r *Runner) camera(cl cloud.Clipe) dvr.Camera {
 	u, p := r.cred(cl.Camera)
-	return dvr.Camera{Host: cl.IP, HTTPPort: cl.Porta, RTSPPort: r.Cfg.RTSPPort, Canal: cl.Canal, User: u, Pass: p}
+	brand := ""
+	if cl.Tipo == "hikvision" {
+		brand = "hikvision"
+	}
+	return dvr.Camera{Host: cl.IP, HTTPPort: cl.Porta, RTSPPort: r.Cfg.RTSPPort, Canal: cl.Canal, User: u, Pass: p, Brand: brand}
 }
 
 type recEntry struct {

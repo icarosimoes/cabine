@@ -177,7 +177,7 @@ def init_db():
           arquivo TEXT, tamanho BIGINT, erro TEXT, teste BOOLEAN NOT NULL DEFAULT FALSE,
           criado_em DOUBLE PRECISION NOT NULL, enviado_em DOUBLE PRECISION, concluido_em DOUBLE PRECISION)""")
         con.execute("CREATE INDEX IF NOT EXISTS ix_clipes_camera ON clipes(camera_id, t0)")
-        # tipo: dvr = o aparelho toca a gravação (playback RTSP, ex. DVR/NVR Intelbras); rtsp = só ao vivo (ex. Mibo iM): o agente grava um buffer
+        # tipo: dvr = aparelho Intelbras/Dahua que toca a gravação (playback RTSP); hikvision = idem, API Hikvision; rtsp = só ao vivo (ex. Mibo iM): o agente grava um buffer
         con.execute("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'dvr'")
         con.execute("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS rtsp_path TEXT")
         con.execute("ALTER TABLE destinos ADD COLUMN IF NOT EXISTS alerta INTEGER NOT NULL DEFAULT 0")
@@ -1987,7 +1987,7 @@ class CameraIn(BaseModel):
     porta: int = 80
     canal: int = 1
     gravacao: str = "continua"
-    tipo: str = "dvr"  # dvr | rtsp (Mibo iM e outras sem playback: o agente mantém um buffer do ao vivo)
+    tipo: str = "dvr"  # dvr (Intelbras/Dahua, playback) | hikvision (playback ISAPI/RTSP) | rtsp (só ao vivo, ex. Mibo iM: o agente mantém um buffer)
     rtsp_path: str | None = None  # só tipo rtsp; vazio = /cam/realmonitor?channel={canal}&subtype=0
 
 
@@ -2006,8 +2006,8 @@ def _valida_camera(p: CameraIn) -> dict:
         raise HTTPException(400, "canal inválido (1–256)")
     if p.gravacao not in ("continua", "movimento"):
         raise HTTPException(400, "gravação deve ser continua ou movimento")
-    if p.tipo not in ("dvr", "rtsp"):
-        raise HTTPException(400, "tipo deve ser dvr ou rtsp")
+    if p.tipo not in ("dvr", "hikvision", "rtsp"):
+        raise HTTPException(400, "tipo deve ser dvr, hikvision ou rtsp")
     path = (p.rtsp_path or "").strip() or None
     if path and (p.tipo != "rtsp" or not RTSP_PATH.fullmatch(path) or ".." in path):
         raise HTTPException(400, "caminho RTSP inválido (só para o tipo rtsp; ex.: /cam/realmonitor?channel={canal}&subtype=0)")

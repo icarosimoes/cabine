@@ -28,16 +28,31 @@ O servidor (VPS) nao alcanca a LAN do hotel; so o **agente** (conexoes de saida)
 
 ## Tipos de camera
 
-| | **DVR/NVR Intelbras** (`tipo=dvr`) | **Camera Wi-Fi Mibo iM/iMX** (`tipo=rtsp`) |
-|---|---|---|
-| Quem guarda o video | o aparelho (HD) | **o agente** (buffer de ~6 min no PC) |
-| Como o trecho sai | RTSP de playback `/cam/playback?channel=N&starttime=..&endtime=..` (tempo real: 70 s = ~70 s) | segmentos `.ts` de 5 s gravados do RTSP ao vivo, juntados com `ffmpeg -f concat` |
-| Correcao de relogio | le a hora do DVR (`global.cgi?action=getCurrentTime`, digest) e corrige o deslocamento | nao precisa (usa o relogio do PC) |
-| "10 s antes" | existe se o canal grava continuo | existe **se o gravador ja estava rodando** |
-| Custo | nenhum extra | PC ligado 24 h + 1–4 Mbps por camera no Wi-Fi |
-| URL padrao | (playback acima) | `rtsp://usuario:senha@IP:554/cam/realmonitor?channel=1&subtype=0` (`rtsp_path` troca o caminho) |
+| | **DVR/NVR Intelbras** (`tipo=dvr`) | **Hikvision** (`tipo=hikvision`) | **So ao vivo / buffer** (`tipo=rtsp`): Mibo iM/iMX, Hikvision sem SD... |
+|---|---|---|---|
+| Quem guarda o video | o aparelho (HD) | o aparelho (HD do DVR/NVR ou cartao SD da camera IP) | **o agente** (buffer de ~6 min no PC) |
+| Como o trecho sai | RTSP playback `/cam/playback?channel=N&starttime=..&endtime=..` (tempo real: 70 s = ~70 s) | RTSP playback `/Streaming/tracks/<canal>01?starttime=..&endtime=..`, **horario em UTC** (tenta formato compacto `20261112T130000Z` e, se falhar, ISO `2026-11-12T13:00:00Z`) | segmentos `.ts` de 5 s gravados do RTSP ao vivo, juntados com `ffmpeg -f concat` |
+| Correcao de relogio | le a hora do DVR (`global.cgi?action=getCurrentTime`, digest) | le a hora do aparelho (`GET /ISAPI/System/time`, digest, `<localTime>`) e aplica a diferenca | nao precisa (usa o relogio do PC) |
+| "10 s antes" | se o canal grava continuo | se o canal grava continuo | **so se o gravador ja estava rodando** |
+| Custo | nenhum extra | nenhum extra | PC ligado 24 h + 1–4 Mbps por camera |
+| URL | (playback acima) | (playback acima) | ao vivo: Mibo `/cam/realmonitor?channel=1&subtype=0` (padrao); Hikvision `rtsp_path` = `/Streaming/Channels/{canal}01` |
 
-Camera Wi-Fi: nao ha API local conhecida para tocar o cartao SD, por isso o buffer. **"Mibo iX" nao foi confirmado** na documentacao
+### Opcoes de camera Hikvision (o que usar)
+
+1. **DVR/NVR Hikvision** com o canal em gravacao continua → `tipo=hikvision`. Melhor opcao: o "10 s antes" vem do HD e o PC nao precisa gravar nada.
+2. **Camera IP Hikvision com cartao microSD** (ex.: serie DS-2CD; ha relato de playback por SD em uma DS-2CD2186G2-I) → `tipo=hikvision` com o canal 1 (`/Streaming/tracks/101`). Gravar no cartao em modo continuo.
+3. **Camera Hikvision sem SD / sem gravar** (ou se o playback do firmware ignorar o horario) → `tipo=rtsp` com `rtsp_path = /Streaming/Channels/{canal}01`
+   (buffer no agente, mesmas consequencias da Mibo). Serve tambem como plano B se o playback falhar.
+
+**Cuidados na Hikvision (fontes de campo, validar no seu modelo/firmware):**
+- Habilitar RTSP e conferir a autenticacao (digest); relatos de `RTSP permission denied` num DVR enquanto o app (Hik-Connect) tocava normal — vale
+  criar um usuario com permissao de **reproducao remota** e checar se ha **criptografia de video/chave** ativa (bloqueia o RTSP).
+- Alguns firmwares **ignoram o horario** e comecam pela gravacao mais antiga: o clipe sairia com a imagem errada. **Conferir sempre** a imagem do teste
+  contra a hora (ex.: passe algo na frente da camera e use *Testar*). Se acontecer, use o plano B (buffer).
+- Relogio do aparelho fora de hora: o agente corrige pela diferenca lida no ISAPI; mantenha NTP ligado mesmo assim.
+- Nao ha parser de ISAPI de busca/download (`/ISAPI/ContentMgmt/...`) neste modulo — so RTSP playback; ISAPI aqui e so para a hora.
+
+Camera Wi-Fi Mibo: nao ha API local conhecida para tocar o cartao SD, por isso o buffer. **"Mibo iX" nao foi confirmado** na documentacao
 da Intelbras (as linhas iM e iMX tem RTSP e ONVIF perfil S): confirme no manual do modelo e teste a URL no VLC.
 
 ## Ciclo de vida do clipe
@@ -86,6 +101,8 @@ da Intelbras (as linhas iM e iMX tem RTSP e ONVIF perfil S): confirme no manual 
 | `usuario/senha do DVR nao configurados no config.json do agente` | faltam `dvrUser/dvrPass` ou `cameras.<nome>` | preencher o config.json e reiniciar o servico `CabineAgent` |
 | `DVR ... nao respondeu a leitura da hora` | IP/porta HTTP errados, DVR fora do ar, firewall | conferir IP e porta 80 a partir do PC do agente |
 | `usuario ou senha do DVR recusados (401)` | credencial errada | corrigir no config.json |
+| `aparelho Hikvision ... nao respondeu a leitura da hora via ISAPI` | ISAPI desativado, autenticacao so digest/basic diferente, porta HTTP errada, usuario sem permissao | conferir porta HTTP (80), usuario e ISAPI no aparelho |
+| `sem video do canal N ... 404 / permission denied` (Hikvision) | RTSP bloqueado (permissao/criptografia), canal sem gravacao | usuario com reproducao remota; desativar criptografia; ou usar `tipo=rtsp` (buffer) |
 | `sem video do canal N entre .. (hora do DVR)` | canal sem gravacao no intervalo (so movimento?), canal errado, caminho de playback diferente no firmware | gravacao continua no DVR; conferir o canal; testar a URL RTSP no VLC |
 | `ffmpeg nao encontrado` | falta o ffmpeg | colocar `ffmpeg.exe` ao lado do agente |
 | `o gravador nao esta rodando` (Mibo) | camera fora do ar, IP/senha/caminho RTSP errados, sem credencial | testar `rtsp://...` no VLC; conferir `cameras.<nome>` |
@@ -103,7 +120,7 @@ Logs do agente: `C:\ProgramData\CabineAgent\public\agent.log` (`[clipe #N]`, `[g
 - O mp4 so e servido a quem tem a permissao `consultar`; o nome do arquivo vem do id numerico (sem caminho do usuario). O upload valida `ftyp` e o limite de tamanho e exige `X-Agent-Token`.
 - Qualquer agente em contato pega o pedido (como nos comandos de radio): com varios hoteis/agentes, ligar camera a agente esta no backlog.
 - Sem audio (`-an`). Imagem de pessoas: avaliar LGPD (retencao de 30 dias e acesso por perfil sao os controles atuais).
-- Nao validado: modelo real do DVR (caminho RTSP, formato do CGI, codec), camera Mibo real, estabilidade do Wi-Fi sob buffer continuo.
+- Nao validado: modelo real do DVR (caminho RTSP, formato do CGI, codec), camera Mibo e Hikvision reais (formato do horario do playback, ISAPI), estabilidade do Wi-Fi sob buffer continuo.
 
 ## Codigo e testes
 
@@ -112,8 +129,9 @@ Logs do agente: `C:\ProgramData\CabineAgent\public\agent.log` (`[clipe #N]`, `[g
 | Servidor: tabelas, rotas, fila, retencao | `app/main.py` (`cameras`, `clipes`, `_clipe_da_saida`, `_clipes_para_agente`, `purgar_clipes`) |
 | Painel | `app/static/index.html` (secao Cameras em Antenas; coluna Video e player em Alertas de evasao) |
 | Agente: DVR (hora, RTSP playback, digest) | `agent/internal/dvr/dvr.go` |
+| Agente: Hikvision (hora ISAPI, URLs de playback) | `agent/internal/dvr/hikvision.go` |
 | Agente: buffer (gravador, segmentos, montagem) | `agent/internal/dvr/buffer.go` |
 | Agente: orquestracao | `agent/internal/runner/runner.go` (`startClipe`, `syncRecorders`) |
-| Testes | `tests/test_clipes.py` (servidor, 12), `agent/internal/dvr/*_test.go` (inclui ffmpeg real), `agent/internal/runner/{clipes,buffer}_test.go` |
+| Testes | `tests/test_clipes.py` (servidor, 13), `agent/internal/dvr/*_test.go` (inclui ffmpeg real e ISAPI/ffmpeg simulados), `agent/internal/runner/{clipes,buffer}_test.go` |
 
 API: ver [api.md](api.md) (secao *Video da evasao*). Agente: [infra/agente-hotel.md](infra/agente-hotel.md).

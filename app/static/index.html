@@ -585,15 +585,15 @@ table.rt td[colspan]::before{content:none}}
 <section id="secCameras">
   <h2><span id="cmTitulo">Câmeras (Intelbras)</span></h2>
   <div class="mut" style="padding:0 16px 8px">Vincule a câmera a uma antena de evasão acima: quando uma peça for detectada, o vídeo de 10 s antes e 60 s depois é anexado ao alerta. Usuário e senha ficam <b>apenas</b> no <code>config.json</code> do agente (<code>dvrUser</code>/<code>dvrPass</code>, ou <code>cameras</code> por nome), nunca aqui.<br>
-    <b>DVR/NVR:</b> o aparelho toca a gravação, o agente pede o trecho depois. <b>Câmera Wi-Fi (Mibo iM e similares):</b> sem playback pela rede; o agente grava o vídeo ao vivo num buffer de ~6 min e recorta dele — o PC do agente precisa ficar ligado e na mesma rede, e a câmera precisa estar com RTSP ativo.</div>
+    <b>DVR/NVR Intelbras ou Hikvision:</b> o aparelho toca a gravação, o agente pede o trecho depois (Hikvision usa o horário em UTC e a porta HTTP para ler a hora do aparelho). <b>Câmera só com ao vivo (Mibo iM e similares; também serve para Hikvision):</b> sem playback pela rede; o agente grava o vídeo ao vivo num buffer de ~6 min e recorta dele — o PC do agente precisa ficar ligado e na mesma rede, e a câmera precisa estar com RTSP ativo.</div>
   <div class="row">
     <label class="mut">Nome <input id="cmNome" type="text" placeholder="ex. Mibo saída serviço" style="width:200px"></label>
-    <label class="mut">Tipo <select id="cmTipo"><option value="dvr">DVR/NVR Intelbras (playback)</option><option value="rtsp">Câmera Wi-Fi Mibo (ao vivo + buffer)</option></select></label>
+    <label class="mut">Tipo <select id="cmTipo"><option value="dvr">DVR/NVR Intelbras (playback)</option><option value="hikvision">Hikvision: DVR/NVR/câmera com SD (playback)</option><option value="rtsp">Câmera só ao vivo: Mibo, Hikvision... (buffer)</option></select></label>
     <label class="mut">IP <input id="cmIp" type="text" placeholder="192.168.30.60" style="width:140px"></label>
     <label class="mut" id="cmPortaBox">Porta HTTP <input id="cmPorta" type="number" min="1" max="65535" value="80" style="width:80px"></label>
     <label class="mut" id="cmCanalLbl" title="Câmera Wi-Fi: normalmente 1">Canal <input id="cmCanal" type="number" min="1" max="256" value="1" style="width:70px"></label>
     <label class="mut" id="cmGravBox" title="Com gravação só por movimento, o trecho de antes/depois pode não existir no DVR">Gravação <select id="cmGravacao"><option value="continua">contínua (24 h)</option><option value="movimento">só por movimento</option></select></label>
-    <label class="mut" id="cmPathBox" title="Deixe em branco para o padrão das Mibo iM. {canal} vira o número do canal." hidden>Caminho RTSP (avançado) <input id="cmPath" type="text" placeholder="/cam/realmonitor?channel={canal}&amp;subtype=0" style="width:300px"></label>
+    <label class="mut" id="cmPathBox" title="Deixe em branco para o padrão das Mibo iM. {canal} vira o número do canal." hidden>Caminho RTSP (avançado) <input id="cmPath" type="text" placeholder="Mibo: /cam/realmonitor?channel={canal}&amp;subtype=0 · Hikvision: /Streaming/Channels/{canal}01" style="width:420px"></label>
     <button class="acc" id="cmSalvar">Salvar</button><button id="cmCancelar" type="button" hidden>Cancelar edição</button>
   </div>
   <div id="cameraMsg" class="msg"></div>
@@ -1234,7 +1234,7 @@ async function carregarCameras(){
   const sel=$('anCamera'),cur=sel.value;
   sel.innerHTML='<option value="">sem câmera</option>'+camerasCache.map(c=>`<option value="${c.id}">${esc(c.nome)}</option>`).join('');
   if(cur)sel.value=cur;
-  $('cameras').innerHTML=camerasCache.map(c=>`<tr><td>${esc(c.nome)}</td><td>${c.tipo==='rtsp'?'Wi-Fi (buffer)':'DVR/NVR'}</td><td>${esc(c.ip)}${c.tipo==='rtsp'?'':':'+c.porta}</td><td>${c.canal}</td>
+  $('cameras').innerHTML=camerasCache.map(c=>`<tr><td>${esc(c.nome)}</td><td>${c.tipo==='rtsp'?'Ao vivo (buffer)':c.tipo==='hikvision'?'Hikvision':'DVR/NVR Intelbras'}</td><td>${esc(c.ip)}${c.tipo==='rtsp'?'':':'+c.porta}</td><td>${c.canal}</td>
     <td>${c.tipo==='rtsp'?'<span class="mut" title="o agente grava o ao vivo">ao vivo</span>':c.gravacao==='continua'?'contínua':'<span class="pill alerta" title="o trecho pode não existir">só movimento</span>'}</td><td>${esc(c.antenas||'–')}</td>
     <td><button data-cedit="${c.id}">Editar</button> <button data-cteste="${c.id}">Testar</button> <button data-cdel="${c.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=7>nenhuma câmera cadastrada</td></tr>';
 }

@@ -35,6 +35,7 @@ type Camera struct {
 	Canal    int
 	User     string
 	Pass     string
+	Brand    string // "" = Intelbras/Dahua; "hikvision" = Hikvision (DVR/NVR ou câmera IP com cartão SD)
 }
 
 // Options controla a extração.
@@ -116,29 +117,51 @@ func Fetch(ctx context.Context, cam Camera, opt Options, ini, fim time.Time, out
 	if err != nil {
 		return err
 	}
-	off, err := Offset(ctx, cam, opt, time.Now())
-	if err != nil {
-		return fmt.Errorf("DVR %s não respondeu à leitura da hora (IP, porta HTTP e credencial estão certos?): %w", cam.Host, err)
+	var urls []string
+	var a, b time.Time
+	if cam.Brand == "hikvision" {
+		off, err := HikOffset(ctx, cam, opt, time.Now())
+		if err != nil {
+			return fmt.Errorf("aparelho Hikvision %s não respondeu à leitura da hora via ISAPI (IP, porta HTTP e credencial estão certos? ISAPI/digest habilitados?): %w", cam.Host, err)
+		}
+		a, b = ini.Add(off), fim.Add(off)
+		urls = HikPlaybackURLs(cam, a, b) // o formato do horário varia entre firmwares: tenta os dois
+	} else {
+		off, err := Offset(ctx, cam, opt, time.Now())
+		if err != nil {
+			return fmt.Errorf("DVR %s não respondeu à leitura da hora (IP, porta HTTP e credencial estão certos?): %w", cam.Host, err)
+		}
+		a, b = WallTime(ini, off), WallTime(fim, off)
+		urls = []string{PlaybackURL(cam, a, b)}
 	}
-	a, b := WallTime(ini, off), WallTime(fim, off)
 	dur := fim.Sub(ini)
+	var ultimo error
+	for _, u := range urls {
+		if ultimo = gravaPlayback(ctx, ff, u, dur, opt.Codec, outPath, cam); ultimo == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("sem vídeo do canal %d entre %s e %s (hora do aparelho): %w", cam.Canal, a.Format("15:04:05"), b.Format("15:04:05"), ultimo)
+}
+
+// gravaPlayback roda o ffmpeg num playback RTSP e confere o arquivo gerado.
+func gravaPlayback(ctx context.Context, ff, playback string, dur time.Duration, codec, outPath string, cam Camera) error {
 	// o playback corre em tempo real: prazo = duração + folga para conectar
 	cctx, cancel := context.WithTimeout(ctx, dur+2*time.Minute)
 	defer cancel()
 	_ = os.Remove(outPath)
-	cmd := exec.CommandContext(cctx, ff, FFmpegArgs(PlaybackURL(cam, a, b), dur, opt.Codec, outPath)...)
-	saida, runErr := cmd.CombinedOutput()
+	saida, runErr := exec.CommandContext(cctx, ff, FFmpegArgs(playback, dur, codec, outPath)...).CombinedOutput()
 	msg := strings.TrimSpace(redact(string(saida), cam.Pass))
 	if cctx.Err() != nil {
-		return fmt.Errorf("ffmpeg excedeu o prazo ao ler o DVR: %s", tail(msg, 300))
+		return fmt.Errorf("ffmpeg excedeu o prazo ao ler o aparelho: %s", tail(msg, 300))
 	}
 	fi, statErr := os.Stat(outPath)
 	if runErr != nil || statErr != nil || fi.Size() < 4096 {
 		_ = os.Remove(outPath)
 		if msg == "" {
-			msg = "o DVR não devolveu vídeo nesse intervalo (canal sem gravação? gravação só por movimento?)"
+			msg = "o aparelho não devolveu vídeo nesse intervalo (canal sem gravação? gravação só por movimento?)"
 		}
-		return fmt.Errorf("sem vídeo do canal %d entre %s e %s (hora do DVR): %s", cam.Canal, a.Format("15:04:05"), b.Format("15:04:05"), tail(msg, 300))
+		return errors.New(tail(msg, 300))
 	}
 	return nil
 }

@@ -74,7 +74,7 @@ type Comando struct {
 type Clipe struct {
 	ID       int     `json:"id"`
 	CameraID int     `json:"camera_id"`
-	Tipo     string  `json:"tipo"` // dvr (playback no aparelho) | rtsp (buffer do ao vivo)
+	Tipo     string  `json:"tipo"` // dvr (Intelbras/Dahua) | hikvision (playback no aparelho) | rtsp (buffer do ao vivo)
 	RTSPPath string  `json:"rtsp_path"`
 	Inicio   float64 `json:"inicio"`
 	Fim      float64 `json:"fim"`

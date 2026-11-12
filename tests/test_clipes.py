@@ -166,3 +166,17 @@ def test_clipe_rtsp_carrega_tipo_e_teste_pede_o_passado_recente(client):
     pedido = _status(client, h)["clipes"][0]
     assert (pedido["id"], pedido["tipo"], pedido["camera_id"]) == (cl, "rtsp", cid)
     assert pedido["fim"] <= time.time() and 25 <= pedido["fim"] - pedido["inicio"] <= 35  # só o que o buffer já tem
+
+
+def test_camera_hikvision_tipo_e_pedido_ao_agente(client):
+    base = {"nome": "Hik saída", "ip": "192.168.30.80", "canal": 2, "tipo": "hikvision"}
+    assert client.post("/api/cameras", json={**base, "rtsp_path": "/x"}).status_code == 400  # caminho só no modo buffer
+    cid = client.post("/api/cameras", json=base).json()["id"]
+    cfg = client.get("/api/agente/config", headers={"X-Agent-Token": client.post("/api/agentes", json={"nome": "h"}).json()["token"]}, auth=None).json()
+    assert cfg["cameras"] == []  # playback no aparelho: o agente não precisa gravar buffer
+    ag = client.post("/api/agentes", json={"nome": "h2"}).json()
+    h = {"X-Agent-Token": ag["token"]}
+    client.post(f"/api/cameras/{cid}/teste")
+    pedido = _status(client, h)["clipes"][0]
+    assert (pedido["tipo"], pedido["canal"], pedido["porta"]) == ("hikvision", 2, 80)
+    assert pedido["fim"] - pedido["inicio"] >= 60  # janela cheia, como no DVR
