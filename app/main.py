@@ -2420,7 +2420,8 @@ def agente_auth(request: Request) -> dict:
 
 
 AGENTE_DIST = Path(os.environ.get("AGENTE_DIST", "/srv/agente"))
-AGENTE_ARQUIVOS = {"cabine-agent.exe": "application/octet-stream", "instalar.cmd": "text/plain", "cabine-agent.exe.sha256": "text/plain"}
+AGENTE_ARQUIVOS = {"cabine-agent.exe": "application/octet-stream", "instalar.cmd": "text/plain", "cabine-agent.exe.sha256": "text/plain",
+                   "ffmpeg.exe": "application/octet-stream", "ffmpeg.exe.sha256": "text/plain"}  # ffmpeg: vídeo da evasão (build "essentials" do gyan.dev)
 
 
 @app.get("/api/agente/download/{nome}", dependencies=[Depends(P_SISTEMA)])
