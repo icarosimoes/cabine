@@ -298,6 +298,11 @@ def init_db():
           tipos JSONB, criado_em DOUBLE PRECISION NOT NULL)""")  # divergência de quantidade informada na cabine (+ composição do lote por tipo)
         con.execute("CREATE INDEX IF NOT EXISTS ix_divergencias_quando ON divergencias(criado_em)")
         con.execute("""
+        CREATE TABLE IF NOT EXISTS push_assinaturas(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
+          usuario TEXT, agente_navegador TEXT, criado_em DOUBLE PRECISION NOT NULL, ultimo_envio DOUBLE PRECISION)""")  # Web Push (PWA)
+        con.execute("""
         CREATE TABLE IF NOT EXISTS estacoes_controle(
           nome TEXT PRIMARY KEY, usuario TEXT, visto_em DOUBLE PRECISION NOT NULL,
           som BOOLEAN NOT NULL DEFAULT TRUE, pausada BOOLEAN NOT NULL DEFAULT FALSE,
@@ -638,7 +643,73 @@ def notificar(tipo: str, texto: str, c: dict | None = None, destinatario_id: int
         con.commit()
         con.execute("DELETE FROM alerta_envios WHERE quando<%s", (time.time() - 30 * 86400,))
         con.commit()
+    if tipo != "teste" and not destinatario_id:  # push vai em paralelo ao WhatsApp, inclusive se o WhatsApp estiver fora
+        try:
+            enviar_push(tipo, texto)
+        except Exception as e:  # noqa: BLE001
+            print("push indisponível:", e, flush=True)
     return resultados
+
+
+# ---------- Web Push (notificações no celular/PC, PWA) ----------
+
+def _vapid():
+    """Par de chaves VAPID: gerado uma vez e guardado na tabela config (a privada nunca sai do servidor)."""
+    from py_vapid import Vapid
+    with closing(db()) as con:
+        r = con.execute("SELECT valor FROM config WHERE chave='vapid_privada'").fetchone()
+        if not r:
+            v = Vapid()
+            v.generate_keys()
+            con.execute("INSERT INTO config(chave,valor) VALUES('vapid_privada',%s) ON CONFLICT(chave) DO NOTHING", (v.private_pem().decode(),))
+            con.commit()
+            r = con.execute("SELECT valor FROM config WHERE chave='vapid_privada'").fetchone()
+    return Vapid.from_pem(r["valor"].encode())
+
+
+def vapid_publica() -> str:
+    from cryptography.hazmat.primitives import serialization as ser
+    raw = _vapid().public_key.public_bytes(ser.Encoding.X962, ser.PublicFormat.UncompressedPoint)
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+PUSH_TITULOS = {"evasao": "🚨 Evasão", "antena_offline": "Antena offline", "agente_offline": "Agente sem contato", "webhook_falha": "Webhook do rádio",
+                "sem_sinal": "Rádio sem sinal", "falhas": "Falhas no /ingest", "divergencia": "Divergência na cabine", "monitor": "Monitoramento",
+                "antena_online": "Antena online"}
+PUSH_DESTINO = {"evasao": "/#evasao", "divergencia": "/#painel", "monitor": "/#monitoramento"}
+
+
+def enviar_push(tipo: str, texto: str) -> int:
+    """Manda o alerta a todos os aparelhos que ativaram as notificações. Remove assinaturas que o navegador já descartou."""
+    with closing(db()) as con:
+        subs = con.execute("SELECT id, endpoint, p256dh, auth FROM push_assinaturas").fetchall()
+    if not subs:
+        return 0
+    from pywebpush import WebPushException, webpush
+    vapid = _vapid()
+    corpo = json.dumps({"title": PUSH_TITULOS.get(tipo, "Cabine RFID"),
+                        "body": texto.replace("Cabine RFID — ", "").replace("Cabine RFID: ", "")[:220],
+                        "url": PUSH_DESTINO.get(tipo, "/#monitoramento"), "tag": tipo})
+    enviados, mortas = [], []
+    for s_ in subs:
+        try:
+            webpush({"endpoint": s_["endpoint"], "keys": {"p256dh": s_["p256dh"], "auth": s_["auth"]}}, data=corpo,
+                    vapid_private_key=vapid, vapid_claims={"sub": PUBLIC_URL}, ttl=3600, timeout=10)
+            enviados.append(s_["id"])
+        except WebPushException as e:
+            if getattr(e.response, "status_code", None) in (404, 410):
+                mortas.append(s_["id"])
+            else:
+                print("push falhou:", str(e)[:200], flush=True)
+        except Exception as e:  # noqa: BLE001
+            print("push falhou:", str(e)[:200], flush=True)
+    with closing(db()) as con:
+        if mortas:
+            con.execute("DELETE FROM push_assinaturas WHERE id = ANY(%s)", (mortas,))
+        if enviados:
+            con.execute("UPDATE push_assinaturas SET ultimo_envio=%s WHERE id = ANY(%s)", (time.time(), enviados))
+        con.commit()
+    return len(enviados)
 
 
 def avaliar_alertas(agora: float, ultimo_sinal, falhas: int, c: dict | None = None, inicio: float | None = None) -> list[tuple[str, str]]:
@@ -1324,6 +1395,46 @@ def _mescla(intervalos, folga):
 
 def _quedas_json(intervalos, now, limite=5):
     return [{"inicio": a, "fim": b if b < now - 90 else None, "duracao_s": round(b - a)} for a, b in reversed(intervalos[-limite:])]
+
+
+class PushChaves(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushAssinatura(BaseModel):
+    endpoint: str
+    keys: PushChaves
+
+
+@app.get("/api/push/chave", dependencies=[Depends(P_CONSULTAR)])
+def push_chave():
+    return {"chave": vapid_publica()}
+
+
+@app.post("/api/push/assinar")
+def push_assinar(b: PushAssinatura, request: Request, user: dict = Depends(P_CONSULTAR)):
+    if not b.endpoint.startswith("https://") or len(b.endpoint) > 1000:
+        raise HTTPException(400, "endpoint inválido")
+    with closing(db()) as con:
+        con.execute("""INSERT INTO push_assinaturas(endpoint,p256dh,auth,usuario,agente_navegador,criado_em) VALUES(%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT(endpoint) DO UPDATE SET p256dh=EXCLUDED.p256dh, auth=EXCLUDED.auth, usuario=EXCLUDED.usuario""",
+                    (b.endpoint, b.keys.p256dh, b.keys.auth, user["usuario"], (request.headers.get("user-agent") or "")[:200], time.time()))
+        con.commit()
+    return {"ok": True}
+
+
+@app.post("/api/push/cancelar", dependencies=[Depends(P_CONSULTAR)])
+def push_cancelar(b: PushAssinatura):
+    with closing(db()) as con:
+        con.execute("DELETE FROM push_assinaturas WHERE endpoint=%s", (b.endpoint,))
+        con.commit()
+    return {"ok": True}
+
+
+@app.post("/api/push/teste", dependencies=[Depends(P_CONSULTAR)])
+def push_teste():
+    return {"enviados": enviar_push("monitor", "Notificação de teste: este aparelho vai receber os alertas do Cabine RFID.")}
 
 
 ESTACAO_ONLINE_SEG = 45  # heartbeat a cada ~15 s
@@ -2988,7 +3099,7 @@ def login(payload: LoginIn, request: Request):
 ROTULOS_ACAO = [  # (método, regex do caminho, descrição) — o que não casar aparece como "MÉTODO caminho"
     ("DELETE", r"/api/lotes/\d+", "Excluiu lote"), ("POST", r"/api/lotes/registrar", "Registrou lote"),
     ("POST", r"/api/lotes/\d+/transferir", "Transferiu lote"), ("POST", r"/api/lotes/\d+/estado", "Mudou estado do lote"),
-    ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/estacoes/heartbeat", "Estação de controle"), ("POST", r"/api/leitura/armar", "Armou a leitura"),
+    ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/estacoes/heartbeat", "Estação de controle"), ("POST", r"/api/push/assinar", "Ativou notificações no aparelho"), ("POST", r"/api/push/cancelar", "Desativou notificações no aparelho"), ("POST", r"/api/leitura/armar", "Armou a leitura"),
     ("POST", r"/api/itens", "Cadastrou/atualizou item"), ("PATCH", r"/api/itens/[^/]+/nome", "Nomeou tag"), ("POST", r"/api/itens/editar-lote", "Editou itens em lote"),
     ("POST", r"/api/itens/cadastrar-lote", "Cadastrou itens em lote"), ("POST", r"/api/itens/importar-nomes", "Importou nomes de tags"), ("PATCH", r"/api/itens/[^/]+/estado", "Mudou estado do item"),
     ("POST", r"/api/conferencias", "Iniciou conferência"), ("POST", r"/api/conferencias/\d+/finalizar", "Finalizou conferência"),

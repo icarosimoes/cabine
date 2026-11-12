@@ -435,7 +435,7 @@ def test_nenhuma_rota_get_da_api_abre_para_o_perfil_painel(client):
     client.post("/api/usuarios", json={"usuario": "gerente", "papel": "painel", "senha": "senha-forte-1"})
     p = client.__class__(client.app)
     p.post("/api/login", json={"usuario": "gerente", "senha": "senha-forte-1"})
-    permitidas = {"/api/dashboard", "/api/summary", "/api/me", "/api/login", "/api/logout"}
+    permitidas = {"/api/dashboard", "/api/summary", "/api/me", "/api/login", "/api/logout", "/api/estacoes"}  # estações do Monitor ao vivo: parte do dashboard
     abertas = []
     for r in client.app.routes:
         caminho = getattr(r, "path", "")

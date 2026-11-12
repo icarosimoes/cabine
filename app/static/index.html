@@ -128,6 +128,16 @@ table.rt-sel td:nth-child(2)::before{content:none}
 #registrar,#movimentar,.transferirBtn{width:100%;min-height:52px;font-size:16px}
 .row{flex-wrap:wrap}
 .row>input:not([type=checkbox]),.row>select,.row>textarea{flex:1 1 44%;min-width:0;width:auto!important}}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:var(--sp-3);padding:0 16px 16px}
+.tile{background:var(--navy-mid);border:2px solid var(--line);border-radius:var(--r-lg);padding:var(--sp-3) var(--sp-4)}
+.tile b{display:block;font-size:18px}.tile .big{font-size:26px;font-weight:800;margin-top:4px}.tile span{color:var(--muted);font-size:12px}
+.tile.ok{border-color:var(--green)}.tile.ok .big{color:var(--green)}
+.tile.bad{border-color:var(--red);background:var(--red-soft);animation:pisca 1.2s ease-in-out infinite}.tile.bad .big{color:var(--red)}
+.tile.sem{border-style:dashed}
+@keyframes pisca{50%{box-shadow:0 0 0 4px var(--red-soft)}}
+@media(prefers-reduced-motion:reduce){.tile.bad{animation:none}}
+#hrChart{width:100%;height:auto;display:block}
+#hrChart rect.b{fill:var(--teal)}#hrChart text{fill:var(--muted);font-size:10px}#hrChart line{stroke:var(--line)}
 @media(display-mode:standalone){body{overscroll-behavior-y:contain}}
 @media(max-width:360px){.cards{grid-template-columns:1fr}}
 @media print{
@@ -157,6 +167,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <div class="nav-group" data-grupo="Controle">
       <button type="button" class="nav-section" aria-expanded="true"><span>Controle</span><i class="chev" aria-hidden="true"></i></button>
       <div class="nav-sub">
+        <a class="nav-item" href="#controle" data-nav="controle">Monitor ao vivo</a>
         <a class="nav-item" href="#evasao" data-nav="evasao">Alertas de evasão <span class="badge" id="badgeEvasao"></span></a>
       </div>
     </div>
@@ -200,6 +211,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <div class="leitor"><span id="dot" class="dot"></span><span id="status">…</span></div>
     <div class="leitor" id="usuarioBox" style="color:var(--text-dim)"></div>
     <button class="nav-item" id="instalarApp" type="button" hidden>Instalar app</button>
+    <button class="nav-item" id="pushBtn" type="button" hidden>🔕 Ativar notificações</button>
     <button class="nav-item" id="tema" type="button">Tema claro/escuro</button>
     <button class="nav-item" id="sair" type="button">Sair</button>
   </div>
@@ -235,6 +247,16 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <div id="dEstados" style="padding:8px 0"></div>
   </section>
   <section>
+    <h2><span>Leituras por hora</span><span class="mut" id="hrInfo">últimas 48 h</span></h2>
+    <div style="padding:8px 16px 12px"><svg id="hrChart" viewBox="0 0 720 150" role="img" aria-label="Leituras por hora nas últimas 48 horas"></svg>
+    <p class="mut" style="margin:4px 0 0">Só entram leituras solicitadas (lote, conferência, captura).</p></div>
+  </section>
+  <section>
+    <h2><span>Divergências na cabine</span><span class="mut" id="dDivInfo">últimos 30 dias</span></h2>
+    <div class="scroll"><table class="rt"><thead><tr><th>Quando</th><th>Lote</th><th>Detectado</th><th>Esperado</th><th>Quem informou</th></tr></thead><tbody id="dDivTb"></tbody></table></div>
+    <p class="mut" id="dDivTipos" style="margin:0;padding:8px 16px"></p>
+  </section>
+  <section>
     <h2><span>Peças paradas na lavanderia</span><span class="mut" id="dParadosInfo"></span></h2>
     <div class="scroll"><table class="rt"><thead><tr><th>Tipo</th><th>Peças</th><th>Mais antiga enviada</th></tr></thead><tbody id="dParadosTb"></tbody></table></div>
   </section>
@@ -256,6 +278,35 @@ table.rt-sel td:nth-child(2)::before{content:none}
   <div class="card"><b id="c5">–</b><span>eventos guardados</span></div>
 </div>
 </div>
+<div class="view" data-view="controle" hidden>
+<div class="banner" id="ctBanner">carregando…</div>
+<section>
+  <h2><span>Estação de controle</span><span class="mut" id="ctInfo"></span></h2>
+  <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
+    <label class="mut">Nome desta estação <input id="ctNome" type="text" maxlength="40" placeholder="ex.: Portaria" style="width:170px"></label>
+    <label class="mut">Atualizar a cada <select id="ctInt"><option value="5">5 s</option><option value="10" selected>10 s</option><option value="15">15 s</option><option value="30">30 s</option><option value="60">1 min</option></select></label>
+    <button id="ctSom" class="acc" aria-pressed="false">🔇 Ativar som</button>
+    <button id="ctTeste" type="button">Testar som</button>
+    <button id="ctPausa" type="button" aria-pressed="false">⏸ Pausar</button>
+    <button id="ctRel" type="button">⬇ Relatório (CSV)</button>
+  </div>
+  <p class="mut" style="margin:0;padding:0 16px 8px">Deixe esta tela aberta num computador de controle. O som precisa ser ativado uma vez (o navegador exige um clique). Com a aba em segundo plano o navegador pode atrasar a atualização — mantenha-a visível.</p>
+</section>
+<section>
+  <h2><span>Antenas</span><span class="mut" id="ctAntInfo"></span></h2>
+  <div class="tiles" id="ctAntenas"></div>
+</section>
+<div class="grid2">
+  <section>
+    <h2><span>Saídas sem documento (24 h)</span><span class="mut" id="ctEvInfo"></span></h2>
+    <div class="scroll"><table class="rt"><thead><tr><th>Quando</th><th>Peça</th><th>Destino</th><th>Vídeo</th></tr></thead><tbody id="ctEvTb"></tbody></table></div>
+  </section>
+  <section>
+    <h2><span>Ocorrências desta sessão</span><span class="mut" id="ctLogInfo"></span></h2>
+    <div class="scroll"><table class="rt"><thead><tr><th>Hora</th><th>Ocorrência</th></tr></thead><tbody id="ctLogTb"></tbody></table></div>
+  </section>
+</div>
+</div>
 <div class="view" data-view="monitoramento" hidden>
 <div class="banner" id="mBanner">carregando…</div>
 <div class="cards">
@@ -269,6 +320,10 @@ table.rt-sel td:nth-child(2)::before{content:none}
 <section>
   <h2><span>Antenas — disponibilidade</span><span class="mut" id="mAntInfo"></span></h2>
   <div class="scroll"><table class="rt"><thead><tr><th>Antena</th><th>Status</th><th>Uptime 24h</th><th>Uptime 7d</th><th>Latência (24h)</th><th>Últimas quedas</th></tr></thead><tbody id="mAntTb"></tbody></table></div>
+</section>
+<section>
+  <h2><span>WhatsApp (Evolution) e estações de controle</span><span class="mut" id="mWaInfo"></span></h2>
+  <div class="scroll"><table class="rt"><thead><tr><th>Estação (Monitor ao vivo)</th><th>Status</th><th>Usuário</th><th>Som</th><th>Último sinal</th></tr></thead><tbody id="mEstTb"></tbody></table></div>
 </section>
 <section>
   <h2><span>Agentes do hotel</span></h2>
@@ -604,6 +659,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <label class="mut">Sem sinal após (seg) <input id="waSem" type="number" min="10" max="86400" style="width:80px"></label>
     <label class="mut">Falhas no /ingest (10 min) <input id="waFalhas" type="number" min="1" max="1000" style="width:70px"></label>
     <label class="mut">Repetir lembrete (min) <input id="waRep" type="number" min="5" max="10080" style="width:80px"></label>
+    <label class="mut" title="Avisa quando uma antena monitorada ficar online menos que isso nas últimas 24 h. 0 desliga.">Uptime mínimo 24 h (%) <input id="waUptime" type="number" min="0" max="100" style="width:70px"></label>
   </div>
   <div class="row"><button class="acc" id="waSalvar">Salvar</button></div>
   <div id="waMsg" class="msg"></div>
@@ -742,12 +798,13 @@ async function j(u,opts){
 const itemTipo=(t,nome)=>t?(nome?`<b>${esc(nome)}</b> <span class="mut">${esc(t)}</span>`:esc(t)):'<span class="mut">não cadastrada</span>';
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
-const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Dashboard',monitoramento:'Monitoramento',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
+const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Dashboard',controle:'Monitor ao vivo',monitoramento:'Monitoramento',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
   inventario:'Inventário',catalogo:'Catálogo de itens',manual:'Leitor manual',auditoria:'Auditoria de logins',acoes:'Auditoria de ações',revisao:'Revisão do inventário',destinos:'Destinos',estados:'Estados de inventário',tags:'Tags lidas',eventos:'Eventos ao vivo'};
 let view='painel';
 const LOADERS={
   painel:()=>carregarDashboard(),
   monitoramento:()=>carregarMonitoramento(),
+  controle:()=>iniciaControle(),
   leitura:async()=>{await carregarPendentes();await carregarSessoes()},
   relatorios:()=>carregarHoras(),
   transferencias:async()=>{await carregarDestinos();await carregarTransferencias()},
@@ -803,10 +860,28 @@ async function carregarDashboard(){
   $('dPerdasTb').innerHTML=d.inventario.nao_encontrados_30d.map(p=>`<tr><td>${esc(p.tipo)}</td><td data-l="Não encontrados">${p.qtd}</td></tr>`).join('')||'<tr><td colspan=2>nenhuma falta registrada</td></tr>';
   $('dCabineInfo').textContent=`${d.cabine.transferencias_hoje} hoje · ${d.cabine.pecas_aguardando} peça(s) aguardando`;
   $('dTransfTb').innerHTML=d.cabine.ultimas.map(t=>`<tr><td>${dt(t.criado_em)}</td><td data-l="Destino">${esc(t.destino)}</td><td data-l="Peças">${t.quantidade}</td></tr>`).join('')||'<tr><td colspan=3>nenhuma transferência</td></tr>';
+  const dv=d.cabine.divergencias_30d;
+  $('dDivInfo').textContent=`últimos 30 dias · ${dv.total} registro(s) · ${dv.pecas_faltando} peça(s) a menos que o esperado`;
+  $('dDivTb').innerHTML=dv.ultimas.map(x=>`<tr><td>${dt(x.criado_em)}</td><td data-l="Lote">#${x.lote_id}</td><td data-l="Detectado">${x.detectado}</td><td data-l="Esperado">${x.esperado??'–'}</td><td data-l="Quem informou">${esc(x.usuario||'–')}${x.observacao?' <span class="mut">— '+esc(x.observacao)+'</span>':''}</td></tr>`).join('')||'<tr><td colspan=5>nenhuma divergência registrada</td></tr>';
+  $('dDivTipos').textContent=dv.por_tipo.length?'Tipos mais presentes nos lotes com divergência: '+dv.por_tipo.map(t=>`${t.tipo} (${t.qtd})`).join(', '):'';
+  desenhaHoras().catch(()=>{});
   const c=d.conferencia;
   $('dConf').textContent=c?`Última conferência #${c.id}: ${c.status==='andamento'?'em andamento':'finalizada'} — ${c.conferidos??0} de ${c.esperados} item(ns) conferidos (${ha(c.iniciada_em)})`:'Nenhuma conferência de estoque realizada.';
 }
 
+async function desenhaHoras(){
+  if(!tem('consultar'))return $('hrChart').parentElement.parentElement.hidden=true;
+  const rows=await j('/api/leituras-hora?horas=48');
+  const fim=Math.floor(Date.now()/3600000)*3600,mapa=new Map(rows.map(r=>[r.hora,r]));
+  const pts=[];for(let i=47;i>=0;i--){const h=fim-i*3600,r=mapa.get(h);pts.push({h,n:r?r.leituras:0,t:r?r.tags:0})}
+  const max=Math.max(1,...pts.map(p=>p.n)),W=720,H=150,pl=34,pb=18,pt=8,bw=(W-pl)/48;
+  const fmt=h=>new Date(h*1000).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+  let svg=`<line x1="${pl}" y1="${H-pb}" x2="${W}" y2="${H-pb}"/><line x1="${pl}" y1="${pt}" x2="${W}" y2="${pt}" stroke-dasharray="2 3"/><text x="${pl-4}" y="${pt+8}" text-anchor="end">${max}</text><text x="${pl-4}" y="${H-pb}" text-anchor="end">0</text>`;
+  pts.forEach((p,i)=>{const h=Math.max(p.n?1.5:0,(H-pb-pt)*p.n/max);svg+=`<rect class="b" x="${(pl+i*bw+1).toFixed(1)}" y="${(H-pb-h).toFixed(1)}" width="${(bw-2).toFixed(1)}" height="${h.toFixed(1)}" rx="1.5"><title>${fmt(p.h)} — ${p.n} leitura(s), ${p.t} tag(s)</title></rect>`});
+  [0,12,24,36,47].forEach(i=>{svg+=`<text x="${(pl+i*bw+bw/2).toFixed(1)}" y="${H-4}" text-anchor="middle">${new Date(pts[i].h*1000).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</text>`});
+  $('hrChart').innerHTML=svg;
+  $('hrInfo').textContent=`últimas 48 h · ${pts.reduce((a,p)=>a+p.n,0)} leituras`;
+}
 const dur=sg=>sg==null?'–':sg<90?Math.round(sg)+' s':sg<5400?Math.round(sg/60)+' min':sg<172800?(sg/3600).toFixed(1).replace('.0','')+' h':Math.round(sg/86400)+' d';
 const tam=b=>b==null?'–':b<1048576?Math.round(b/1024)+' KB':b<1073741824?(b/1048576).toFixed(1)+' MB':(b/1073741824).toFixed(2)+' GB';
 const pctCls=v=>v==null?'cinza':v>=99?'ok':v>=95?'cinza':'alerta';
@@ -821,6 +896,9 @@ async function carregarMonitoramento(){
   _mon=Date.now();
   let m;try{m=await j('/api/monitoramento')}catch(e){_mon=0;throw e}
   const on=m.antenas.filter(a=>a.online).length,ag=m.agentes.filter(a=>a.online).length;
+  const wa=m.whatsapp||{};
+  $('mWaInfo').innerHTML=wa.estado==null?'WhatsApp: não configurado':'WhatsApp: '+(wa.ok?'<span class="pill ok">conectado</span>':`<span class="pill alerta">${esc(wa.estado)}</span> ${esc(wa.erro||'')}`)+` · alerta de uptime abaixo de ${m.uptime_min||'—'}%`;
+  $('mEstTb').innerHTML=(m.estacoes||[]).map(e=>`<tr><td><b>${esc(e.nome)}</b></td><td data-l="Status">${e.online?'<span class="pill ok">ativa</span>'+(e.pausada?' <span class="pill cinza">pausada</span>':''):'<span class="pill alerta">sem sinal</span>'}</td><td data-l="Usuário">${esc(e.usuario||'–')}</td><td data-l="Som">${e.som?'ligado':'<span class="mut">desligado</span>'}</td><td data-l="Último sinal">${ha(e.visto_em)}</td></tr>`).join('')||'<tr><td colspan=5>nenhuma estação — abra "Monitor ao vivo" num computador de controle</td></tr>';
   const b=$('mBanner');b.className='banner '+(m.problemas.length?'bad':'ok');
   b.textContent=m.problemas.length?`⚠ ${m.problemas.length} problema(s): ${m.problemas.join(', ')}`:`✓ Tudo certo: ${on} de ${m.antenas.length} antenas e ${ag} de ${m.agentes.length} agente(s) online`;
   const set=(id,v,cls)=>{const e=$(id);e.textContent=v;e.className=cls||''};
@@ -1268,7 +1346,7 @@ $('capturar').onclick=async()=>{
 };
 let eu=null;
 const tem=p=>!eu||(eu.permissoes||[]).includes(p);
-const NAV_PERM={painel:'dashboard',monitoramento:'monitoramento',usuarios:'usuarios',alertaswa:'alertas_whatsapp',auditoria:'auditoria',acoes:'auditoria'};
+const NAV_PERM={painel:'dashboard',controle:'dashboard',monitoramento:'monitoramento',usuarios:'usuarios',alertaswa:'alertas_whatsapp',auditoria:'auditoria',acoes:'auditoria'};
 const podeVer=h=>tem(NAV_PERM[h]||'consultar');
 function aplicaPermissoes(){
   document.querySelectorAll('[data-nav]').forEach(a=>a.hidden=!podeVer(a.dataset.nav));
@@ -1340,7 +1418,7 @@ async function carregarAlertasWa(){
   if(waCarregado)return; // não sobrescreve o que está sendo digitado a cada 3s
   const c=await j('/api/config/alertas');
   $('waAtivo').checked=c.ativo;$('waUrl').value=c.wa_url;$('waInstance').value=c.wa_instance;
-  $('waSem').value=c.sem_sinal_seg;$('waFalhas').value=c.falhas;$('waRep').value=c.repetir_min;
+  $('waSem').value=c.sem_sinal_seg;$('waFalhas').value=c.falhas;$('waRep').value=c.repetir_min;$('waUptime').value=c.uptime_min;
   $('waKey').placeholder=c.wa_apikey_definida?'•••••• (definida — deixe vazio para manter)':'cole a API key';
   $('waEstado').textContent=c.alertas_abertos.length?'⚠ em alerta: '+c.alertas_abertos.join(', '):'sem alertas abertos';
   waCarregado=true;
@@ -1349,7 +1427,7 @@ $('waSalvar').onclick=async()=>{
   const m=$('waMsg');
   try{await j('/api/config/alertas',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({
     ativo:$('waAtivo').checked,wa_url:$('waUrl').value,wa_instance:$('waInstance').value,wa_apikey:$('waKey').value,
-    sem_sinal_seg:Number($('waSem').value),falhas:Number($('waFalhas').value),repetir_min:Number($('waRep').value)})});
+    sem_sinal_seg:Number($('waSem').value),falhas:Number($('waFalhas').value),repetir_min:Number($('waRep').value),uptime_min:Number($('waUptime').value)})});
     $('waKey').value='';waCarregado=false;await carregarAlertasWa();m.className='msg ok';m.textContent='configuração salva'}
   catch(e){m.className='msg bad';m.textContent=e.message}
 };
@@ -1780,7 +1858,120 @@ async function carregarRevisao(){
 }
 $('rvAtualizar').onclick=carregarRevisao;$('rvDias').onchange=carregarRevisao;
 
-carregarMe().finally(()=>{rota();setInterval(tick,3000)});
+
+// ---------- Monitor ao vivo (estação de controle) ----------
+const CT={timer:null,hb:null,estado:new Map(),evVistos:null,log:[],som:false,pausada:false,ctx:null,wake:null,rodando:false};
+const ctLs=(k,v)=>{try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}};
+function ctBip(tipo){ // tipo: alarme (2 tons agudos), aviso (1 tom grave), ok (tom suave)
+  if(!CT.som||!CT.ctx)return;
+  const seq={alarme:[[880,.18],[660,.18],[880,.18],[660,.18]],aviso:[[440,.35]],ok:[[660,.12],[880,.18]]}[tipo]||[];
+  let t=CT.ctx.currentTime;
+  seq.forEach(([f,d])=>{const o=CT.ctx.createOscillator(),g=CT.ctx.createGain();o.type='square';o.frequency.value=f;g.gain.setValueAtTime(.15,t);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g);g.connect(CT.ctx.destination);o.start(t);o.stop(t+d);t+=d+.04});
+}
+function ctRegistra(txt,tipo){
+  CT.log.unshift({t:Date.now()/1000,txt,tipo});CT.log=CT.log.slice(0,500);
+  $('ctLogInfo').textContent=CT.log.length+' ocorrência(s)';
+  $('ctLogTb').innerHTML=CT.log.slice(0,40).map(l=>`<tr><td>${dt(l.t)}</td><td data-l="Ocorrência">${l.tipo==='ruim'?'<span class="pill alerta">!</span> ':l.tipo==='ok'?'<span class="pill ok">✓</span> ':''}${esc(l.txt)}</td></tr>`).join('');
+}
+async function ctCiclo(){
+  if(view!=='controle'||CT.pausada||CT.rodando)return;
+  CT.rodando=true;
+  try{
+    const d=await j('/api/dashboard');
+    const primeiro=CT.estado.size===0;
+    let off=0,sem=0;
+    $('ctAntenas').innerHTML=d.antenas.map(a=>{
+      const ant=CT.estado.get(a.id);CT.estado.set(a.id,a.online);
+      if(a.online===false)off++;if(a.online==null)sem++;
+      if(!primeiro&&ant!==a.online){
+        if(a.online===false){ctRegistra(`Antena ${a.nome} ficou OFFLINE`,'ruim');ctBip(a.evasao?'alarme':'aviso')}
+        else if(a.online===true&&ant===false){ctRegistra(`Antena ${a.nome} voltou ONLINE`,'ok');ctBip('ok')}
+      }
+      const cls=a.online===true?'ok':a.online===false?'bad':'sem';
+      return `<div class="tile ${cls}"><b>${esc(a.nome)}${a.evasao?' 🚨':''}</b><span>${esc(a.descricao||a.modelo||'')}</span><div class="big">${a.online===true?'ONLINE':a.online===false?'OFFLINE':'sem dados'}</div><span>${a.latencia_ms!=null&&a.online?a.latencia_ms+' ms · ':''}verificado ${ha(a.verificado_em)}</span></div>`}).join('')||'<p class="mut" style="padding:0 16px">nenhuma antena cadastrada</p>';
+    $('ctAntInfo').textContent=`${d.antenas.length-off-sem} online · ${off} offline · ${sem} sem dados`;
+    const ag=d.agentes.filter(x=>!x.online);
+    const ok=!off&&!ag.length;
+    const b=$('ctBanner');b.className='banner '+(ok?'ok':'bad');
+    b.textContent=ok?`✓ Tudo normal — ${d.antenas.length} antena(s) online`:`⚠ ${[off?off+' antena(s) offline':'',...ag.map(x=>'agente '+x.nome+' sem contato')].filter(Boolean).join(' · ')}`;
+    if(tem('consultar')){
+      const desde=Math.floor(Date.now()/1000)-86400;
+      const ev=await j('/api/saida?documentado=false&limit=30&desde='+desde);
+      const ids=new Set(ev.map(x=>x.id));
+      if(CT.evVistos){ev.filter(x=>!CT.evVistos.has(x.id)).forEach(x=>{ctRegistra(`EVASÃO: ${x.item_nome||x.item_tipo||'peça sem cadastro'} (${x.epc.slice(-8)}) saindo por ${x.destino_nome}`,'ruim');ctBip('alarme')})}
+      CT.evVistos=ids;
+      $('ctEvInfo').textContent=ev.length?ev.length+' não documentada(s)':'nenhuma';
+      $('ctEvTb').innerHTML=ev.slice(0,10).map(x=>`<tr><td>${dt(x.detectado_em)}</td><td data-l="Peça"><b>${esc(x.item_nome||x.item_tipo||'sem cadastro')}</b><br><span class="mut epc">${esc(x.epc)}</span></td><td data-l="Destino">${esc(x.destino_nome)}</td><td data-l="Vídeo">${videoCelula(x)}</td></tr>`).join('')||'<tr><td colspan=4>nenhuma saída sem documento nas últimas 24 h</td></tr>';
+    }else $('ctEvTb').innerHTML='<tr><td colspan=4>sem permissão para ver as saídas</td></tr>';
+    $('ctInfo').textContent='atualizado '+new Date().toLocaleTimeString('pt-BR');
+  }catch(e){$('ctBanner').className='banner bad';$('ctBanner').textContent='⚠ sem comunicação com o servidor: '+e.message}
+  finally{CT.rodando=false}
+}
+async function ctHeartbeat(){
+  if(view!=='controle')return;
+  const nome=$('ctNome').value.trim();if(!nome)return;
+  try{await j('/api/estacoes/heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome,som:CT.som,pausada:CT.pausada,intervalo_seg:Number($('ctInt').value)})})}catch(e){}
+}
+function ctAgenda(){
+  clearInterval(CT.timer);CT.timer=setInterval(ctCiclo,Number($('ctInt').value)*1000);
+}
+async function iniciaControle(){
+  if(CT.hb)return; // já iniciado; o setInterval cuida do resto
+  $('ctNome').value=ctLs('ctNome')||'';$('ctInt').value=ctLs('ctInt')||'10';
+  ctAgenda();ctCiclo();CT.hb=setInterval(ctHeartbeat,15000);ctHeartbeat();
+  try{if('wakeLock' in navigator)CT.wake=await navigator.wakeLock.request('screen')}catch(e){}
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&view==='controle'){ctCiclo();if('wakeLock' in navigator)navigator.wakeLock.request('screen').then(w=>CT.wake=w).catch(()=>{})}});
+}
+$('ctNome').onchange=()=>{ctLs('ctNome',$('ctNome').value.trim());ctHeartbeat()};
+$('ctInt').onchange=()=>{ctLs('ctInt',$('ctInt').value);ctAgenda();ctHeartbeat()};
+$('ctSom').onclick=()=>{
+  CT.som=!CT.som;
+  if(CT.som){try{CT.ctx=CT.ctx||new (window.AudioContext||window.webkitAudioContext)();CT.ctx.resume()}catch(e){CT.som=false}}
+  $('ctSom').setAttribute('aria-pressed',CT.som);$('ctSom').textContent=CT.som?'🔊 Som ligado':'🔇 Ativar som';
+  if(CT.som)ctBip('ok');ctHeartbeat();
+};
+$('ctTeste').onclick=()=>{if(!CT.som){$('ctSom').click()}else{ctBip('alarme')}};
+$('ctPausa').onclick=()=>{
+  CT.pausada=!CT.pausada;$('ctPausa').setAttribute('aria-pressed',CT.pausada);$('ctPausa').textContent=CT.pausada?'▶ Retomar':'⏸ Pausar';
+  ctRegistra(CT.pausada?'Monitoramento pausado nesta estação':'Monitoramento retomado',CT.pausada?'ruim':'ok');
+  if(!CT.pausada)ctCiclo();ctHeartbeat();
+};
+$('ctRel').onclick=()=>{
+  const linhas=[['quando','ocorrencia','tipo'],...CT.log.slice().reverse().map(l=>[new Date(l.t*1000).toLocaleString('pt-BR'),l.txt,l.tipo||''])];
+  const csv='﻿'+linhas.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(';')).join('\r\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download='monitor-'+(ctLs('ctNome')||'estacao')+'-'+new Date().toISOString().slice(0,16).replace(/[:T]/g,'')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+};
+
+
+// ---------- Notificações push (PWA) ----------
+const b64u=s=>Uint8Array.from(atob((s+'='.repeat((4-s.length%4)%4)).replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+async function pushEstado(){
+  const b=$('pushBtn');
+  if(!('serviceWorker' in navigator&&'PushManager' in window&&'Notification' in window)){b.hidden=true;return}
+  b.hidden=false;
+  try{const reg=await navigator.serviceWorker.ready,sub=await reg.pushManager.getSubscription();
+    b.dataset.on=sub?'1':'';b.textContent=sub?'🔔 Notificações ligadas':'🔕 Ativar notificações';
+    if(Notification.permission==='denied'){b.textContent='🔕 Notificações bloqueadas no navegador';b.disabled=true}}catch(e){b.hidden=true}
+}
+$('pushBtn').onclick=async()=>{
+  const b=$('pushBtn');b.disabled=true;
+  try{
+    const reg=await navigator.serviceWorker.ready,atual=await reg.pushManager.getSubscription();
+    if(atual){ // desligar
+      await j('/api/push/cancelar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(atual.toJSON())});
+      await atual.unsubscribe();
+    }else{
+      if(await Notification.requestPermission()!=='granted')throw new Error('permissão negada');
+      const {chave}=await j('/api/push/chave');
+      const sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64u(chave)});
+      await j('/api/push/assinar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
+      try{await j('/api/push/teste',{method:'POST'})}catch(e){}
+    }
+  }catch(e){alert('Notificações: '+e.message)}
+  b.disabled=false;pushEstado();
+};
+carregarMe().finally(()=>{rota();setInterval(tick,3000);if(tem('consultar'))pushEstado()});
 </script>
 </body>
 </html>
