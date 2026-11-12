@@ -81,6 +81,13 @@ Quando uma antena de evasão tem câmera (painel: Antenas > Câmeras), o servido
   "rtspPort": 554, "ffmpegPath": "", "videoCodec": "copy" }
 ```
 
+### Hikvision (playback no aparelho, agente 0.1.8)
+
+`tipo=hikvision`: o agente le a hora via `GET http://IP:porta/ISAPI/System/time` (digest) e roda o ffmpeg em
+`rtsp://usuario:senha@IP:554/Streaming/tracks/<canal>01?starttime=..&endtime=..` (horario **UTC**; tenta o formato compacto e depois o ISO). Mesmas credenciais
+do `config.json` (`dvrUser/dvrPass` ou `cameras.<nome>`). Opcoes de modelos, cuidados (RTSP/criptografia, firmware que ignora o horario) e plano B (`tipo=rtsp` com
+`/Streaming/Channels/{canal}01`) em [../video-evasao.md](../video-evasao.md).
+
 ### Câmera Wi-Fi Intelbras Mibo (modo "buffer", agente 0.1.8)
 
 As Mibo (iM3/iM4/iM5, iMX...) têm RTSP ao vivo (`rtsp://usuário:senha@IP:554/cam/realmonitor?channel=1&subtype=0`) e ONVIF perfil S, mas **não achei API

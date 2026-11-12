@@ -12,7 +12,7 @@ dos demais sistemas Solid (erpsolid, hotspot).
 - [registro-trabalho.md](registro-trabalho.md): historico cronologico (mudancas, deploys, pendencias).
 - [backlog.md](backlog.md): o que falta e riscos conhecidos.
 - [infra/deploy.md](infra/deploy.md): deploy de producao (Swarm), migracao SQLite -> Postgres, rollback, CI e rotacao da chave.
-- [video-evasao.md](video-evasao.md): video da evasao (DVR Intelbras e camera Wi-Fi Mibo): como funciona, implantacao, problemas comuns.
+- [video-evasao.md](video-evasao.md): video da evasao (DVR Intelbras, Hikvision e camera Wi-Fi Mibo): como funciona, implantacao, problemas comuns.
 - [infra/agente-hotel.md](infra/agente-hotel.md): agente Windows (instalar, atualizar, testes na LAN, evasao, MSI planejado).
 - [auditoria-2026-11-07.md](auditoria-2026-11-07.md): auditoria de seguranca e status das correcoes.
 - [referencia-etrace-cabine.md](referencia-etrace-cabine.md): fluxo do eTrace usado como referencia.
@@ -24,7 +24,7 @@ dos demais sistemas Solid (erpsolid, hotspot).
 ## Estado atual (12/11/2026)
 
 - **Video da evasao** (branch `claude/dvr-camera-evasion-detection-qhep0r`, nao mesclado nem em producao): clipe 10 s antes/60 s depois por antena de
-  evasao, DVR/NVR Intelbras ou camera Wi-Fi Mibo, via agente 0.1.8. **Nao validado com equipamento real**; depende do gatilho real da evasao.
+  evasao, DVR/NVR Intelbras, Hikvision ou camera Wi-Fi Mibo, via agente 0.1.8. **Nao validado com equipamento real**; depende do gatilho real da evasao.
   Guia: [video-evasao.md](video-evasao.md).
 - **Nome por tag**: apelido opcional no Catalogo, "Nomear"/"Cadastrar" em Tags lidas; aparece em leituras, evasao e CSV.
 

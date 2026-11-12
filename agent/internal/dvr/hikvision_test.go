@@ -87,7 +87,7 @@ esac`)
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(log)
-	if n := strings.Count(string(b), "\n"); n != 2 || !strings.Contains(string(b), "/Streaming/tracks/301?")  // canal 3 do DVR falso {
+	if n := strings.Count(string(b), "\n"); n != 2 || !strings.Contains(string(b), "/Streaming/tracks/301?") { // canal 3 do DVR falso
 		t.Fatalf("tentativas (%d): %s", n, b)
 	}
 	if fi, err := os.Stat(out); err != nil || fi.Size() != 8000 {

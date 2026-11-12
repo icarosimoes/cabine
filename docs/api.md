@@ -177,7 +177,7 @@ Status do clipe: `aguardando` (gravando) → `enviado` (agente buscando) → `ok
 
 | Método | Rota | Descrição |
 |---|---|---|
-| `GET/POST/PUT/DELETE` | `/api/cameras[/{id}]` | Cadastro `{nome, ip, porta (HTTP, 80), canal, gravacao: continua\|movimento, tipo: dvr\|rtsp, rtsp_path?}`. `tipo=dvr`: o aparelho toca a gravação (DVR/NVR Intelbras). `tipo=rtsp`: câmera só com ao vivo (Mibo iM e similares): o agente grava um buffer e recorta dele (`rtsp_path` opcional, só nesse tipo; padrão `/cam/realmonitor?channel={canal}&subtype=0`). GET: consultar; demais: cadastros. **Sem usuário/senha do DVR** (ficam no `config.json` do agente). |
+| `GET/POST/PUT/DELETE` | `/api/cameras[/{id}]` | Cadastro `{nome, ip, porta (HTTP, 80), canal, gravacao: continua\|movimento, tipo: dvr\|hikvision\|rtsp, rtsp_path?}`. `tipo=dvr`: o aparelho toca a gravação (DVR/NVR Intelbras/Dahua). `tipo=hikvision`: idem, Hikvision (playback RTSP `/Streaming/tracks/<canal>01`, hora via ISAPI). `tipo=rtsp`: câmera só com ao vivo (Mibo iM e similares): o agente grava um buffer e recorta dele (`rtsp_path` opcional, só nesse tipo; padrão `/cam/realmonitor?channel={canal}&subtype=0`). GET: consultar; demais: cadastros. **Sem usuário/senha do DVR** (ficam no `config.json` do agente). |
 | `POST` | `/api/cameras/{id}/teste` | Cria um clipe de teste (últimos ~70 s no DVR; últimos 30 s do buffer no `tipo=rtsp`) para validar IP/canal/credencial/ffmpeg sem esperar evasão. Retorna `{clipe_id}`. |
 | `GET` | `/api/clipes/{id}` | Status do clipe (`status, tamanho, erro, t0, inicio, fim`). |
 | `GET` | `/api/clipes/{id}/video` | O mp4 (404 enquanto não estiver `ok`). |
