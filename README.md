@@ -8,6 +8,7 @@ o Uptime Kuma.
 
 - Webhook: `POST https://cabine.solidsd.com.br/ingest` (basic auth `WEBHOOK_USER`/`WEBHOOK_PASS`)
 - Painel: `https://cabine.solidsd.com.br/` (login com usuarios e perfis: `painel` so dashboard, `leitura`, `operador`, `admin`; o par `UI_USER`/`UI_PASS` e admin de ambiente). Instalavel como PWA.
+- Video da evasao (clipe da camera/DVR Intelbras ou Mibo junto do alerta): [`docs/video-evasao.md`](docs/video-evasao.md)
 - Agente do hotel (Go, Windows): monitora os radios da LAN e conversa com o servidor; ver [`docs/infra/agente-hotel.md`](docs/infra/agente-hotel.md)
 - Alertas por WhatsApp (Evolution API): configurados no painel (Alertas WhatsApp)
 - Producao: VPS principal (Swarm, stack `impinj`) — passos em [`docs/infra/deploy.md`](docs/infra/deploy.md)

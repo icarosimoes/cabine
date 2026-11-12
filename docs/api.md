@@ -125,13 +125,14 @@ BASE_URL=http://localhost:8000 UI_USER=... UI_PASS=... WEBHOOK_USER=... WEBHOOK_
 
 | Método | Rota | Descrição |
 |---|---|---|
-| `POST` | `/api/itens` | Body `{epc, tipo, fabricante?, tamanho?, composicao?, cor?, data_compra?}` (data AAAA-MM-DD ou DD/MM/AAAA). EPC deve ser hex, par, 4-64 caracteres (400 se não). Upsert por EPC (substitui tudo). |
+| `POST` | `/api/itens` | Body `{epc, tipo, nome?, fabricante?, tamanho?, composicao?, cor?, data_compra?}` (data AAAA-MM-DD ou DD/MM/AAAA). EPC deve ser hex, par, 4-64 caracteres (400 se não). Upsert por EPC (substitui os campos; `nome` em branco **mantém** o nome atual). `nome` = apelido livre da tag (até 80 caracteres, espaços normalizados, não único). |
+| `PATCH` | `/api/itens/{epc}/nome` | Body `{nome}` (vazio/`null` apaga). Dá nome a uma tag já cadastrada; 404 se o EPC não está no catálogo, 400 se passar de 80 caracteres. Permissão `catalogo_editar`. |
 | `POST` | `/api/itens/editar-lote` | Body `{epcs[], tipo?, fabricante?, tamanho?, composicao?, cor?, data_compra?, estado_id?}`. Só altera os campos enviados. Devolve `{alterados, nao_encontrados}`. Operador. |
 | `POST` | `/api/itens/consulta` | Body `{epcs[]}` (até 2000). Devolve `{identificados, novos, invalidos}`. Leitor manual. |
 | `POST` | `/api/itens/cadastrar-lote` | Body `{epcs[], tipo, ...atributos}`. Cadastra os novos; já existentes não mudam. Devolve `{cadastrados, ja_existiam, invalidos}`. Operador. |
 | `GET` | `/api/inventario/revisao?dias=30` | EPCs cadastrados fora do padrão e tags lidas sem cadastro (`lidas_sem_cadastro`). |
 | `GET` | `/api/conferencias/{id}/export.csv` | CSV da conferência (epc, item, situação, conferido_em). |
-| `GET` | `/api/itens?q=&limit=` | Lista o catálogo (busca por EPC/tipo), já com `localizacao`/`estado` calculados. |
+| `GET` | `/api/itens?q=&limit=` | Lista o catálogo (busca por EPC, nome ou tipo), já com `localizacao`/`estado` calculados. |
 | `GET` | `/api/itens/opcoes` | Valores distintos pra preencher os filtros da tela (tipos, fabricantes, tamanhos, composições, cores, localizações, estados). |
 | `GET` | `/api/inventario?localizacao=&estado=&tipo=&fabricante=&tamanho=&composicao=&cor=` | `{total, resumo:[{tipo, quantidade}]}` — contagem agrupada por tipo, com todos os filtros combináveis. |
 | `GET` | `/api/estados` | Lista os estados de inventário cadastrados. |
@@ -160,13 +161,40 @@ possível evasão não documentada.
 
 | Método | Rota | Descrição |
 |---|---|---|
-| `POST` | `/api/saida` | Body `{epc, destino_id}`. Basic auth `SAIDA_USER`/`SAIDA_PASS`. Cruza com `transferencias` e grava em `eventos_saida`. |
-| `GET` | `/api/saida?documentado=&destino_id=&desde=&ate=&limit=` | Lista eventos de saída (basic auth `UI_USER`/`UI_PASS`). |
+| `POST` | `/api/saida` | Body `{epc, destino_id, antena_id?}`. Basic auth `SAIDA_USER`/`SAIDA_PASS`. Cruza com `transferencias` e grava em `eventos_saida`; se a antena (ou a única antena de evasão com câmera) tem câmera, abre/reaproveita um clipe e devolve `clipe_id`. |
+| `GET` | `/api/saida?documentado=&destino_id=&desde=&ate=&limit=` | Lista eventos de saída (basic auth `UI_USER`/`UI_PASS`), com `clipe_id`, `clipe_status`, `clipe_erro`. |
+
+### Vídeo da evasão (câmera/DVR Intelbras)
+
+Cada antena de evasão pode ter uma **câmera** (um canal de um DVR). A cada detecção o servidor cria um **clipe** com a janela
+`[t0 − 10 s, t0 + 60 s]` (`CLIPE_ANTES_SEGUNDOS`, `CLIPE_DEPOIS_SEGUNDOS`). Leituras da mesma câmera em até `CLIPE_AGRUPAR_SEGUNDOS` (30 s)
+dividem o mesmo clipe (uma pessoa com 20 peças gera 1 vídeo). Quando a janela termina de gravar (+`CLIPE_MARGEM_SEGUNDOS`), o próximo
+`POST /api/agente/status` devolve o pedido em `clipes[]`; o agente busca o trecho no DVR (LAN), converte para mp4 e envia.
+
+Status do clipe: `aguardando` (gravando) → `enviado` (agente buscando) → `ok` | `erro`. Preso em `enviado` por mais de
+`CLIPE_TIMEOUT_SEGUNDOS` (900) ou `aguardando` por mais de 6 h sem agente vira `erro`. Arquivos em `CLIPES_DIR` (`/srv/clipes`, volume
+`impinj_clipes`), apagados após `CLIPES_RETENCAO_DIAS` (30); o evento de evasão permanece. Limite por arquivo: `CLIPE_MAX_MB` (100).
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET/POST/PUT/DELETE` | `/api/cameras[/{id}]` | Cadastro `{nome, ip, porta (HTTP, 80), canal, gravacao: continua\|movimento, tipo: dvr\|hikvision\|rtsp, rtsp_path?}`. `tipo=dvr`: o aparelho toca a gravação (DVR/NVR Intelbras/Dahua). `tipo=hikvision`: idem, Hikvision (playback RTSP `/Streaming/tracks/<canal>01`, hora via ISAPI). `tipo=rtsp`: câmera só com ao vivo (Mibo iM e similares): o agente grava um buffer e recorta dele (`rtsp_path` opcional, só nesse tipo; padrão `/cam/realmonitor?channel={canal}&subtype=0`). GET: consultar; demais: cadastros. **Sem usuário/senha do DVR** (ficam no `config.json` do agente). |
+| `POST` | `/api/cameras/{id}/teste` | Cria um clipe de teste (últimos ~70 s no DVR; últimos 30 s do buffer no `tipo=rtsp`) para validar IP/canal/credencial/ffmpeg sem esperar evasão. Retorna `{clipe_id}`. |
+| `GET` | `/api/clipes/{id}` | Status do clipe (`status, tamanho, erro, t0, inicio, fim`). |
+| `GET` | `/api/clipes/{id}/video` | O mp4 (404 enquanto não estiver `ok`). |
+| `PUT` | `/api/agente/clipes/{id}/arquivo` | Agente envia o mp4 (corpo bruto, `X-Agent-Token`); valida `ftyp` e o limite. |
+| `POST` | `/api/agente/clipes/{id}/erro` | Agente informa a falha `{mensagem}`. |
+
+`GET /api/agente/config` devolve também `cameras[]` (`id, nome, ip, canal, rtsp_path`) só das de `tipo=rtsp`: o agente mantém um gravador para cada uma. Os pedidos em `clipes[]` trazem `camera_id`, `tipo` e `rtsp_path`.
+
+Antena: `antenas.camera_id` (campo `camera_id` em `POST/PUT /api/antenas`).
 
 ## Limitações e riscos conhecidos
 
 - O leitor só envia evento quando lê tag, não há heartbeat. O Kuma avisa "sem eventos há mais de
   `STALE_MINUTES`", o que pode ser só ausência de movimento.
+- **Vídeo da evasão não foi validado com DVR real.** O fluxo (servidor, fila, agente, upload, player) é testado com DVR e ffmpeg simulados;
+  o playback RTSP `/cam/playback?channel=..&starttime=..` e o CGI de hora (`global.cgi?action=getCurrentTime`) seguem o padrão Dahua/Intelbras,
+  mas dependem do modelo/firmware. Use *Antenas > Câmeras > Testar* antes de confiar. Com gravação só por movimento, o trecho pode faltar.
 - **`bridge-saida/` não lê o leitor físico de saída ainda.** O protocolo do leitor (Acura EdgeR30 na
   porta 8080, visto nos prints de referência) é desconhecido; o programa só loga bytes crus pra servir
   de captura. `/api/saida` e a tela de alertas funcionam e foram testados, mas ninguém chama eles de

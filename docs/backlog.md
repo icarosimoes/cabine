@@ -66,6 +66,21 @@
 - Codigo pronto (`agent/`, ver `docs/infra/agente-hotel.md`). Falta: teste no Windows real (servico + tray), validar API do
   R700, auto-atualizacao assinada, repositorio proprio, MSI, assinatura de codigo.
 
+## Nome de tags e video da evasao (2026-11-12)
+
+- [x] **Nome (apelido) por tag**, cadastro manual e edicao no Catalogo, "Nomear"/"Cadastrar" direto em Tags lidas; nome aparece em leituras, Leitor manual, evasao e CSV.
+- [x] **Video da evasao** (esqueleto): camera por antena de evasao, clipe 10 s antes/60 s depois, agente 0.1.7, player na tela de evasao. Ver `docs/infra/agente-hotel.md`.
+- [ ] Video: validar com o DVR Intelbras real (usar *Antenas > Cameras > Testar*): modelo/firmware, RTSP de playback, codec (H.265 -> `videoCodec: h264`), gravacao so por movimento, hora do DVR.
+- [ ] Video: instalar `ffmpeg.exe` ao lado do agente 0.1.7, criar usuario somente-leitura no DVR e preencher `dvrUser`/`dvrPass` no `config.json`; compilar/instalar o agente 0.1.7 e fazer deploy (volume `impinj_clipes`).
+- [x] Camera Wi-Fi Intelbras Mibo (iM/iMX): modo buffer por RTSP ao vivo (agente 0.1.8).
+- [ ] Mibo: validar com a camera real (RTSP ativo, usuario/senha, caminho, H.264 x H.265, estabilidade do Wi-Fi); confirmar se o modelo "iX" tem RTSP/ONVIF; fixar IP. Avaliar ONVIF Perfil G/leitura do cartao SD para nao depender do buffer, e substream (`subtype=1`) para reduzir banda.
+- [x] Hikvision (DVR/NVR/camera com SD): `tipo=hikvision` (playback RTSP em UTC + hora por ISAPI); plano B `tipo=rtsp`.
+- [ ] Hikvision: validar em equipamento real (formato do horario, firmware que ignora o horario, RTSP bloqueado por permissao/criptografia); avaliar ISAPI de busca/download (`/ISAPI/ContentMgmt`) para baixar mais rapido que em tempo real.
+- [ ] **Hikvision via ISAPI (busca + download)** como caminho principal do `tipo=hikvision` (RTSP como alternativa, buffer como ultimo recurso): confirma a gravacao no intervalo, nao corre em tempo real e evita o firmware que ignora o horario. Pesquisa e incertezas em `video-evasao.md` > "APIs da Hikvision". **Precisa do modelo do aparelho** (DVR/NVR/camera com SD) para testar o XML; cuidado com download incompleto logo apos a gravacao parar.
+- [ ] Video: varios hoteis/agentes (hoje qualquer agente em contato pega o pedido; ligar camera a agente), alerta de WhatsApp com link do clipe, baixar varios clipes de uma vez.
+- [ ] **Gatilho real da evasao**: `bridge-saida/` ainda nao le o Acura (porta 8080); sem isso nenhum evento chama `/api/saida`. Capturar o protocolo primeiro.
+- [ ] Nome de tags em massa: importar CSV `EPC;nome`, aceitar `EPC;nome` por linha no Leitor manual, gerar nomes sequenciais ("Lencol 001..") no cadastro em lote, e mostrar o nome na Conferencia e no Inventario.
+
 ## Ideias
 
 - Sessao de leitura continua: pronta, opt-in (`SESSAO_AUTO=1`), desligada em producao.
@@ -73,3 +88,4 @@
 - Cadastrar o projeto em `erpsolid/docs/projetos/` (indice central de repos).
 
 - Evasao: antenas .32 e .104 so monitoramento de rede (online = pagina de status responde; agente 0.1.5 nao sonda a 8080). O Acura aceita 2 clientes na 8080 (hoje ocupadas por 192.168.30.18). Pendente: mapear protocolo da 8080, senha de administracao dos Acura.
+- Video da evasao: pendencias na secao "Nome de tags e video da evasao (2026-11-12)".

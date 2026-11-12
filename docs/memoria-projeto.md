@@ -20,6 +20,11 @@ Data de referencia: 2026-11-07.
   loga bytes crus, sem parser especulativo.
 - **Deploy manual** (rsync + build local na VPS + `docker stack deploy`), sem registry nem CI, diferente
   de erpsolid/hotspot (GHCR + GitHub Actions). Ver `infra/deploy.md` e o backlog.
+- **Video da evasao (2026-11-12)**: o servidor nao alcanca a LAN, entao so o agente fala com camera/DVR; **senha da camera so no `config.json` do agente**
+  (nunca no banco). Dois tipos: `dvr` (aparelho toca a gravacao por RTSP playback) e `rtsp` (camera Wi-Fi Mibo, sem playback local conhecido: o agente grava
+  um buffer do ao vivo e recorta). Clipe = 10 s antes/60 s depois, agrupado em 30 s por camera; mp4 em volume proprio com retencao de 30 dias. Uma camera por antena
+  de evasao. Detalhes e limites em `video-evasao.md`. O gatilho real ainda depende do parser do Acura (`bridge-saida/`).
+- **Nome da tag (2026-11-12)**: `itens.nome` e apelido opcional e nao unico; atualizar o cadastro sem nome **mantem** o atual (apagar e so pelo PATCH).
 - Sem dado ficticio no painel: onde nao ha dado a tela mostra vazio/"–".
 
 - **EPC canonico = hex maiusculo** (desde 2026-11-07). O R700 manda `epc` em base64 (bytes do EPC) e

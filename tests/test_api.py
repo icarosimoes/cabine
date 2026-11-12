@@ -769,3 +769,33 @@ def test_monitoramento_historico_e_perfil_monitor(client):
     t = client.__class__(client.app)
     t.post("/api/login", json={"usuario": "tv", "senha": "senha-forte-1"})
     assert t.get("/api/monitoramento").status_code == 403
+
+
+def test_nomear_tag_e_cadastro_manual(client):
+    r = client.post("/api/itens", json={"epc": "e20010", "tipo": "Lençol", "nome": "  Lençol 12   suíte 301 "})
+    assert r.status_code == 200 and r.json()["nome"] == "Lençol 12 suíte 301"  # espaços normalizados
+    # atualizar o cadastro sem informar o nome não apaga o nome
+    assert client.post("/api/itens", json={"epc": "E20010", "tipo": "Lençol king"}).json()["nome"] == "Lençol 12 suíte 301"
+    # renomear e apagar
+    assert client.patch("/api/itens/e20010/nome", json={"nome": "Lençol 13"}).json() == {"epc": "E20010", "nome": "Lençol 13"}
+    assert client.get("/api/itens?q=lençol 13").json()[0]["epc"] == "E20010"  # busca por nome
+    assert client.patch("/api/itens/E20010/nome", json={"nome": "  "}).json()["nome"] is None
+    assert client.get("/api/itens").json()[0]["nome"] is None
+    assert client.patch("/api/itens/E20010/nome", json={"nome": "x" * 81}).status_code == 400
+    assert client.patch("/api/itens/FFFF/nome", json={"nome": "a"}).status_code == 404  # só tag cadastrada
+
+
+def test_nome_aparece_nas_leituras_na_evasao_e_no_csv(client):
+    client.post("/api/itens", json={"epc": "AA11", "tipo": "Toalha", "nome": "Toalha piscina 7"})
+    ingest(client, "AA11", "BB22")
+    por_epc = {t["epc"]: t for t in client.get("/api/tags").json()}
+    assert por_epc["AA11"]["nome"] == "Toalha piscina 7" and por_epc["BB22"]["nome"] is None
+    assert {e["epc"]: e["nome"] for e in client.get("/api/events").json()}["AA11"] == "Toalha piscina 7"
+    d = client.get("/api/destinos").json()[0]
+    client.post("/api/saida", auth=("s", "s"), json={"epc": "AA11", "destino_id": d["id"]})
+    ev = client.get("/api/saida").json()[0]
+    assert (ev["item_nome"], ev["item_tipo"]) == ("Toalha piscina 7", "Toalha")
+    consulta = client.post("/api/itens/consulta", json={"epcs": ["AA11"]}).json()
+    assert consulta["identificados"][0]["nome"] == "Toalha piscina 7"
+    linhas = client.get("/api/export/inventario.csv").text.splitlines()
+    assert linhas[0].endswith(";nome") and linhas[1].endswith(";Toalha piscina 7")

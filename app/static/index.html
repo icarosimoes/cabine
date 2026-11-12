@@ -378,7 +378,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <button id="evAplicar">filtrar</button>
     <button id="evLimpar">limpar</button>
   </div>
-  <div class="scroll"><table class="rt"><thead><tr><th>Data</th><th>EPC</th><th>Destino</th><th>Status</th></tr></thead><tbody id="evasoes"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Data</th><th>EPC</th><th>Destino</th><th>Status</th><th>Vídeo</th></tr></thead><tbody id="evasoes"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="inventario" hidden>
@@ -404,17 +404,18 @@ table.rt-sel td:nth-child(2)::before{content:none}
   <h2><span>Catálogo de itens</span></h2>
   <div class="row">
     <input id="itEpc" type="text" placeholder="EPC" style="width:160px;font-family:ui-monospace,monospace">
+    <input id="itNome" type="text" maxlength="80" placeholder="nome da tag (opcional)" title="Apelido livre, ex.: Lençol 12 - suíte 301. Aparece nas leituras, na evasão e no inventário." style="width:190px">
     <input id="itTipo" type="text" placeholder="tipo (ex. Capa edredom king)" style="width:200px">
     <input id="itFabricante" type="text" placeholder="fabricante">
     <input id="itTamanho" type="text" placeholder="tamanho">
     <input id="itComposicao" type="text" placeholder="composição">
     <input id="itCor" type="text" placeholder="cor">
     <input id="itCompra" type="date" title="data de compra">
-    <button class="acc" id="cadastrarItem">Cadastrar / atualizar</button>
+    <button class="acc" id="cadastrarItem">Cadastrar / atualizar</button> <button id="itLimpar" type="button">limpar</button>
   </div>
   <div id="itemMsg" class="msg"></div>
   <div class="row" style="padding-top:0">
-    <input id="itBusca" type="text" placeholder="buscar por EPC ou tipo" style="flex:1;min-width:180px">
+    <input id="itBusca" type="text" placeholder="buscar por EPC, nome ou tipo" style="flex:1;min-width:180px">
     <button id="itBuscar">buscar</button>
   </div>
   <div class="row" id="catLoteBar" hidden style="padding-top:0;gap:8px;flex-wrap:wrap">
@@ -428,7 +429,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <button class="acc" id="catLoteAplicar">Aplicar</button> <button id="catLoteLimpar">limpar seleção</button>
   </div>
   <div id="catLoteMsg" class="msg"></div>
-  <div class="scroll"><table class="rt rt-sel"><thead><tr><th><input type="checkbox" id="catTodos" title="selecionar todos os exibidos"></th><th>EPC</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th>Compra</th><th>Localização</th><th>Estado</th><th></th></tr></thead><tbody id="catalogo"></tbody></table></div>
+  <div class="scroll"><table class="rt rt-sel"><thead><tr><th><input type="checkbox" id="catTodos" title="selecionar todos os exibidos"></th><th>EPC</th><th>Nome</th><th>Tipo</th><th>Fabricante</th><th>Tamanho</th><th>Composição</th><th>Cor</th><th>Compra</th><th>Localização</th><th>Estado</th><th></th></tr></thead><tbody id="catalogo"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="manual" hidden>
@@ -453,7 +454,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
 </section>
 <section id="mnIdBox" hidden>
   <h2><span>Já cadastrados</span></h2>
-  <div class="scroll"><table class="rt"><thead><tr><th>EPC</th><th>Tipo</th><th>Cor</th><th>Localização</th><th>Estado</th></tr></thead><tbody id="mnIdTb"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>EPC</th><th>Nome</th><th>Tipo</th><th>Cor</th><th>Localização</th><th>Estado</th></tr></thead><tbody id="mnIdTb"></tbody></table></div>
 </section>
 <section id="mnInvBox" hidden>
   <h2><span>EPCs inválidos (ignorados)</span></h2>
@@ -539,7 +540,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
 <section>
   <h2><span>Tags <span id="filtro" style="color:var(--muted)"></span></span>
     <span><select id="hours"><option value="1">1h</option><option value="24" selected>24h</option><option value="168">7 dias</option></select></span></h2>
-  <div class="scroll"><table class="rt"><thead><tr><th>EPC</th><th>Item</th><th>Leituras</th><th>Última</th><th>Antenas</th><th>Melhor RSSI</th></tr></thead><tbody id="tags"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>EPC</th><th>Item</th><th>Leituras</th><th>Última</th><th>Antenas</th><th>Melhor RSSI</th><th></th></tr></thead><tbody id="tags"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="eventos" hidden>
@@ -649,12 +650,30 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <label class="mut">Modo de operação <select id="anModo"><option value="automatico">Automático</option><option value="manual">Manual</option></select></label>
     <label class="mut"><input id="anAlerta" type="checkbox" checked> Ativar alerta</label>
     <label class="mut" title="Antena de saída: alertas prioritários; porta de comunicação fechada conta como offline"><input id="anEvasao" type="checkbox"> Antena de evasão (saída)</label>
+    <label class="mut" title="Canal do DVR que filma esta saída: a cada detecção, o agente busca 10 s antes e 60 s depois">Câmera (DVR) <select id="anCamera"></select></label>
     <label class="mut">Endereço IP <input id="anIp" type="text" placeholder="192.168.30.32" style="width:150px"></label>
     <label class="mut">Porta de comunicação <input id="anPorta" type="number" min="1" max="65535" placeholder="8080" style="width:100px"></label>
     <button class="acc" id="anSalvar">Salvar</button><button id="anCancelar" type="button" hidden>Cancelar edição</button>
   </div>
   <div id="antenaMsg" class="msg"></div>
   <div class="scroll"><table class="rt"><thead><tr><th>Nome</th><th>Descrição</th><th>Modelo</th><th>Localização</th><th>Modo</th><th>Alerta</th><th>IP:porta</th><th>Status (agente)</th><th></th></tr></thead><tbody id="antenas"></tbody></table></div>
+</section>
+<section id="secCameras">
+  <h2><span id="cmTitulo">Câmeras (Intelbras)</span></h2>
+  <div class="mut" style="padding:0 16px 8px">Vincule a câmera a uma antena de evasão acima: quando uma peça for detectada, o vídeo de 10 s antes e 60 s depois é anexado ao alerta. Usuário e senha ficam <b>apenas</b> no <code>config.json</code> do agente (<code>dvrUser</code>/<code>dvrPass</code>, ou <code>cameras</code> por nome), nunca aqui.<br>
+    <b>DVR/NVR Intelbras ou Hikvision:</b> o aparelho toca a gravação, o agente pede o trecho depois (Hikvision usa o horário em UTC e a porta HTTP para ler a hora do aparelho). <b>Câmera só com ao vivo (Mibo iM e similares; também serve para Hikvision):</b> sem playback pela rede; o agente grava o vídeo ao vivo num buffer de ~6 min e recorta dele — o PC do agente precisa ficar ligado e na mesma rede, e a câmera precisa estar com RTSP ativo.</div>
+  <div class="row">
+    <label class="mut">Nome <input id="cmNome" type="text" placeholder="ex. Mibo saída serviço" style="width:200px"></label>
+    <label class="mut">Tipo <select id="cmTipo"><option value="dvr">DVR/NVR Intelbras (playback)</option><option value="hikvision">Hikvision: DVR/NVR/câmera com SD (playback)</option><option value="rtsp">Câmera só ao vivo: Mibo, Hikvision... (buffer)</option></select></label>
+    <label class="mut">IP <input id="cmIp" type="text" placeholder="192.168.30.60" style="width:140px"></label>
+    <label class="mut" id="cmPortaBox">Porta HTTP <input id="cmPorta" type="number" min="1" max="65535" value="80" style="width:80px"></label>
+    <label class="mut" id="cmCanalLbl" title="Câmera Wi-Fi: normalmente 1">Canal <input id="cmCanal" type="number" min="1" max="256" value="1" style="width:70px"></label>
+    <label class="mut" id="cmGravBox" title="Com gravação só por movimento, o trecho de antes/depois pode não existir no DVR">Gravação <select id="cmGravacao"><option value="continua">contínua (24 h)</option><option value="movimento">só por movimento</option></select></label>
+    <label class="mut" id="cmPathBox" title="Deixe em branco para o padrão das Mibo iM. {canal} vira o número do canal." hidden>Caminho RTSP (avançado) <input id="cmPath" type="text" placeholder="Mibo: /cam/realmonitor?channel={canal}&amp;subtype=0 · Hikvision: /Streaming/Channels/{canal}01" style="width:420px"></label>
+    <button class="acc" id="cmSalvar">Salvar</button><button id="cmCancelar" type="button" hidden>Cancelar edição</button>
+  </div>
+  <div id="cameraMsg" class="msg"></div>
+  <div class="scroll"><table><thead><tr><th>Nome</th><th>Tipo</th><th>IP</th><th>Canal</th><th>Gravação</th><th>Antenas</th><th></th></tr></thead><tbody id="cameras"></tbody></table></div>
 </section>
 <section id="secAgentes" hidden>
   <h2><span>Agente do hotel (Windows)</span></h2>
@@ -695,7 +714,7 @@ async function j(u,opts){
   if(!r.ok){let m;try{m=(await r.json()).detail}catch(e){m=r.statusText}throw new Error(m||('erro '+r.status))}
   return r.status===204?null:r.json();
 }
-const itemTipo=t=>t?esc(t):'<span class="mut">não cadastrada</span>';
+const itemTipo=(t,nome)=>t?(nome?`<b>${esc(nome)}</b> <span class="mut">${esc(t)}</span>`:esc(t)):'<span class="mut">não cadastrada</span>';
 const pill=d=>`<span class="pill ${d}">${d}</span>`;
 
 const TITULOS={alertaswa:'Alertas WhatsApp',relatorios:'Leituras por hora',usuarios:'Usuários',conferencia:'Conferência de estoque',antenas:'Antenas',acomodacoes:'Acomodações',painel:'Dashboard',monitoramento:'Monitoramento',leitura:'Leitura da cabine',transferencias:'Transferências',evasao:'Alertas de evasão',
@@ -722,9 +741,10 @@ const LOADERS={
   destinos:()=>carregarDestinos(),
   estados:()=>carregarEstados(),
   tags:async()=>{const t=await j('/api/tags?hours='+$('hours').value);
-    $('tags').innerHTML=t.map(t=>`<tr><td class="epc" data-e="${esc(t.epc)}">${esc(t.epc)}</td><td>${itemTipo(t.tipo)}</td><td>${t.reads}</td><td>${dt(t.last)}</td><td>${esc(t.antennas)}</td><td>${t.best_rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=6>sem leituras</td></tr>'},
+    $('tags').innerHTML=t.map(t=>`<tr><td class="epc" data-e="${esc(t.epc)}">${esc(t.epc)}</td><td>${itemTipo(t.tipo,t.nome)}</td><td>${t.reads}</td><td>${dt(t.last)}</td><td>${esc(t.antennas)}</td><td>${t.best_rssi??'–'}</td>
+      <td>${!tem('catalogo_editar')?'':t.tipo?`<button data-nomear="${esc(t.epc)}" data-nome="${esc(t.nome||'')}">${t.nome?'Renomear':'Nomear'}</button>`:`<button class="acc" data-cadtag="${esc(t.epc)}">Cadastrar</button>`}</td></tr>`).join('')||'<tr><td colspan=7>sem leituras</td></tr>'},
   eventos:async()=>{const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
-    $('evs').innerHTML=evs.map(e=>`<tr><td>${dt(e.received_at)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${itemTipo(e.tipo)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>'},
+    $('evs').innerHTML=evs.map(e=>`<tr><td>${dt(e.received_at)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${itemTipo(e.tipo,e.nome)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>'},
 };
 const ROTULO_ALERTA={antena_offline:'Antena offline',agente_offline:'Agente sem contato',webhook_falha:'Webhook do rádio',sem_sinal:'Rádio sem sinal',falhas:'Falhas no /ingest',divergencia:'Divergência',teste:'Teste'};
 const ha=t=>{if(!t)return '–';const a=Date.now()/1000-t;return a<5?'agora':a<90?Math.round(a)+'s atrás':a<5400?Math.round(a/60)+' min atrás':a<172800?Math.round(a/3600)+' h atrás':Math.round(a/86400)+' d atrás'};
@@ -1094,6 +1114,18 @@ function montaFiltroEvasao(){
   if($('evAte').value)p.set('ate',Math.floor(new Date($('evAte').value+'T23:59:59').getTime()/1000));
   return p.toString();
 }
+function videoCelula(s){
+  if(!s.clipe_id)return '<span class="mut">–</span>';
+  if(s.clipe_status==='ok')return `<button data-clipe="${s.clipe_id}" data-when="${esc(dt(s.detectado_em))}">▶ assistir</button>`;
+  if(s.clipe_status==='erro')return `<span class="pill alerta" title="${esc(s.clipe_erro||'')}">falhou</span> <span class="mut">${esc((s.clipe_erro||'').slice(0,60))}</span>`;
+  return `<span class="mut">${s.clipe_status==='enviado'?'buscando no DVR…':'gravando (aguarda 60 s depois da leitura)…'}</span>`;
+}
+function tocarClipe(id,titulo){
+  dialogo(`<h3>${esc(titulo)}</h3><video src="/api/clipes/${Number(id)}/video" controls autoplay playsinline style="width:min(80vw,720px);max-width:100%;margin-top:8px;background:#000"></video>
+    <p class="mut" style="padding-top:6px">10 s antes e 60 s depois da leitura. <a style="color:var(--teal)" href="/api/clipes/${Number(id)}/video" download="clipe-${Number(id)}.mp4">baixar</a></p>`,[['Fechar','',()=>{$('dlgBody').innerHTML=''}]]);
+}
+$('dlg').addEventListener('close',()=>{$('dlgBody').innerHTML=''}); // ESC também para o vídeo
+$('evasoes').addEventListener('click',e=>{const b=e.target.closest('[data-clipe]');if(b)tocarClipe(b.dataset.clipe,'Evasão — '+b.dataset.when)});
 async function carregarEvasoes(){
   $('evDestino').innerHTML='<option value="">todos os destinos</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
   const qs=montaFiltroEvasao();
@@ -1101,9 +1133,10 @@ async function carregarEvasoes(){
   const alertas=rows.filter(r=>!r.documentado).length;
   $('evasaoCount').textContent=alertas?('· '+alertas+' não documentado(s)'):'';
   $('evasoes').innerHTML=rows.map(s=>`<tr>
-    <td>${dt(s.detectado_em)}</td><td class="epc">${esc(s.epc)}</td><td>${esc(s.destino_nome)}</td>
+    <td>${dt(s.detectado_em)}</td><td class="epc">${esc(s.epc)}${s.item_tipo?`<br><span style="font-family:inherit">${s.item_nome?'<b>'+esc(s.item_nome)+'</b> ':''}<span class="mut">${esc(s.item_tipo)}</span></span>`:''}</td><td>${esc(s.destino_nome)}</td>
     <td>${s.documentado?pill('ok')+' documentado':pill('alerta')+' NÃO DOCUMENTADO'}</td>
-  </tr>`).join('')||'<tr><td colspan=4>nenhum evento de saída registrado</td></tr>';
+    <td>${videoCelula(s)}</td>
+  </tr>`).join('')||'<tr><td colspan=5>nenhum evento de saída registrado</td></tr>';
 }
 $('evAplicar').onclick=carregarEvasoes;
 $('evLimpar').onclick=()=>{$('evDestino').value='';$('evDocumentado').value='';$('evDesde').value='';$('evAte').value='';carregarEvasoes()};
@@ -1343,13 +1376,65 @@ async function carregarSessoes(){
   $('sessoes').innerHTML=r.sessoes.map(x=>`<tr><td>${dt(x.inicio)}</td><td>${x.fim?dt(x.fim):'–'}</td><td>${x.tags}</td><td>${x.lote_id?'#'+x.lote_id:'–'}</td>
     <td>${x.status==='aberta'?'<span class="pill alerta">aberta</span>':'<span class="pill ok">encerrada</span>'}</td></tr>`).join('')||'<tr><td colspan=5>nenhuma sessão registrada</td></tr>';
 }
+let camerasCache=[],cameraEdit=null;
+async function carregarCameras(){
+  camerasCache=await j('/api/cameras');
+  const sel=$('anCamera'),cur=sel.value;
+  sel.innerHTML='<option value="">sem câmera</option>'+camerasCache.map(c=>`<option value="${c.id}">${esc(c.nome)}</option>`).join('');
+  if(cur)sel.value=cur;
+  $('cameras').innerHTML=camerasCache.map(c=>`<tr><td>${esc(c.nome)}</td><td>${c.tipo==='rtsp'?'Ao vivo (buffer)':c.tipo==='hikvision'?'Hikvision':'DVR/NVR Intelbras'}</td><td>${esc(c.ip)}${c.tipo==='rtsp'?'':':'+c.porta}</td><td>${c.canal}</td>
+    <td>${c.tipo==='rtsp'?'<span class="mut" title="o agente grava o ao vivo">ao vivo</span>':c.gravacao==='continua'?'contínua':'<span class="pill alerta" title="o trecho pode não existir">só movimento</span>'}</td><td>${esc(c.antenas||'–')}</td>
+    <td><button data-cedit="${c.id}">Editar</button> <button data-cteste="${c.id}">Testar</button> <button data-cdel="${c.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=7>nenhuma câmera cadastrada</td></tr>';
+}
+function tipoCamera(){ // campos do formulário conforme o tipo (DVR: porta HTTP e gravação; Wi-Fi: caminho RTSP)
+  const w=$('cmTipo').value==='rtsp';$('cmPortaBox').hidden=w;$('cmGravBox').hidden=w;$('cmPathBox').hidden=!w;
+}
+$('cmTipo').onchange=tipoCamera;
+function limparCamera(){
+  cameraEdit=null;$('cmNome').value='';$('cmIp').value='';$('cmPorta').value=80;$('cmCanal').value=1;$('cmGravacao').value='continua';$('cmTipo').value='dvr';$('cmPath').value='';tipoCamera();
+  $('cmTitulo').textContent='Câmeras (Intelbras)';$('cmSalvar').textContent='Salvar';$('cmCancelar').hidden=true;
+}
+$('cmCancelar').onclick=limparCamera;
+$('cmSalvar').onclick=async()=>{
+  const msg=$('cameraMsg'),nome=$('cmNome').value.trim(),ip=$('cmIp').value.trim();
+  if(!nome||!ip){msg.className='msg bad';msg.textContent='informe nome e IP do DVR';return}
+  const wifi=$('cmTipo').value==='rtsp';
+  const corpo={nome,ip,porta:Number($('cmPorta').value)||80,canal:Number($('cmCanal').value)||1,gravacao:wifi?'continua':$('cmGravacao').value,tipo:$('cmTipo').value,rtsp_path:wifi?($('cmPath').value.trim()||null):null};
+  try{await j(cameraEdit?'/api/cameras/'+cameraEdit:'/api/cameras',{method:cameraEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)});
+    msg.className='msg ok';msg.textContent=cameraEdit?'câmera atualizada':'câmera cadastrada';limparCamera();await carregarAntenas()}
+  catch(e){msg.className='msg bad';msg.textContent=e.message}
+};
+async function testarCamera(id){
+  const msg=$('cameraMsg');msg.className='msg';const wifi=(camerasCache.find(c=>c.id===id)||{}).tipo==='rtsp';
+  msg.textContent=wifi?'pedindo ao agente os últimos 30 s do buffer da câmera… (precisa de pelo menos ~40 s de gravador ativo; se falhar, espere 1 min e teste de novo)':'pedindo ao agente um trecho dos últimos ~70 s do DVR… (leva de 1 a 3 min: o DVR entrega em tempo real)';
+  try{
+    const {clipe_id}=await j('/api/cameras/'+id+'/teste',{method:'POST'});
+    for(let i=0;i<90;i++){
+      await new Promise(r=>setTimeout(r,2500));
+      const c=await j('/api/clipes/'+clipe_id);
+      if(c.status==='ok'){msg.className='msg ok';msg.textContent='✔ câmera OK — '+Math.round(c.tamanho/1024)+' KB';tocarClipe(clipe_id,'Teste — '+c.camera);return}
+      if(c.status==='erro'){msg.className='msg bad';msg.textContent='✖ '+(c.erro||'falhou');return}
+    }
+    msg.className='msg bad';msg.textContent='✖ sem resposta do agente (instalado, online e com ffmpeg?)';
+  }catch(e){msg.className='msg bad';msg.textContent=e.message}
+}
+$('cameras').addEventListener('click',async e=>{
+  const ed=e.target.closest('[data-cedit]'),te=e.target.closest('[data-cteste]'),de=e.target.closest('[data-cdel]');
+  if(ed){const c=camerasCache.find(x=>x.id===Number(ed.dataset.cedit));if(!c)return;cameraEdit=c.id;
+    $('cmNome').value=c.nome;$('cmIp').value=c.ip;$('cmPorta').value=c.porta;$('cmCanal').value=c.canal;$('cmGravacao').value=c.gravacao;$('cmTipo').value=c.tipo||'dvr';$('cmPath').value=c.rtsp_path||'';tipoCamera();
+    $('cmTitulo').textContent='Editar câmera: '+c.nome;$('cmSalvar').textContent='Atualizar';$('cmCancelar').hidden=false;$('cmNome').scrollIntoView({block:'center'})}
+  else if(te)testarCamera(Number(te.dataset.cteste));
+  else if(de){const c=camerasCache.find(x=>x.id===Number(de.dataset.cdel));
+    if(c&&confirm(`Excluir a câmera "${c.nome}" e os clipes dela?`)){try{await j('/api/cameras/'+c.id,{method:'DELETE'});await carregarAntenas()}catch(err){$('cameraMsg').className='msg bad';$('cameraMsg').textContent=err.message}}}
+});
 let antenasCache=[],antenaEdit=null;
 async function carregarAntenas(){
   await carregarDestinos();
   if(antenaEdit===null)$('anDestino').innerHTML='<option value="">–</option>'+destinosCache.map(d=>`<option value="${d.id}">${esc(d.nome)}</option>`).join('');
   antenasCache=await j('/api/antenas');
+  await carregarCameras();
   carregarAgentes().catch(()=>{});
-  $('antenas').innerHTML=antenasCache.map(a=>`<tr><td>${esc(a.nome)}${a.evasao?' <span class="pill alerta" title="antena de evasão (saída)">🚨 evasão</span>':''}</td><td>${esc(a.descricao||'–')}</td><td>${esc(a.modelo||'–')}</td><td>${esc(a.destino_nome||'–')}</td>
+  $('antenas').innerHTML=antenasCache.map(a=>`<tr><td>${esc(a.nome)}${a.evasao?' <span class="pill alerta" title="antena de evasão (saída)">🚨 evasão</span>':''}${a.camera_id?' <span class="mut" title="câmera vinculada">🎥 '+esc((camerasCache.find(c=>c.id===a.camera_id)||{}).nome||'')+'</span>':''}</td><td>${esc(a.descricao||'–')}</td><td>${esc(a.modelo||'–')}</td><td>${esc(a.destino_nome||'–')}</td>
     <td>${a.modo==='manual'?'Manual':'Automático'}</td><td>${a.alerta?'<span class="pill ok">sim</span>':'não'}</td><td>${a.ip?esc(a.ip)+(a.porta?':'+a.porta:''):'–'}</td>
     <td>${statusAntena(a)}</td>
     <td><button data-edit="${a.id}">Editar</button> <button data-cfg="${a.id}">Configurar rádio</button></td></tr>`).join('')||'<tr><td colspan=9>nenhuma antena cadastrada</td></tr>';
@@ -1414,14 +1499,14 @@ function configurarRadio(a){
 }
 function limparAntena(){
   antenaEdit=null;['anNome','anDesc','anIp','anPorta'].forEach(i=>$(i).value='');$('anModelo').value='';$('anDestino').value='';
-  $('anModo').value='automatico';$('anAlerta').checked=true;$('anEvasao').checked=false;$('anTitulo').textContent='Antenas cadastradas';$('anSalvar').textContent='Salvar';$('anCancelar').hidden=true;
+  $('anModo').value='automatico';$('anAlerta').checked=true;$('anEvasao').checked=false;$('anCamera').value='';$('anTitulo').textContent='Antenas cadastradas';$('anSalvar').textContent='Salvar';$('anCancelar').hidden=true;
 }
 $('antenas').addEventListener('click',e=>{
   const cf=e.target.closest('[data-cfg]');if(cf){const a=antenasCache.find(x=>x.id===Number(cf.dataset.cfg));if(a)configurarRadio(a);return}
   const b=e.target.closest('[data-edit]');if(!b)return;
   const a=antenasCache.find(x=>x.id===Number(b.dataset.edit));if(!a)return;
   antenaEdit=a.id;$('anNome').value=a.nome;$('anDesc').value=a.descricao||'';$('anModelo').value=a.modelo||'';$('anDestino').value=a.destino_id||'';
-  $('anModo').value=a.modo;$('anAlerta').checked=a.alerta;$('anEvasao').checked=!!a.evasao;$('anIp').value=a.ip||'';$('anPorta').value=a.porta||'';
+  $('anModo').value=a.modo;$('anAlerta').checked=a.alerta;$('anEvasao').checked=!!a.evasao;$('anCamera').value=a.camera_id||'';$('anIp').value=a.ip||'';$('anPorta').value=a.porta||'';
   $('anTitulo').textContent='Editar antena: '+a.nome;$('anSalvar').textContent='Atualizar';$('anCancelar').hidden=false;
   $('anNome').scrollIntoView({block:'center'});
 });
@@ -1430,7 +1515,7 @@ $('anSalvar').onclick=async()=>{
   const msg=$('antenaMsg'),nome=$('anNome').value.trim();
   if(!nome){msg.className='msg bad';msg.textContent='informe o nome da antena';return}
   const corpo={nome,descricao:$('anDesc').value.trim()||null,modelo:$('anModelo').value||null,destino_id:$('anDestino').value?Number($('anDestino').value):null,
-    modo:$('anModo').value,alerta:$('anAlerta').checked,evasao:$('anEvasao').checked,ip:$('anIp').value.trim()||null,porta:$('anPorta').value?Number($('anPorta').value):null};
+    modo:$('anModo').value,alerta:$('anAlerta').checked,evasao:$('anEvasao').checked,camera_id:$('anCamera').value?Number($('anCamera').value):null,ip:$('anIp').value.trim()||null,porta:$('anPorta').value?Number($('anPorta').value):null};
   try{await j(antenaEdit?'/api/antenas/'+antenaEdit:'/api/antenas',{method:antenaEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)});
     msg.className='msg ok';msg.textContent=antenaEdit?'antena atualizada':'antena cadastrada';limparAntena();await carregarAntenas()}
   catch(e){msg.className='msg bad';msg.textContent=e.message}
@@ -1492,6 +1577,28 @@ $('catLoteAplicar').onclick=async()=>{
     await Promise.all([carregarCatalogo(),carregarOpcoesInventario(),carregarInventario()]);
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
+let catRows=[];
+function itemNoForm(i){ // carrega um item no formulário (edição) ou só o EPC (cadastro manual a partir de uma tag lida)
+  $('itEpc').value=i.epc;$('itNome').value=i.nome||'';$('itTipo').value=i.tipo||'';$('itFabricante').value=i.fabricante||'';$('itTamanho').value=i.tamanho||'';
+  $('itComposicao').value=i.composicao||'';$('itCor').value=i.cor||'';$('itCompra').value=i.data_compra||'';
+  const m=$('itemMsg');m.className='msg';m.textContent=i.tipo?'editando '+i.epc+' — altere e clique em Cadastrar / atualizar':'cadastrando '+i.epc+' — informe ao menos o tipo';
+  $('itEpc').scrollIntoView({block:'center'});(i.tipo?$('itNome'):$('itTipo')).focus();
+}
+function nomearTag(epc,atual){
+  dialogo(`<h3>Nome da tag</h3><p class="mut" style="padding:4px 0 8px"><span class="epc">${esc(epc)}</span></p>
+    <input id="nmTag" type="text" maxlength="80" value="${esc(atual)}" placeholder="ex.: Lençol 12 - suíte 301" style="width:100%"><p class="mut" style="padding-top:6px">Deixe em branco para remover o nome.</p>`,
+    [['Cancelar','',()=>{}],['Salvar','acc',async()=>{
+      try{await j('/api/itens/'+encodeURIComponent(epc)+'/nome',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome:$('nmTag').value.trim()||null})})}
+      catch(e){alert(e.message);return false}}]]);
+  setTimeout(()=>{const i=$('nmTag');i&&i.focus()},50);
+}
+$('tags').addEventListener('click',e=>{
+  const n=e.target.closest('[data-nomear]'),c=e.target.closest('[data-cadtag]');
+  if(n)nomearTag(n.dataset.nomear,n.dataset.nome);
+  else if(c){location.hash='#catalogo';itemNoForm({epc:c.dataset.cadtag})}
+});
+$('catalogo').addEventListener('click',e=>{const b=e.target.closest('[data-itedit]');if(!b)return;const i=catRows.find(x=>x.epc===b.dataset.itedit);if(i)itemNoForm(i)});
+$('itLimpar').onclick=()=>{['itEpc','itNome','itTipo','itFabricante','itTamanho','itComposicao','itCor','itCompra'].forEach(id=>$(id).value='');$('itemMsg').textContent=''};
 async function carregarCatalogo(){
   const q=$('itBusca').value.trim();
   const escolhasPendentes={};
@@ -1502,13 +1609,14 @@ async function carregarCatalogo(){
   catVisiveis=rows.map(i=>i.epc);
   $('catalogo').innerHTML=rows.map(i=>`<tr>
     <td><input type="checkbox" class="catSel" data-epc="${esc(i.epc)}"${selCat.has(i.epc)?' checked':''}></td>
-    <td class="epc">${esc(i.epc)}</td><td>${esc(i.tipo)}</td><td>${esc(i.fabricante||'–')}</td>
+    <td class="epc">${esc(i.epc)}</td><td>${i.nome?esc(i.nome):'<span class="mut">–</span>'}</td><td>${esc(i.tipo)}</td><td>${esc(i.fabricante||'–')}</td>
     <td>${esc(i.tamanho||'–')}</td><td>${esc(i.composicao||'–')}</td><td>${esc(i.cor||'–')}</td>
     <td>${i.data_compra?esc(i.data_compra.split('-').reverse().join('/')):'–'}</td>
     <td>${esc(i.localizacao||'–')}</td>
     <td><select class="estadoSel" data-epc="${esc(i.epc)}">${opts}</select></td>
-    <td><button class="definirEstadoBtn" data-epc="${esc(i.epc)}">Definir</button></td>
-  </tr>`).join('')||'<tr><td colspan=11>nenhum item cadastrado</td></tr>';
+    <td><button class="definirEstadoBtn" data-epc="${esc(i.epc)}">Definir</button> <button data-itedit="${esc(i.epc)}">Editar</button></td>
+  </tr>`).join('')||'<tr><td colspan=12>nenhum item cadastrado</td></tr>';
+  catRows=rows;
   atualizaSelCat();
   for(const i of rows){
     const sel=document.querySelector(`select.estadoSel[data-epc="${CSS.escape(i.epc)}"]`);
@@ -1536,10 +1644,10 @@ $('cadastrarItem').onclick=async()=>{
   if(!epc||!tipo){msg.className='msg bad';msg.textContent='EPC e tipo são obrigatórios';return}
   try{
     await j('/api/itens',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      epc,tipo,fabricante:$('itFabricante').value.trim()||null,tamanho:$('itTamanho').value.trim()||null,
+      epc,tipo,nome:$('itNome').value.trim()||null,fabricante:$('itFabricante').value.trim()||null,tamanho:$('itTamanho').value.trim()||null,
       composicao:$('itComposicao').value.trim()||null,cor:$('itCor').value.trim()||null,data_compra:$('itCompra').value||null})});
     msg.className='msg ok';msg.textContent=`item ${epc} cadastrado`;
-    ['itEpc','itTipo','itFabricante','itTamanho','itComposicao','itCor','itCompra'].forEach(id=>$(id).value='');
+    ['itEpc','itNome','itTipo','itFabricante','itTamanho','itComposicao','itCor','itCompra'].forEach(id=>$(id).value='');
     await Promise.all([carregarCatalogo(),carregarOpcoesInventario(),carregarInventario()]);
   }catch(e){msg.className='msg bad';msg.textContent=e.message}
 };
@@ -1554,7 +1662,7 @@ async function consultarManual(){
     manualNovos=r.novos;
     $('mnResumo').textContent=`${r.identificados.length} cadastrados · ${r.novos.length} novos · ${r.invalidos.length} inválidos`;
     $('mnIdBox').hidden=!r.identificados.length;
-    $('mnIdTb').innerHTML=r.identificados.map(i=>`<tr><td class="epc" data-l="EPC">${esc(i.epc)}</td><td data-l="Tipo">${esc(i.tipo)}</td><td data-l="Cor">${esc(i.cor||'–')}</td><td data-l="Localização">${esc(i.localizacao||'–')}</td><td data-l="Estado">${esc(i.estado)}</td></tr>`).join('');
+    $('mnIdTb').innerHTML=r.identificados.map(i=>`<tr><td class="epc" data-l="EPC">${esc(i.epc)}</td><td data-l="Nome">${esc(i.nome||'–')}</td><td data-l="Tipo">${esc(i.tipo)}</td><td data-l="Cor">${esc(i.cor||'–')}</td><td data-l="Localização">${esc(i.localizacao||'–')}</td><td data-l="Estado">${esc(i.estado)}</td></tr>`).join('');
     $('mnNovosBox').hidden=!r.novos.length;$('mnNovosN').textContent=r.novos.length;
     $('mnInvBox').hidden=!r.invalidos.length;$('mnInvalidos').textContent=r.invalidos.join('  ');
     msg.textContent='';

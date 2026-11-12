@@ -28,6 +28,15 @@ ALERTA_SEM_SINAL_SEG = int(os.environ.get("ALERTA_SEM_SINAL_SEGUNDOS", "60"))  #
 ALERTA_FALHAS = int(os.environ.get("ALERTA_FALHAS_INGEST", "5"))  # falhas (4xx/5xx) do /ingest em 10 min
 ALERTA_REPETIR_MIN = int(os.environ.get("ALERTA_REPETIR_MINUTOS", "120"))
 SAIDA_JANELA_MINUTOS = int(os.environ.get("SAIDA_JANELA_MINUTOS", "60"))
+# Vídeo da evasão (câmera/DVR): trecho gravado em volta da detecção, buscado pelo agente na LAN do hotel.
+CLIPE_ANTES_SEG = int(os.environ.get("CLIPE_ANTES_SEGUNDOS", "10"))
+CLIPE_DEPOIS_SEG = int(os.environ.get("CLIPE_DEPOIS_SEGUNDOS", "60"))
+CLIPE_MARGEM_SEG = int(os.environ.get("CLIPE_MARGEM_SEGUNDOS", "5"))      # espera extra após o fim (o DVR grava em blocos)
+CLIPE_AGRUPAR_SEG = int(os.environ.get("CLIPE_AGRUPAR_SEGUNDOS", "30"))   # leituras da mesma câmera nessa janela dividem 1 clipe
+CLIPE_TIMEOUT_SEG = int(os.environ.get("CLIPE_TIMEOUT_SEGUNDOS", "900"))  # agente pegou o clipe e não concluiu
+CLIPE_MAX_MB = int(os.environ.get("CLIPE_MAX_MB", "100"))
+CLIPES_RETENCAO_DIAS = int(os.environ.get("CLIPES_RETENCAO_DIAS", "30"))
+CLIPES_DIR = Path(os.environ.get("CLIPES_DIR", "/srv/clipes"))
 STATIC = Path(__file__).parent / "static"
 security = HTTPBasic()
 _sess = os.environ.get("SESSION_SECRET", "")
@@ -60,7 +69,7 @@ PERFIS_PADRAO = {  # criados só na primeira vez; depois podem ser editados ou e
 }
 
 ITENS_VIEW_SQL = """
-SELECT i.epc, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, i.criado_em, i.atualizado_em,
+SELECT i.epc, i.nome, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, i.criado_em, i.atualizado_em,
        i.data_compra, d.nome AS localizacao, e.nome AS estado
 FROM itens i
 JOIN estados_inventario e ON e.id = i.estado_id
@@ -139,6 +148,7 @@ def init_db():
           estado_id INTEGER NOT NULL REFERENCES estados_inventario(id),
           criado_em DOUBLE PRECISION NOT NULL, atualizado_em DOUBLE PRECISION NOT NULL)""")
         con.execute("ALTER TABLE itens ADD COLUMN IF NOT EXISTS data_compra TEXT")  # AAAA-MM-DD
+        con.execute("ALTER TABLE itens ADD COLUMN IF NOT EXISTS nome TEXT")  # apelido da tag (ex.: "Lençol 12, suíte 301"); opcional, não único
         con.execute("CREATE INDEX IF NOT EXISTS ix_itens_tipo ON itens(tipo)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_lote_itens_epc ON lote_itens(epc)")
 
@@ -152,6 +162,26 @@ def init_db():
           transferencia_id INTEGER REFERENCES transferencias(id))""")
         con.execute("CREATE INDEX IF NOT EXISTS ix_saida_epc ON eventos_saida(epc, detectado_em)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_saida_destino ON eventos_saida(destino_id, detectado_em)")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS cameras(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          nome TEXT NOT NULL UNIQUE,
+          ip TEXT NOT NULL, porta INTEGER NOT NULL DEFAULT 80,
+          canal INTEGER NOT NULL DEFAULT 1,
+          gravacao TEXT NOT NULL DEFAULT 'continua',  -- continua | movimento (só informativo: no movimento o trecho pode faltar)
+          criado_em DOUBLE PRECISION NOT NULL)""")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS clipes(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          camera_id INTEGER NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
+          t0 DOUBLE PRECISION NOT NULL, inicio DOUBLE PRECISION NOT NULL, fim DOUBLE PRECISION NOT NULL,
+          status TEXT NOT NULL DEFAULT 'aguardando',  -- aguardando (gravando) | enviado (agente buscando) | ok | erro
+          arquivo TEXT, tamanho BIGINT, erro TEXT, teste BOOLEAN NOT NULL DEFAULT FALSE,
+          criado_em DOUBLE PRECISION NOT NULL, enviado_em DOUBLE PRECISION, concluido_em DOUBLE PRECISION)""")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_clipes_camera ON clipes(camera_id, t0)")
+        # tipo: dvr = aparelho Intelbras/Dahua que toca a gravação (playback RTSP); hikvision = idem, API Hikvision; rtsp = só ao vivo (ex. Mibo iM): o agente grava um buffer
+        con.execute("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'dvr'")
+        con.execute("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS rtsp_path TEXT")
         con.execute("ALTER TABLE destinos ADD COLUMN IF NOT EXISTS alerta INTEGER NOT NULL DEFAULT 0")
         con.execute("""
         CREATE TABLE IF NOT EXISTS usuarios(
@@ -249,6 +279,9 @@ def init_db():
         for col in ("descricao TEXT", "modo TEXT NOT NULL DEFAULT 'automatico'", "alerta BOOLEAN NOT NULL DEFAULT TRUE",
                     "ip TEXT", "porta INTEGER", "evasao BOOLEAN NOT NULL DEFAULT FALSE"):
             con.execute(f"ALTER TABLE antenas ADD COLUMN IF NOT EXISTS {col}")
+        con.execute("ALTER TABLE antenas ADD COLUMN IF NOT EXISTS camera_id INTEGER REFERENCES cameras(id) ON DELETE SET NULL")
+        con.execute("ALTER TABLE eventos_saida ADD COLUMN IF NOT EXISTS antena_id INTEGER REFERENCES antenas(id) ON DELETE SET NULL")
+        con.execute("ALTER TABLE eventos_saida ADD COLUMN IF NOT EXISTS clipe_id INTEGER REFERENCES clipes(id) ON DELETE SET NULL")
 
         con.execute("""
         CREATE TABLE IF NOT EXISTS agentes(
@@ -813,6 +846,7 @@ async def background():
                     con.execute("DELETE FROM monitor_checagens WHERE quando<%s", (time.time() - 30 * 86400,))
                     con.commit()
             await asyncio.to_thread(purge)
+            await asyncio.to_thread(purgar_clipes)
 
 
 def init_db_retry(tentativas=30):
@@ -1287,7 +1321,7 @@ def tags(hours: float = 24, limit: int = 200):
     since = time.time() - hours * 3600
     with closing(db()) as con:
         rows = con.execute("""
-          SELECT t.*, i.tipo FROM (
+          SELECT t.*, i.tipo, i.nome FROM (
             SELECT epc, COUNT(*) reads, MAX(received_at) last, MIN(received_at) first,
                    MAX(rssi) best_rssi, STRING_AGG(DISTINCT antenna, ',') antennas
             FROM events WHERE epc IS NOT NULL AND received_at>%s
@@ -1299,7 +1333,7 @@ def tags(hours: float = 24, limit: int = 200):
 
 @app.get("/api/events", dependencies=[Depends(P_CONSULTAR)])
 def events(limit: int = 100, epc: str | None = None, after_id: int = 0, raw: bool = False):
-    sql = ("SELECT e.id,e.received_at,e.event_type,e.epc,e.tid,e.antenna,e.rssi,e.seen_at,i.tipo"
+    sql = ("SELECT e.id,e.received_at,e.event_type,e.epc,e.tid,e.antenna,e.rssi,e.seen_at,i.tipo,i.nome"
            + (",e.raw" if raw else "") + " FROM events e LEFT JOIN itens i ON i.epc=e.epc WHERE e.id>%s")
     args: list = [after_id]
     if epc:
@@ -1330,7 +1364,7 @@ def classificar_epcs(con, epcs):
         return [], []
     placeholders = ",".join(["%s"] * len(epcs))
     cadastrados = {r["epc"]: r for r in con.execute(
-        f"""SELECT i.epc, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, e.nome estado,
+        f"""SELECT i.epc, i.nome, i.tipo, i.fabricante, i.tamanho, i.composicao, i.cor, e.nome estado,
                    (SELECT d.nome FROM lote_itens li JOIN transferencias t ON t.lote_id=li.lote_id
                       JOIN destinos d ON d.id=t.destino_id WHERE li.epc=i.epc ORDER BY t.criado_em DESC LIMIT 1) localizacao
             FROM itens i JOIN estados_inventario e ON e.id=i.estado_id WHERE i.epc IN ({placeholders})""", epcs).fetchall()}
@@ -1551,9 +1585,21 @@ def listar_transferencias(destino_id: int | None = None, tipo: str | None = None
         return con.execute(sql, args).fetchall()
 
 
+NOME_MAX = 80
+
+
+def nome_item(valor):
+    """Nome/apelido da tag: texto livre, sem espaços nas pontas, vazio vira None."""
+    v = " ".join(str(valor or "").split())
+    if len(v) > NOME_MAX:
+        raise HTTPException(400, f"nome muito longo (máximo {NOME_MAX} caracteres)")
+    return v or None
+
+
 class ItemIn(BaseModel):
     epc: str
     tipo: str
+    nome: str | None = None  # em branco numa atualização mantém o nome atual (para apagar: PATCH /api/itens/{epc}/nome)
     fabricante: str | None = None
     tamanho: str | None = None
     composicao: str | None = None
@@ -1568,19 +1614,36 @@ def cadastrar_item(payload: ItemIn):
         raise HTTPException(400, "epc e tipo são obrigatórios")
     exige_epc_valido(epc)
     data_compra = data_iso(payload.data_compra)
+    nome = nome_item(payload.nome)
     now = time.time()
     with closing(db()) as con:
         estado_padrao = con.execute("SELECT id FROM estados_inventario WHERE padrao=1 LIMIT 1").fetchone()["id"]
-        con.execute("""INSERT INTO itens(epc,tipo,fabricante,tamanho,composicao,cor,data_compra,estado_id,criado_em,atualizado_em)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                        ON CONFLICT(epc) DO UPDATE SET tipo=excluded.tipo, fabricante=excluded.fabricante,
+        con.execute("""INSERT INTO itens(epc,nome,tipo,fabricante,tamanho,composicao,cor,data_compra,estado_id,criado_em,atualizado_em)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT(epc) DO UPDATE SET nome=COALESCE(excluded.nome, itens.nome), tipo=excluded.tipo,
+                          fabricante=excluded.fabricante,
                           tamanho=excluded.tamanho, composicao=excluded.composicao, cor=excluded.cor,
                           data_compra=excluded.data_compra, atualizado_em=excluded.atualizado_em""",
-                    (epc, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor, data_compra,
+                    (epc, nome, tipo, payload.fabricante, payload.tamanho, payload.composicao, payload.cor, data_compra,
                      estado_padrao, now, now))
         con.commit()
         row = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v WHERE v.epc=%s", (epc,)).fetchone()
     return row
+
+
+class NomeIn(BaseModel):
+    nome: str | None = None  # vazio/None apaga o nome
+
+
+@app.patch("/api/itens/{epc}/nome", dependencies=[Depends(P_CATALOGO)])
+def nomear_item(epc: str, payload: NomeIn):
+    epc = epc_manual(epc) or ""
+    nome = nome_item(payload.nome)
+    with closing(db()) as con:
+        if not con.execute("UPDATE itens SET nome=%s, atualizado_em=%s WHERE epc=%s RETURNING epc", (nome, time.time(), epc)).fetchone():
+            raise HTTPException(404, "tag não cadastrada (cadastre o item antes de dar um nome)")
+        con.commit()
+    return {"epc": epc, "nome": nome}
 
 
 class LoteEdicaoIn(BaseModel):
@@ -1705,8 +1768,8 @@ def listar_itens(q: str | None = None, limit: int = 200):
     sql = f"SELECT * FROM ({ITENS_VIEW_SQL}) v"
     args: list = []
     if q:
-        sql += " WHERE v.epc ILIKE %s OR v.tipo ILIKE %s"
-        like = f"%{q}%"; args += [like, like]
+        sql += " WHERE v.epc ILIKE %s OR v.tipo ILIKE %s OR v.nome ILIKE %s"
+        like = f"%{q}%"; args += [like, like, like]
     sql += " ORDER BY v.atualizado_em DESC LIMIT %s"; args.append(min(limit, 1000))
     with closing(db()) as con:
         return con.execute(sql, args).fetchall()
@@ -1797,6 +1860,28 @@ def inventario(localizacao: str | None = None, estado: str | None = None, tipo: 
 class SaidaIn(BaseModel):
     epc: str
     destino_id: int
+    antena_id: int | None = None  # antena de saída que leu; define a câmera do clipe (sem ele: a única câmera de evasão, se houver só uma)
+
+
+def _clipe_da_saida(con, antena_id, now: float):
+    """Acha (ou cria) o clipe do DVR para uma detecção na saída. Devolve (antena_id, clipe_id|None)."""
+    if antena_id:
+        a = con.execute("SELECT id, camera_id FROM antenas WHERE id=%s", (antena_id,)).fetchone()
+        if not a:
+            raise HTTPException(400, "antena inválida")
+        camera_id = a["camera_id"]
+    else:
+        cams = con.execute("SELECT DISTINCT camera_id FROM antenas WHERE evasao AND camera_id IS NOT NULL").fetchall()
+        camera_id = cams[0]["camera_id"] if len(cams) == 1 else None
+    if not camera_id:
+        return antena_id, None
+    c = con.execute("""SELECT id FROM clipes WHERE camera_id=%s AND NOT teste AND status<>'erro' AND t0>=%s
+                       ORDER BY t0 DESC LIMIT 1""", (camera_id, now - CLIPE_AGRUPAR_SEG)).fetchone()
+    if c:  # várias peças na mesma passagem: um clipe só
+        return antena_id, c["id"]
+    cid = con.execute("""INSERT INTO clipes(camera_id,t0,inicio,fim,criado_em) VALUES(%s,%s,%s,%s,%s) RETURNING id""",
+                      (camera_id, now, now - CLIPE_ANTES_SEG, now + CLIPE_DEPOIS_SEG, now)).fetchone()["id"]
+    return antena_id, cid
 
 
 @app.post("/api/saida", dependencies=[Depends(saida_auth)])
@@ -1817,19 +1902,22 @@ def registrar_saida(payload: SaidaIn):
             ORDER BY t.criado_em DESC LIMIT 1""",
             (payload.epc, payload.destino_id, now - SAIDA_JANELA_MINUTOS * 60)).fetchone()
         documentado = match is not None
-        con.execute("""INSERT INTO eventos_saida(epc,destino_id,detectado_em,documentado,transferencia_id)
-                        VALUES(%s,%s,%s,%s,%s)""",
+        antena_id, clipe_id = _clipe_da_saida(con, payload.antena_id, now)
+        con.execute("""INSERT INTO eventos_saida(epc,destino_id,detectado_em,documentado,transferencia_id,antena_id,clipe_id)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s)""",
                     (payload.epc, payload.destino_id, now, 1 if documentado else 0,
-                     match["id"] if match else None))
+                     match["id"] if match else None, antena_id, clipe_id))
         con.commit()
-    return {"epc": payload.epc, "destino": destino["nome"], "documentado": documentado, "detectado_em": now}
+    return {"epc": payload.epc, "destino": destino["nome"], "documentado": documentado, "detectado_em": now, "clipe_id": clipe_id}
 
 
 @app.get("/api/saida", dependencies=[Depends(P_CONSULTAR)])
 def listar_saidas(documentado: bool | None = None, destino_id: int | None = None,
                    desde: float | None = None, ate: float | None = None, limit: int = 200):
-    sql = """SELECT s.id, s.epc, s.destino_id, d.nome destino_nome, s.detectado_em, s.documentado, s.transferencia_id
-             FROM eventos_saida s JOIN destinos d ON d.id=s.destino_id"""
+    sql = """SELECT s.id, s.epc, s.destino_id, d.nome destino_nome, s.detectado_em, s.documentado, s.transferencia_id,
+                    s.antena_id, s.clipe_id, c.status clipe_status, c.erro clipe_erro, i.nome item_nome, i.tipo item_tipo
+             FROM eventos_saida s JOIN destinos d ON d.id=s.destino_id LEFT JOIN clipes c ON c.id=s.clipe_id
+             LEFT JOIN itens i ON i.epc=s.epc"""
     cond, args = [], []
     if documentado is not None:
         cond.append("s.documentado=%s"); args.append(1 if documentado else 0)
@@ -1857,6 +1945,7 @@ class AntenaIn(BaseModel):
     ip: str | None = None
     porta: int | None = None
     evasao: bool = False  # antena de saída (detecção de evasão): monitoramento e alertas prioritários
+    camera_id: int | None = None  # câmera (canal do DVR) que filma esta saída
 
 
 def _valida_antena(con, p: AntenaIn) -> dict:
@@ -1869,16 +1958,18 @@ def _valida_antena(con, p: AntenaIn) -> dict:
         raise HTTPException(400, "porta inválida (1–65535)")
     if p.destino_id and not con.execute("SELECT 1 FROM destinos WHERE id=%s", (p.destino_id,)).fetchone():
         raise HTTPException(400, "localização inválida")
+    if p.camera_id and not con.execute("SELECT 1 FROM cameras WHERE id=%s", (p.camera_id,)).fetchone():
+        raise HTTPException(400, "câmera inválida")
     return {"nome": nome, "descricao": (p.descricao or "").strip() or None, "modelo": (p.modelo or "").strip() or None,
             "destino_id": p.destino_id, "modo": p.modo, "alerta": p.alerta, "ip": (p.ip or "").strip() or None,
-            "porta": p.porta, "evasao": p.evasao}
+            "porta": p.porta, "evasao": p.evasao, "camera_id": p.camera_id or None}
 
 
 @app.get("/api/antenas", dependencies=[Depends(P_CONSULTAR)])
 def listar_antenas():
     with closing(db()) as con:
         return con.execute("""SELECT a.id, a.nome, a.descricao, a.modelo, a.destino_id, d.nome destino_nome,
-                                     a.modo, a.alerta, a.ip, a.porta, a.evasao,
+                                     a.modo, a.alerta, a.ip, a.porta, a.evasao, a.camera_id,
                                      s.online, s.latencia_ms, s.detalhe, s.verificado_em, s.extra
                               FROM antenas a LEFT JOIN destinos d ON d.id=a.destino_id
                               LEFT JOIN antena_status s ON s.antena_id=a.id ORDER BY a.nome""").fetchall()
@@ -1890,8 +1981,8 @@ def salvar_antena(payload: AntenaIn):
         v = _valida_antena(con, payload)
         if con.execute("SELECT 1 FROM antenas WHERE nome=%s", (v["nome"],)).fetchone():
             raise HTTPException(409, "já existe antena com esse nome (use Editar)")
-        con.execute("""INSERT INTO antenas(nome,descricao,modelo,destino_id,modo,alerta,ip,porta,evasao,criado_em)
-                       VALUES(%(nome)s,%(descricao)s,%(modelo)s,%(destino_id)s,%(modo)s,%(alerta)s,%(ip)s,%(porta)s,%(evasao)s,%(t)s)""",
+        con.execute("""INSERT INTO antenas(nome,descricao,modelo,destino_id,modo,alerta,ip,porta,evasao,camera_id,criado_em)
+                       VALUES(%(nome)s,%(descricao)s,%(modelo)s,%(destino_id)s,%(modo)s,%(alerta)s,%(ip)s,%(porta)s,%(evasao)s,%(camera_id)s,%(t)s)""",
                     {**v, "t": time.time()})
         con.commit()
     return {"ok": True}
@@ -1906,7 +1997,7 @@ def editar_antena(antena_id: int, payload: AntenaIn):
         if con.execute("SELECT 1 FROM antenas WHERE nome=%s AND id<>%s", (v["nome"], antena_id)).fetchone():
             raise HTTPException(409, "já existe outra antena com esse nome")
         con.execute("""UPDATE antenas SET nome=%(nome)s, descricao=%(descricao)s, modelo=%(modelo)s, destino_id=%(destino_id)s,
-                       modo=%(modo)s, alerta=%(alerta)s, ip=%(ip)s, porta=%(porta)s, evasao=%(evasao)s WHERE id=%(id)s""", {**v, "id": antena_id})
+                       modo=%(modo)s, alerta=%(alerta)s, ip=%(ip)s, porta=%(porta)s, evasao=%(evasao)s, camera_id=%(camera_id)s WHERE id=%(id)s""", {**v, "id": antena_id})
         con.commit()
     return {"ok": True}
 
@@ -1988,7 +2079,9 @@ def agente_config(ag: dict = Depends(agente_auth)):
     with closing(db()) as con:
         antenas = con.execute("""SELECT id,nome,modelo,ip,porta,modo,alerta,evasao FROM antenas
                                  WHERE ip IS NOT NULL AND ip<>'' ORDER BY nome""").fetchall()
-    return {"agente": ag["nome"], "intervalo_seg": AGENTE_INTERVALO_SEG, "antenas": antenas}
+        # câmeras sem playback (tipo rtsp): o agente precisa gravar o ao vivo ANTES da evasão para ter o "10 s antes"
+        cameras = con.execute("""SELECT id, nome, ip, canal, rtsp_path FROM cameras WHERE tipo='rtsp' ORDER BY nome""").fetchall()
+    return {"agente": ag["nome"], "intervalo_seg": AGENTE_INTERVALO_SEG, "antenas": antenas, "cameras": cameras}
 
 
 class StatusAntenaIn(BaseModel):
@@ -2046,8 +2139,201 @@ def agente_status(b: StatusIn, ag: dict = Depends(agente_auth)):
                     (now, now - 120))
         cmds = con.execute("""UPDATE comandos SET status='enviado', enviado_em=%s WHERE status='pendente'
                               RETURNING id, antena_id, metodo, caminho, corpo""", (now,)).fetchall()
+        clipes = _clipes_para_agente(con, now)
         con.commit()
-    return {"ok": True, "comandos": cmds}
+    return {"ok": True, "comandos": cmds, "clipes": clipes}
+
+
+# ---------- vídeo da evasão: câmeras (canal do DVR) e clipes ----------
+
+def _clipes_para_agente(con, now: float) -> list:
+    """Clipes cujo período já terminou de gravar e ainda não foram buscados; marca como enviados.
+    Também encerra o que ficou preso (agente caiu no meio, ou nenhum agente buscou a tempo)."""
+    con.execute("""UPDATE clipes SET status='erro', concluido_em=%s, erro='o agente não concluiu a busca no DVR'
+                   WHERE status='enviado' AND enviado_em<%s""", (now, now - CLIPE_TIMEOUT_SEG))
+    con.execute("""UPDATE clipes SET status='erro', concluido_em=%s, erro='nenhum agente buscou o trecho a tempo (o DVR sobrescreve gravações antigas)'
+                   WHERE status='aguardando' AND fim<%s""", (now, now - 6 * 3600))
+    return con.execute("""UPDATE clipes c SET status='enviado', enviado_em=%s
+                          FROM cameras m WHERE m.id=c.camera_id AND c.status='aguardando' AND c.fim+%s<=%s
+                          RETURNING c.id, c.camera_id, c.t0, c.inicio, c.fim, m.nome camera, m.ip, m.porta, m.canal, m.gravacao,
+                                    m.tipo, m.rtsp_path""",
+                       (now, CLIPE_MARGEM_SEG, now)).fetchall()
+
+
+def purgar_clipes():
+    cutoff = time.time() - CLIPES_RETENCAO_DIAS * 86400
+    with closing(db()) as con:
+        velhos = con.execute("DELETE FROM clipes WHERE criado_em<%s RETURNING id", (cutoff,)).fetchall()
+        con.commit()
+    for r in velhos:
+        (CLIPES_DIR / f"{r['id']}.mp4").unlink(missing_ok=True)
+
+
+class CameraIn(BaseModel):
+    nome: str
+    ip: str
+    porta: int = 80
+    canal: int = 1
+    gravacao: str = "continua"
+    tipo: str = "dvr"  # dvr (Intelbras/Dahua, playback) | hikvision (playback ISAPI/RTSP) | rtsp (só ao vivo, ex. Mibo iM: o agente mantém um buffer)
+    rtsp_path: str | None = None  # só tipo rtsp; vazio = /cam/realmonitor?channel={canal}&subtype=0
+
+
+RTSP_PATH = re.compile(r"/?[A-Za-z0-9_\-/.?=&{}]{1,200}")
+
+
+def _valida_camera(p: CameraIn) -> dict:
+    nome, ip = p.nome.strip(), p.ip.strip()
+    if not nome:
+        raise HTTPException(400, "nome é obrigatório")
+    if not re.fullmatch(r"[A-Za-z0-9.\-]{1,253}", ip):
+        raise HTTPException(400, "IP/host do DVR inválido")
+    if not 1 <= p.porta <= 65535:
+        raise HTTPException(400, "porta inválida (1–65535)")
+    if not 1 <= p.canal <= 256:
+        raise HTTPException(400, "canal inválido (1–256)")
+    if p.gravacao not in ("continua", "movimento"):
+        raise HTTPException(400, "gravação deve ser continua ou movimento")
+    if p.tipo not in ("dvr", "hikvision", "rtsp"):
+        raise HTTPException(400, "tipo deve ser dvr, hikvision ou rtsp")
+    path = (p.rtsp_path or "").strip() or None
+    if path and (p.tipo != "rtsp" or not RTSP_PATH.fullmatch(path) or ".." in path):
+        raise HTTPException(400, "caminho RTSP inválido (só para o tipo rtsp; ex.: /cam/realmonitor?channel={canal}&subtype=0)")
+    return {"nome": nome, "ip": ip, "porta": p.porta, "canal": p.canal, "gravacao": p.gravacao, "tipo": p.tipo, "rtsp_path": path}
+
+
+@app.get("/api/cameras", dependencies=[Depends(P_CONSULTAR)])
+def listar_cameras():
+    with closing(db()) as con:
+        return con.execute("""SELECT m.*, (SELECT string_agg(a.nome, ', ' ORDER BY a.nome) FROM antenas a WHERE a.camera_id=m.id) antenas
+                              FROM cameras m ORDER BY m.nome""").fetchall()
+
+
+@app.post("/api/cameras", dependencies=[Depends(P_CADASTROS)])
+def salvar_camera(payload: CameraIn):
+    v = _valida_camera(payload)
+    with closing(db()) as con:
+        if con.execute("SELECT 1 FROM cameras WHERE nome=%s", (v["nome"],)).fetchone():
+            raise HTTPException(409, "já existe câmera com esse nome (use Editar)")
+        cid = con.execute("""INSERT INTO cameras(nome,ip,porta,canal,gravacao,tipo,rtsp_path,criado_em)
+                             VALUES(%(nome)s,%(ip)s,%(porta)s,%(canal)s,%(gravacao)s,%(tipo)s,%(rtsp_path)s,%(t)s) RETURNING id""",
+                          {**v, "t": time.time()}).fetchone()["id"]
+        con.commit()
+    return {"ok": True, "id": cid}
+
+
+@app.put("/api/cameras/{camera_id}", dependencies=[Depends(P_CADASTROS)])
+def editar_camera(camera_id: int, payload: CameraIn):
+    v = _valida_camera(payload)
+    with closing(db()) as con:
+        if not con.execute("SELECT 1 FROM cameras WHERE id=%s", (camera_id,)).fetchone():
+            raise HTTPException(404, "câmera não encontrada")
+        if con.execute("SELECT 1 FROM cameras WHERE nome=%s AND id<>%s", (v["nome"], camera_id)).fetchone():
+            raise HTTPException(409, "já existe outra câmera com esse nome")
+        con.execute("""UPDATE cameras SET nome=%(nome)s, ip=%(ip)s, porta=%(porta)s, canal=%(canal)s, gravacao=%(gravacao)s,
+                       tipo=%(tipo)s, rtsp_path=%(rtsp_path)s WHERE id=%(id)s""",
+                    {**v, "id": camera_id})
+        con.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/cameras/{camera_id}", dependencies=[Depends(P_CADASTROS)])
+def excluir_camera(camera_id: int):
+    with closing(db()) as con:
+        ids = [r["id"] for r in con.execute("SELECT id FROM clipes WHERE camera_id=%s", (camera_id,)).fetchall()]
+        if not con.execute("DELETE FROM cameras WHERE id=%s RETURNING id", (camera_id,)).fetchone():
+            raise HTTPException(404, "câmera não encontrada")
+        con.commit()
+    for i in ids:
+        (CLIPES_DIR / f"{i}.mp4").unlink(missing_ok=True)
+    return {"ok": True}
+
+
+@app.post("/api/cameras/{camera_id}/teste", dependencies=[Depends(P_CADASTROS)])
+def testar_camera(camera_id: int):
+    """Pede ao agente um clipe já gravado (últimos ~70 s) para validar IP, canal, usuário e formato sem precisar de evasão."""
+    now = time.time()
+    with closing(db()) as con:
+        cam = con.execute("SELECT tipo FROM cameras WHERE id=%s", (camera_id,)).fetchone()
+        if not cam:
+            raise HTTPException(404, "câmera não encontrada")
+        if cam["tipo"] == "rtsp":  # buffer: só existe o que o agente gravou desde que subiu; pede os últimos 30 s
+            fim = now - CLIPE_MARGEM_SEG
+            ini, t0 = fim - 30, fim - 20
+        else:
+            t0 = now - CLIPE_DEPOIS_SEG - CLIPE_MARGEM_SEG
+            ini, fim = t0 - CLIPE_ANTES_SEG, t0 + CLIPE_DEPOIS_SEG
+        cid = con.execute("""INSERT INTO clipes(camera_id,t0,inicio,fim,teste,criado_em) VALUES(%s,%s,%s,%s,TRUE,%s) RETURNING id""",
+                          (camera_id, t0, ini, fim, now)).fetchone()["id"]
+        con.commit()
+    return {"clipe_id": cid}
+
+
+@app.get("/api/clipes/{clipe_id}", dependencies=[Depends(P_CONSULTAR)])
+def ler_clipe(clipe_id: int):
+    with closing(db()) as con:
+        c = con.execute("""SELECT c.id, c.camera_id, m.nome camera, c.t0, c.inicio, c.fim, c.status, c.tamanho, c.erro, c.teste
+                           FROM clipes c JOIN cameras m ON m.id=c.camera_id WHERE c.id=%s""", (clipe_id,)).fetchone()
+    if not c:
+        raise HTTPException(404, "clipe não encontrado")
+    return c
+
+
+@app.get("/api/clipes/{clipe_id}/video", dependencies=[Depends(P_CONSULTAR)])
+def video_clipe(clipe_id: int):
+    with closing(db()) as con:
+        c = con.execute("SELECT status FROM clipes WHERE id=%s", (clipe_id,)).fetchone()
+    arq = CLIPES_DIR / f"{clipe_id}.mp4"  # nome vem só do id numérico
+    if not c or c["status"] != "ok" or not arq.is_file():
+        raise HTTPException(404, "vídeo ainda não disponível")
+    return FileResponse(arq, media_type="video/mp4")
+
+
+@app.put("/api/agente/clipes/{clipe_id}/arquivo")
+async def agente_clipe_arquivo(clipe_id: int, request: Request, _: dict = Depends(agente_auth)):
+    """O agente envia o mp4 do trecho (corpo bruto). Grava em CLIPES_DIR/<id>.mp4 e marca o clipe como ok."""
+    with closing(db()) as con:
+        c = con.execute("SELECT status FROM clipes WHERE id=%s", (clipe_id,)).fetchone()
+    if not c:
+        raise HTTPException(404, "clipe não encontrado")
+    if c["status"] != "enviado":
+        raise HTTPException(409, f"clipe está '{c['status']}', não aguarda arquivo")
+    CLIPES_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = CLIPES_DIR / f"{clipe_id}.part"
+    total, limite, inicio = 0, CLIPE_MAX_MB * 1024 * 1024, b""
+    try:
+        with open(tmp, "wb") as f:
+            async for chunk in request.stream():
+                if len(inicio) < 12:
+                    inicio += chunk[:12]
+                total += len(chunk)
+                if total > limite:
+                    raise HTTPException(413, f"arquivo maior que {CLIPE_MAX_MB} MB")
+                f.write(chunk)
+        if total == 0 or inicio[4:8] != b"ftyp":
+            raise HTTPException(400, "o arquivo não é um mp4 válido")
+        os.replace(tmp, CLIPES_DIR / f"{clipe_id}.mp4")
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    with closing(db()) as con:
+        con.execute("UPDATE clipes SET status='ok', arquivo=%s, tamanho=%s, erro=NULL, concluido_em=%s WHERE id=%s",
+                    (f"{clipe_id}.mp4", total, time.time(), clipe_id))
+        con.commit()
+    return {"ok": True, "tamanho": total}
+
+
+class ClipeErroIn(BaseModel):
+    mensagem: str
+
+
+@app.post("/api/agente/clipes/{clipe_id}/erro")
+def agente_clipe_erro(clipe_id: int, b: ClipeErroIn, _: dict = Depends(agente_auth)):
+    with closing(db()) as con:
+        con.execute("UPDATE clipes SET status='erro', erro=%s, concluido_em=%s WHERE id=%s AND status='enviado'",
+                    (b.mensagem[:500], time.time(), clipe_id))
+        con.commit()
+    return {"ok": True}
 
 
 class ResultadoIn(BaseModel):
@@ -2294,7 +2580,7 @@ ROTULOS_ACAO = [  # (método, regex do caminho, descrição) — o que não casa
     ("DELETE", r"/api/lotes/\d+", "Excluiu lote"), ("POST", r"/api/lotes/registrar", "Registrou lote"),
     ("POST", r"/api/lotes/\d+/transferir", "Transferiu lote"), ("POST", r"/api/lotes/\d+/estado", "Mudou estado do lote"),
     ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/leitura/armar", "Armou a leitura"),
-    ("POST", r"/api/itens", "Cadastrou/atualizou item"), ("POST", r"/api/itens/editar-lote", "Editou itens em lote"),
+    ("POST", r"/api/itens", "Cadastrou/atualizou item"), ("PATCH", r"/api/itens/[^/]+/nome", "Nomeou tag"), ("POST", r"/api/itens/editar-lote", "Editou itens em lote"),
     ("POST", r"/api/itens/cadastrar-lote", "Cadastrou itens em lote"), ("PATCH", r"/api/itens/[^/]+/estado", "Mudou estado do item"),
     ("POST", r"/api/conferencias", "Iniciou conferência"), ("POST", r"/api/conferencias/\d+/finalizar", "Finalizou conferência"),
     ("POST", r"/api/destinos", "Criou destino"), ("PATCH", r"/api/destinos/\d+", "Alterou destino"),
@@ -2303,6 +2589,8 @@ ROTULOS_ACAO = [  # (método, regex do caminho, descrição) — o que não casa
     ("PUT", r"/api/config/alertas", "Alterou config de alertas"), ("POST", r"/api/alertas/destinatarios", "Criou destinatário de alerta"),
     ("PUT", r"/api/alertas/destinatarios/\d+", "Alterou destinatário de alerta"), ("DELETE", r"/api/alertas/destinatarios/\d+", "Excluiu destinatário de alerta"),
     ("POST", r"/api/alertas/destinatarios/\d+/teste", "Testou destinatário de alerta"),
+    ("POST", r"/api/cameras", "Criou câmera"), ("PUT", r"/api/cameras/\d+", "Alterou câmera"), ("DELETE", r"/api/cameras/\d+", "Excluiu câmera"),
+    ("POST", r"/api/cameras/\d+/teste", "Pediu clipe de teste da câmera"),
     ("POST", r"/api/agentes", "Criou agente"), ("DELETE", r"/api/agentes/\d+", "Excluiu agente"),
     ("POST", r"/api/usuarios", "Criou usuário"), ("PATCH", r"/api/usuarios/\d+", "Alterou usuário (perfil/senha/status)"),
     ("POST", r"/api/perfis", "Criou perfil"), ("PUT", r"/api/perfis/[^/]+", "Alterou perfil"), ("DELETE", r"/api/perfis/[^/]+", "Excluiu perfil"),
@@ -2458,9 +2746,9 @@ def export_leituras(horas: int = 168):
 def export_inventario():
     with closing(db()) as con:
         rows = con.execute(f"SELECT * FROM ({ITENS_VIEW_SQL}) v ORDER BY v.tipo, v.epc").fetchall()
-    return csv_resp("inventario.csv", ["epc", "item", "fabricante", "tamanho", "composicao", "cor", "data_compra", "localizacao", "estado"],
+    return csv_resp("inventario.csv", ["epc", "item", "fabricante", "tamanho", "composicao", "cor", "data_compra", "localizacao", "estado", "nome"],
                     [(r["epc"], r["tipo"], r["fabricante"] or "", r["tamanho"] or "", r["composicao"] or "", r["cor"] or "",
-                      r["data_compra"] or "", r["localizacao"] or "", r["estado"]) for r in rows])
+                      r["data_compra"] or "", r["localizacao"] or "", r["estado"], r["nome"] or "") for r in rows])  # "nome" por último: não desloca colunas de quem já consome o CSV
 
 
 @app.get("/api/export/transferencias.csv", dependencies=[Depends(P_EXPORTAR)])
