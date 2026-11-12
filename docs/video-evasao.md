@@ -50,7 +50,34 @@ O servidor (VPS) nao alcanca a LAN do hotel; so o **agente** (conexoes de saida)
 - Alguns firmwares **ignoram o horario** e comecam pela gravacao mais antiga: o clipe sairia com a imagem errada. **Conferir sempre** a imagem do teste
   contra a hora (ex.: passe algo na frente da camera e use *Testar*). Se acontecer, use o plano B (buffer).
 - Relogio do aparelho fora de hora: o agente corrige pela diferenca lida no ISAPI; mantenha NTP ligado mesmo assim.
-- Nao ha parser de ISAPI de busca/download (`/ISAPI/ContentMgmt/...`) neste modulo — so RTSP playback; ISAPI aqui e so para a hora.
+- Nao ha parser de ISAPI de busca/download (`/ISAPI/ContentMgmt/...`) neste modulo — so RTSP playback; ISAPI aqui e so para a hora. Ver "APIs da Hikvision" abaixo.
+
+### APIs da Hikvision (pesquisa de 2026-11-12) — o que existe e o que usar
+
+| API | O que e | Serve para o clipe? |
+|---|---|---|
+| **ISAPI** | REST sobre HTTP (digest) no proprio DVR/NVR/camera | **Sim**, e a indicada: LAN, sem licenca, mesmo modelo do agente |
+| HCNetSDK | SDK nativo (DLL): live, playback, PTZ, E/S | Nao: pesado para o agente Go/Windows, sem ganho sobre a ISAPI |
+| ISUP (EHome) | Para aparelhos com IP dinamico (3G/4G) | Nao: nossos aparelhos estao na LAN |
+| Hik-Connect / Hik-Partner Pro / HikCentral OpenAPI | Nuvem e plataforma central | Nao: exigem conta de parceiro e passam por nuvem; autenticacao e limites nao confirmados |
+
+**Busca + download por ISAPI (nao implementado — proxima melhoria do tipo `hikvision`):**
+
+1. `POST /ISAPI/ContentMgmt/search` com XML `CMSearchDescription` (searchID, trilha `101`, janela de tempo, limite de resultados) devolve as gravacoes
+   reais, cada uma com `playbackURI` (caminho RTSP `/Streaming/tracks/101/...`), nome e tamanho. Paginacao por `searchResultPostion`.
+2. `POST /ISAPI/ContentMgmt/download` com `downloadRequest` contendo o `playbackURI` entrega o arquivo (relatos salvam como mp4).
+
+Vantagens sobre o RTSP atual: (a) **confirma que existe gravacao** no intervalo e baixa exatamente o item listado, o que elimina o risco de firmware que ignora
+`starttime` e devolve a gravacao mais antiga; (b) **nao corre em tempo real** (RTSP: 70 s de video = ~70 s); (c) ha relato de busca/download no cartao SD.
+
+Incertezas (fontes de campo e bibliotecas de terceiros; o esquema oficial fica no portal de parceiros da Hikvision, que exige cadastro): o XML exato varia
+(relato de `Invalid Operation`); relato de download **incompleto logo apos a gravacao parar** num DVR (iDS-7216HQHI-M2/S) — como o clipe e de segundos atras, pode
+nos atingir; paginacao. Plano: implementar como caminho principal do `tipo=hikvision`, com o RTSP atual como alternativa se a busca falhar e o buffer
+(`tipo=rtsp`) como ultimo recurso. **Depende de testar num aparelho real** (modelo: DVR, NVR ou camera com SD, ainda nao informado).
+
+Fontes: [ISAPI no SD (IPCamTalk)](https://www.ipcamtalk.net/goto/post?id=136822) · [ISAPI ler e baixar gravacao (Syscom)](https://soporte.syscom.mx/es/articles/13443861-para-desarrolladores-probar-acuseek-desde-isapi) ·
+[Hikvision.ContentManagement (HexDocs)](https://hexdocs.pm/hikvision_client/Hikvision.ContentManagement.html) · [Download incompleto (HikLoad #37)](https://gh.r-mj.com/Tedyst/HikLoad/issues/37) ·
+[Visao geral de integracao (Hikvision)](https://www.hikvision.com/content/dam/hikvision/vn/webinar/Thang3_Hikvision_Tich_Hop_He_Thong_Overview-of-3rd-Party-Integration.pdf) · [Portal de parceiros](https://tpp.hikvision.com/tpp/OpenCapabilities)
 
 Camera Wi-Fi Mibo: nao ha API local conhecida para tocar o cartao SD, por isso o buffer. **"Mibo iX" nao foi confirmado** na documentacao
 da Intelbras (as linhas iM e iMX tem RTSP e ONVIF perfil S): confirme no manual do modelo e teste a URL no VLC.
