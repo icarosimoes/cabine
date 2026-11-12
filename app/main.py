@@ -5,7 +5,7 @@ from pathlib import Path
 import psycopg
 from psycopg.rows import dict_row
 from contextlib import asynccontextmanager, closing
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
@@ -37,6 +37,9 @@ CLIPE_TIMEOUT_SEG = int(os.environ.get("CLIPE_TIMEOUT_SEGUNDOS", "900"))  # agen
 CLIPE_MAX_MB = int(os.environ.get("CLIPE_MAX_MB", "100"))
 CLIPES_RETENCAO_DIAS = int(os.environ.get("CLIPES_RETENCAO_DIAS", "30"))
 CLIPES_DIR = Path(os.environ.get("CLIPES_DIR", "/srv/clipes"))
+CLIPE_LINK_HORAS = int(os.environ.get("CLIPE_LINK_HORAS", "72"))  # validade do link do clipe enviado por WhatsApp
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://cabine.solidsd.com.br").rstrip("/")
+CLIPE_ZIP_MAX = 40  # clipes por download em lote
 STATIC = Path(__file__).parent / "static"
 security = HTTPBasic()
 _sess = os.environ.get("SESSION_SECRET", "")
@@ -206,6 +209,8 @@ def init_db():
           recebe_sem_sinal BOOLEAN NOT NULL DEFAULT TRUE,
           recebe_falhas BOOLEAN NOT NULL DEFAULT TRUE,
           criado_em DOUBLE PRECISION NOT NULL)""")
+        con.execute("ALTER TABLE alerta_destinatarios ADD COLUMN IF NOT EXISTS recebe_evasao BOOLEAN NOT NULL DEFAULT TRUE")  # evasão + vídeo
+        con.execute("ALTER TABLE alerta_destinatarios ADD COLUMN IF NOT EXISTS recebe_monitor BOOLEAN NOT NULL DEFAULT TRUE")  # uptime baixo, Evolution
         con.execute("""
         CREATE TABLE IF NOT EXISTS alerta_envios(
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -279,6 +284,8 @@ def init_db():
         for col in ("descricao TEXT", "modo TEXT NOT NULL DEFAULT 'automatico'", "alerta BOOLEAN NOT NULL DEFAULT TRUE",
                     "ip TEXT", "porta INTEGER", "evasao BOOLEAN NOT NULL DEFAULT FALSE"):
             con.execute(f"ALTER TABLE antenas ADD COLUMN IF NOT EXISTS {col}")
+        con.execute("ALTER TABLE clipes ADD COLUMN IF NOT EXISTS alertado BOOLEAN NOT NULL DEFAULT FALSE")  # aviso de evasão já enviado
+        con.execute("ALTER TABLE clipes ADD COLUMN IF NOT EXISTS link_enviado BOOLEAN NOT NULL DEFAULT FALSE")
         con.execute("ALTER TABLE antenas ADD COLUMN IF NOT EXISTS camera_id INTEGER REFERENCES cameras(id) ON DELETE SET NULL")
         con.execute("ALTER TABLE eventos_saida ADD COLUMN IF NOT EXISTS antena_id INTEGER REFERENCES antenas(id) ON DELETE SET NULL")
         con.execute("ALTER TABLE eventos_saida ADD COLUMN IF NOT EXISTS clipe_id INTEGER REFERENCES clipes(id) ON DELETE SET NULL")
@@ -290,6 +297,8 @@ def init_db():
           token_hash TEXT NOT NULL UNIQUE,
           criado_em DOUBLE PRECISION NOT NULL,
           visto_em DOUBLE PRECISION, versao TEXT, host TEXT)""")
+        con.execute("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS agente_id INTEGER REFERENCES agentes(id) ON DELETE SET NULL")  # NULL = qualquer agente
+        con.execute("ALTER TABLE clipes ADD COLUMN IF NOT EXISTS agente_id INTEGER REFERENCES agentes(id) ON DELETE SET NULL")  # quem pegou o pedido
         con.execute("""
         CREATE TABLE IF NOT EXISTS antena_status(
           antena_id INTEGER PRIMARY KEY REFERENCES antenas(id) ON DELETE CASCADE,
@@ -606,7 +615,8 @@ def notificar(tipo: str, texto: str, c: dict | None = None, destinatario_id: int
         if destinatario_id:
             dests = con.execute("SELECT * FROM alerta_destinatarios WHERE id=%s", (destinatario_id,)).fetchall()
         else:
-            filtro = {"sem_sinal": " AND recebe_sem_sinal", "falhas": " AND recebe_falhas"}.get(tipo, "")
+            filtro = {"sem_sinal": " AND recebe_sem_sinal", "falhas": " AND recebe_falhas", "evasao": " AND recebe_evasao",
+                      "monitor": " AND recebe_monitor"}.get(tipo, "")
             dests = con.execute("SELECT * FROM alerta_destinatarios WHERE ativo" + filtro + " ORDER BY id").fetchall()
         for d in dests:
             erro = enviar_um(c, d["whatsapp"], texto)
@@ -959,6 +969,8 @@ class DestinatarioIn(BaseModel):
     ativo: bool = True
     recebe_sem_sinal: bool = True
     recebe_falhas: bool = True
+    recebe_evasao: bool = True
+    recebe_monitor: bool = True
 
 
 def _valida_dest(b: DestinatarioIn) -> dict:
@@ -975,7 +987,8 @@ def _valida_dest(b: DestinatarioIn) -> dict:
             num = "55" + num
         if not 12 <= len(num) <= 15:
             raise HTTPException(400, "número inválido: use DDI+DDD+número (ex.: 5511999999999) ou o ID do grupo (...@g.us)")
-    return {"nome": nome, "whatsapp": num, "ativo": b.ativo, "recebe_sem_sinal": b.recebe_sem_sinal, "recebe_falhas": b.recebe_falhas}
+    return {"nome": nome, "whatsapp": num, "ativo": b.ativo, "recebe_sem_sinal": b.recebe_sem_sinal, "recebe_falhas": b.recebe_falhas,
+            "recebe_evasao": b.recebe_evasao, "recebe_monitor": b.recebe_monitor}
 
 
 @app.get("/api/alertas/destinatarios", dependencies=[Depends(P_WHATSAPP)])
@@ -990,8 +1003,8 @@ def criar_destinatario(b: DestinatarioIn):
     with closing(db()) as con:
         if con.execute("SELECT 1 FROM alerta_destinatarios WHERE whatsapp=%s", (v["whatsapp"],)).fetchone():
             raise HTTPException(409, "esse número já está cadastrado")
-        con.execute("""INSERT INTO alerta_destinatarios(nome,whatsapp,ativo,recebe_sem_sinal,recebe_falhas,criado_em)
-                       VALUES(%(nome)s,%(whatsapp)s,%(ativo)s,%(recebe_sem_sinal)s,%(recebe_falhas)s,%(t)s)""", {**v, "t": time.time()})
+        con.execute("""INSERT INTO alerta_destinatarios(nome,whatsapp,ativo,recebe_sem_sinal,recebe_falhas,recebe_evasao,recebe_monitor,criado_em)
+                       VALUES(%(nome)s,%(whatsapp)s,%(ativo)s,%(recebe_sem_sinal)s,%(recebe_falhas)s,%(recebe_evasao)s,%(recebe_monitor)s,%(t)s)""", {**v, "t": time.time()})
         con.commit()
     return {"ok": True}
 
@@ -1005,7 +1018,8 @@ def editar_destinatario(dest_id: int, b: DestinatarioIn):
         if con.execute("SELECT 1 FROM alerta_destinatarios WHERE whatsapp=%s AND id<>%s", (v["whatsapp"], dest_id)).fetchone():
             raise HTTPException(409, "esse número já está cadastrado")
         con.execute("""UPDATE alerta_destinatarios SET nome=%(nome)s, whatsapp=%(whatsapp)s, ativo=%(ativo)s,
-                       recebe_sem_sinal=%(recebe_sem_sinal)s, recebe_falhas=%(recebe_falhas)s WHERE id=%(id)s""", {**v, "id": dest_id})
+                       recebe_sem_sinal=%(recebe_sem_sinal)s, recebe_falhas=%(recebe_falhas)s,
+                       recebe_evasao=%(recebe_evasao)s, recebe_monitor=%(recebe_monitor)s WHERE id=%(id)s""", {**v, "id": dest_id})
         con.commit()
     return {"ok": True}
 
@@ -1958,7 +1972,7 @@ def _clipe_da_saida(con, antena_id, now: float):
 
 
 @app.post("/api/saida", dependencies=[Depends(saida_auth)])
-def registrar_saida(payload: SaidaIn):
+def registrar_saida(payload: SaidaIn, background: BackgroundTasks):
     payload.epc = epc_manual(payload.epc) or ""
     if not payload.epc:
         raise HTTPException(400, "epc é obrigatório")
@@ -1981,6 +1995,8 @@ def registrar_saida(payload: SaidaIn):
                     (payload.epc, payload.destino_id, now, 1 if documentado else 0,
                      match["id"] if match else None, antena_id, clipe_id))
         con.commit()
+    if not documentado:
+        background.add_task(avisar_evasao, payload.epc, destino["nome"], clipe_id, now)
     return {"epc": payload.epc, "destino": destino["nome"], "documentado": documentado, "detectado_em": now, "clipe_id": clipe_id}
 
 
@@ -2153,7 +2169,8 @@ def agente_config(ag: dict = Depends(agente_auth)):
         antenas = con.execute("""SELECT id,nome,modelo,ip,porta,modo,alerta,evasao FROM antenas
                                  WHERE ip IS NOT NULL AND ip<>'' ORDER BY nome""").fetchall()
         # câmeras sem playback (tipo rtsp): o agente precisa gravar o ao vivo ANTES da evasão para ter o "10 s antes"
-        cameras = con.execute("""SELECT id, nome, ip, canal, rtsp_path FROM cameras WHERE tipo='rtsp' ORDER BY nome""").fetchall()
+        cameras = con.execute("""SELECT id, nome, ip, canal, rtsp_path FROM cameras
+                                 WHERE tipo='rtsp' AND (agente_id IS NULL OR agente_id=%s) ORDER BY nome""", (ag["id"],)).fetchall()
     return {"agente": ag["nome"], "intervalo_seg": AGENTE_INTERVALO_SEG, "antenas": antenas, "cameras": cameras}
 
 
@@ -2212,25 +2229,26 @@ def agente_status(b: StatusIn, ag: dict = Depends(agente_auth)):
                     (now, now - 120))
         cmds = con.execute("""UPDATE comandos SET status='enviado', enviado_em=%s WHERE status='pendente'
                               RETURNING id, antena_id, metodo, caminho, corpo""", (now,)).fetchall()
-        clipes = _clipes_para_agente(con, now)
+        clipes = _clipes_para_agente(con, now, ag["id"])
         con.commit()
     return {"ok": True, "comandos": cmds, "clipes": clipes}
 
 
 # ---------- vídeo da evasão: câmeras (canal do DVR) e clipes ----------
 
-def _clipes_para_agente(con, now: float) -> list:
+def _clipes_para_agente(con, now: float, agente_id: int | None = None) -> list:
     """Clipes cujo período já terminou de gravar e ainda não foram buscados; marca como enviados.
     Também encerra o que ficou preso (agente caiu no meio, ou nenhum agente buscou a tempo)."""
     con.execute("""UPDATE clipes SET status='erro', concluido_em=%s, erro='o agente não concluiu a busca no DVR'
                    WHERE status='enviado' AND enviado_em<%s""", (now, now - CLIPE_TIMEOUT_SEG))
     con.execute("""UPDATE clipes SET status='erro', concluido_em=%s, erro='nenhum agente buscou o trecho a tempo (o DVR sobrescreve gravações antigas)'
                    WHERE status='aguardando' AND fim<%s""", (now, now - 6 * 3600))
-    return con.execute("""UPDATE clipes c SET status='enviado', enviado_em=%s
+    return con.execute("""UPDATE clipes c SET status='enviado', enviado_em=%s, agente_id=%s
                           FROM cameras m WHERE m.id=c.camera_id AND c.status='aguardando' AND c.fim+%s<=%s
+                            AND (m.agente_id IS NULL OR m.agente_id=%s)
                           RETURNING c.id, c.camera_id, c.t0, c.inicio, c.fim, m.nome camera, m.ip, m.porta, m.canal, m.gravacao,
                                     m.tipo, m.rtsp_path""",
-                       (now, CLIPE_MARGEM_SEG, now)).fetchall()
+                       (now, agente_id, CLIPE_MARGEM_SEG, now, agente_id)).fetchall()
 
 
 def purgar_clipes():
@@ -2242,6 +2260,117 @@ def purgar_clipes():
         (CLIPES_DIR / f"{r['id']}.mp4").unlink(missing_ok=True)
 
 
+# ---------- aviso de evasão por WhatsApp (com link do vídeo) ----------
+
+def _assina_clipe(clipe_id: int, exp: int) -> str:
+    return hmac.new(SESSION_SECRET, f"clipe:{clipe_id}:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def link_clipe(clipe_id: int, horas: int | None = None) -> str:
+    """Link que abre o vídeo sem login, assinado e com validade (quem recebe no WhatsApp não precisa entrar no painel)."""
+    exp = int(time.time() + (horas or CLIPE_LINK_HORAS) * 3600)
+    return f"{PUBLIC_URL}/v/{clipe_id}?e={exp}&s={_assina_clipe(clipe_id, exp)}"
+
+
+def _rotulo_peca(r) -> str:
+    base = r["item_nome"] or r["item_tipo"] or "peça sem cadastro"
+    return f"{base} ({r['epc'][-8:]})"
+
+
+def avisar_evasao(epc: str, destino: str, clipe_id: int | None, quando: float):
+    """Evasão (saída sem documento): avisa na hora; várias peças da mesma passagem dividem um aviso (e um clipe)."""
+    try:
+        with closing(db()) as con:
+            if clipe_id:
+                if not con.execute("UPDATE clipes SET alertado=TRUE WHERE id=%s AND NOT alertado RETURNING id", (clipe_id,)).fetchone():
+                    return  # outra peça desta passagem já avisou; o aviso do vídeo lista todas
+                con.commit()
+            else:
+                ult = state.setdefault("evasao_aviso", {})
+                if quando - ult.get(epc, 0) < 300:
+                    return
+                ult[epc] = quando
+            it = con.execute("SELECT nome, tipo FROM itens WHERE epc=%s", (epc,)).fetchone()
+        peca = _rotulo_peca({"item_nome": it and it["nome"], "item_tipo": it and it["tipo"], "epc": epc})
+        hora = time.strftime("%H:%M:%S", time.gmtime(quando + TZ_OFFSET))
+        extra = " O vídeo chega em cerca de 1 minuto." if clipe_id else ""
+        notificar("evasao", f"🚨 Cabine RFID — EVASÃO: peça sem documento saindo por {destino} às {hora}: {peca}.{extra}")
+    except Exception as e:  # noqa: BLE001
+        print("aviso de evasão falhou:", e, flush=True)
+
+
+def avisar_video_pronto(clipe_id: int):
+    """Quando o clipe fica pronto (ou falha), manda o link com as peças da passagem — uma vez por clipe."""
+    try:
+        with closing(db()) as con:
+            c = con.execute("SELECT status, erro FROM clipes WHERE id=%s", (clipe_id,)).fetchone()
+            if not c or c["status"] not in ("ok", "erro"):
+                return
+            pecas = con.execute("""SELECT s.epc, i.nome item_nome, i.tipo item_tipo, d.nome destino FROM eventos_saida s
+                                   JOIN destinos d ON d.id=s.destino_id LEFT JOIN itens i ON i.epc=s.epc
+                                   WHERE s.clipe_id=%s AND s.documentado=0 ORDER BY s.detectado_em""", (clipe_id,)).fetchall()
+            if not pecas or not con.execute("UPDATE clipes SET link_enviado=TRUE WHERE id=%s AND NOT link_enviado RETURNING id", (clipe_id,)).fetchone():
+                return  # teste de câmera / só peças documentadas / já avisado
+            con.commit()
+        lista = ", ".join(_rotulo_peca(p) for p in pecas[:8]) + (f" e mais {len(pecas) - 8}" if len(pecas) > 8 else "")
+        if c["status"] == "ok":
+            texto = f"🎥 Cabine RFID — vídeo da evasão ({len(pecas)} peça(s): {lista}): {link_clipe(clipe_id)} (link válido por {CLIPE_LINK_HORAS} h)"
+        else:
+            texto = f"⚠️ Cabine RFID — não foi possível obter o vídeo da evasão ({lista}): {c['erro'] or 'erro desconhecido'}. Veja a tela Alertas de evasão."
+        notificar("evasao", texto)
+    except Exception as e:  # noqa: BLE001
+        print("aviso do vídeo falhou:", e, flush=True)
+
+
+@app.get("/v/{clipe_id}")
+def video_publico(clipe_id: int, e: int, s: str):
+    """Vídeo do clipe pelo link assinado do WhatsApp (sem login). Expira; a assinatura vale só para este clipe."""
+    if e < time.time() or not hmac.compare_digest(s, _assina_clipe(clipe_id, e)):
+        raise HTTPException(403, "link inválido ou expirado")
+    arq = CLIPES_DIR / f"{clipe_id}.mp4"
+    with closing(db()) as con:
+        ok = con.execute("SELECT 1 FROM clipes WHERE id=%s AND status='ok'", (clipe_id,)).fetchone()
+    if not ok or not arq.is_file():
+        raise HTTPException(404, "vídeo não disponível")
+    return FileResponse(arq, media_type="video/mp4", headers={"Cache-Control": "private, no-store", "X-Robots-Tag": "noindex"})
+
+
+@app.get("/api/clipes-zip", dependencies=[Depends(P_CONSULTAR)])
+def baixar_clipes(ids: str):
+    """Vários clipes de uma vez (.zip). ids = lista separada por vírgula."""
+    try:
+        lista = list(dict.fromkeys(int(x) for x in ids.split(",") if x.strip()))
+    except ValueError:
+        raise HTTPException(400, "ids inválidos")
+    if not lista or len(lista) > CLIPE_ZIP_MAX:
+        raise HTTPException(400, f"informe de 1 a {CLIPE_ZIP_MAX} clipes")
+    import tempfile, zipfile
+    with closing(db()) as con:
+        rows = con.execute("""SELECT c.id, c.t0, m.nome camera FROM clipes c JOIN cameras m ON m.id=c.camera_id
+                              WHERE c.id = ANY(%s) AND c.status='ok' ORDER BY c.t0""", (lista,)).fetchall()
+    tmp = tempfile.SpooledTemporaryFile(max_size=32 * 1024 * 1024)
+    n = 0
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:  # mp4 já é comprimido
+        for r in rows:
+            arq = CLIPES_DIR / f"{r['id']}.mp4"
+            if arq.is_file():
+                nome_cam = re.sub(r"[^A-Za-z0-9_-]+", "_", r["camera"])[:30]
+                z.write(arq, f"evasao-{time.strftime('%Y%m%d-%H%M%S', time.localtime(r['t0']))}-{nome_cam}-{r['id']}.mp4")
+                n += 1
+    if not n:
+        tmp.close()
+        raise HTTPException(404, "nenhum dos clipes está disponível")
+    tmp.seek(0)
+    from starlette.background import BackgroundTask
+    from starlette.responses import StreamingResponse
+
+    def partes():
+        while b := tmp.read(1024 * 1024):
+            yield b
+    return StreamingResponse(partes(), media_type="application/zip", background=BackgroundTask(tmp.close),
+                             headers={"Content-Disposition": 'attachment; filename="clipes-evasao.zip"'})
+
+
 class CameraIn(BaseModel):
     nome: str
     ip: str
@@ -2250,12 +2379,13 @@ class CameraIn(BaseModel):
     gravacao: str = "continua"
     tipo: str = "dvr"  # dvr (Intelbras/Dahua, playback) | hikvision (playback ISAPI/RTSP) | rtsp (só ao vivo, ex. Mibo iM: o agente mantém um buffer)
     rtsp_path: str | None = None  # só tipo rtsp; vazio = /cam/realmonitor?channel={canal}&subtype=0
+    agente_id: int | None = None  # agente (PC do hotel) que alcança esta câmera; vazio = qualquer agente
 
 
 RTSP_PATH = re.compile(r"/?[A-Za-z0-9_\-/.?=&{}]{1,200}")
 
 
-def _valida_camera(p: CameraIn) -> dict:
+def _valida_camera(p: CameraIn, con=None) -> dict:
     nome, ip = p.nome.strip(), p.ip.strip()
     if not nome:
         raise HTTPException(400, "nome é obrigatório")
@@ -2272,24 +2402,27 @@ def _valida_camera(p: CameraIn) -> dict:
     path = (p.rtsp_path or "").strip() or None
     if path and (p.tipo != "rtsp" or not RTSP_PATH.fullmatch(path) or ".." in path):
         raise HTTPException(400, "caminho RTSP inválido (só para o tipo rtsp; ex.: /cam/realmonitor?channel={canal}&subtype=0)")
-    return {"nome": nome, "ip": ip, "porta": p.porta, "canal": p.canal, "gravacao": p.gravacao, "tipo": p.tipo, "rtsp_path": path}
+    if p.agente_id and con is not None and not con.execute("SELECT 1 FROM agentes WHERE id=%s", (p.agente_id,)).fetchone():
+        raise HTTPException(400, "agente inválido")
+    return {"nome": nome, "ip": ip, "porta": p.porta, "canal": p.canal, "gravacao": p.gravacao, "tipo": p.tipo, "rtsp_path": path,
+            "agente_id": p.agente_id or None}
 
 
 @app.get("/api/cameras", dependencies=[Depends(P_CONSULTAR)])
 def listar_cameras():
     with closing(db()) as con:
-        return con.execute("""SELECT m.*, (SELECT string_agg(a.nome, ', ' ORDER BY a.nome) FROM antenas a WHERE a.camera_id=m.id) antenas
-                              FROM cameras m ORDER BY m.nome""").fetchall()
+        return con.execute("""SELECT m.*, g.nome agente, (SELECT string_agg(a.nome, ', ' ORDER BY a.nome) FROM antenas a WHERE a.camera_id=m.id) antenas
+                              FROM cameras m LEFT JOIN agentes g ON g.id=m.agente_id ORDER BY m.nome""").fetchall()
 
 
 @app.post("/api/cameras", dependencies=[Depends(P_CADASTROS)])
 def salvar_camera(payload: CameraIn):
-    v = _valida_camera(payload)
     with closing(db()) as con:
+        v = _valida_camera(payload, con)
         if con.execute("SELECT 1 FROM cameras WHERE nome=%s", (v["nome"],)).fetchone():
             raise HTTPException(409, "já existe câmera com esse nome (use Editar)")
-        cid = con.execute("""INSERT INTO cameras(nome,ip,porta,canal,gravacao,tipo,rtsp_path,criado_em)
-                             VALUES(%(nome)s,%(ip)s,%(porta)s,%(canal)s,%(gravacao)s,%(tipo)s,%(rtsp_path)s,%(t)s) RETURNING id""",
+        cid = con.execute("""INSERT INTO cameras(nome,ip,porta,canal,gravacao,tipo,rtsp_path,agente_id,criado_em)
+                             VALUES(%(nome)s,%(ip)s,%(porta)s,%(canal)s,%(gravacao)s,%(tipo)s,%(rtsp_path)s,%(agente_id)s,%(t)s) RETURNING id""",
                           {**v, "t": time.time()}).fetchone()["id"]
         con.commit()
     return {"ok": True, "id": cid}
@@ -2297,14 +2430,14 @@ def salvar_camera(payload: CameraIn):
 
 @app.put("/api/cameras/{camera_id}", dependencies=[Depends(P_CADASTROS)])
 def editar_camera(camera_id: int, payload: CameraIn):
-    v = _valida_camera(payload)
     with closing(db()) as con:
+        v = _valida_camera(payload, con)
         if not con.execute("SELECT 1 FROM cameras WHERE id=%s", (camera_id,)).fetchone():
             raise HTTPException(404, "câmera não encontrada")
         if con.execute("SELECT 1 FROM cameras WHERE nome=%s AND id<>%s", (v["nome"], camera_id)).fetchone():
             raise HTTPException(409, "já existe outra câmera com esse nome")
         con.execute("""UPDATE cameras SET nome=%(nome)s, ip=%(ip)s, porta=%(porta)s, canal=%(canal)s, gravacao=%(gravacao)s,
-                       tipo=%(tipo)s, rtsp_path=%(rtsp_path)s WHERE id=%(id)s""",
+                       tipo=%(tipo)s, rtsp_path=%(rtsp_path)s, agente_id=%(agente_id)s WHERE id=%(id)s""",
                     {**v, "id": camera_id})
         con.commit()
     return {"ok": True}
@@ -2363,12 +2496,14 @@ def video_clipe(clipe_id: int):
 
 
 @app.put("/api/agente/clipes/{clipe_id}/arquivo")
-async def agente_clipe_arquivo(clipe_id: int, request: Request, _: dict = Depends(agente_auth)):
+async def agente_clipe_arquivo(clipe_id: int, request: Request, ag: dict = Depends(agente_auth)):
     """O agente envia o mp4 do trecho (corpo bruto). Grava em CLIPES_DIR/<id>.mp4 e marca o clipe como ok."""
     with closing(db()) as con:
-        c = con.execute("SELECT status FROM clipes WHERE id=%s", (clipe_id,)).fetchone()
+        c = con.execute("SELECT status, agente_id FROM clipes WHERE id=%s", (clipe_id,)).fetchone()
     if not c:
         raise HTTPException(404, "clipe não encontrado")
+    if c["agente_id"] not in (None, ag["id"]):
+        raise HTTPException(403, "este clipe foi pedido a outro agente")
     if c["status"] != "enviado":
         raise HTTPException(409, f"clipe está '{c['status']}', não aguarda arquivo")
     CLIPES_DIR.mkdir(parents=True, exist_ok=True)
@@ -2393,6 +2528,7 @@ async def agente_clipe_arquivo(clipe_id: int, request: Request, _: dict = Depend
         con.execute("UPDATE clipes SET status='ok', arquivo=%s, tamanho=%s, erro=NULL, concluido_em=%s WHERE id=%s",
                     (f"{clipe_id}.mp4", total, time.time(), clipe_id))
         con.commit()
+    await asyncio.to_thread(avisar_video_pronto, clipe_id)
     return {"ok": True, "tamanho": total}
 
 
@@ -2401,11 +2537,14 @@ class ClipeErroIn(BaseModel):
 
 
 @app.post("/api/agente/clipes/{clipe_id}/erro")
-def agente_clipe_erro(clipe_id: int, b: ClipeErroIn, _: dict = Depends(agente_auth)):
+def agente_clipe_erro(clipe_id: int, b: ClipeErroIn, background: BackgroundTasks, ag: dict = Depends(agente_auth)):
     with closing(db()) as con:
-        con.execute("UPDATE clipes SET status='erro', erro=%s, concluido_em=%s WHERE id=%s AND status='enviado'",
-                    (b.mensagem[:500], time.time(), clipe_id))
+        r = con.execute("""UPDATE clipes SET status='erro', erro=%s, concluido_em=%s
+                           WHERE id=%s AND status='enviado' AND (agente_id IS NULL OR agente_id=%s) RETURNING id""",
+                        (b.mensagem[:500], time.time(), clipe_id, ag["id"])).fetchone()
         con.commit()
+    if r:
+        background.add_task(avisar_video_pronto, clipe_id)
     return {"ok": True}
 
 

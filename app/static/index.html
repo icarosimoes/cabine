@@ -377,7 +377,9 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <label class="mut">até <input id="evAte" type="date"></label>
     <button id="evAplicar">filtrar</button>
     <button id="evLimpar">limpar</button>
+    <button id="evZip" title="Baixa os vídeos marcados (ou todos os prontos da lista) num .zip">⬇ baixar vídeos (.zip)</button>
   </div>
+  <div id="evMsg" class="msg"></div>
   <div class="scroll"><table class="rt"><thead><tr><th>Data</th><th>EPC</th><th>Destino</th><th>Status</th><th>Vídeo</th></tr></thead><tbody id="evasoes"></tbody></table></div>
 </section>
 </div>
@@ -611,11 +613,13 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <input id="wdNumero" type="text" placeholder="WhatsApp com DDD ou ID do grupo (...@g.us)" style="width:280px"><button id="wdGrupos" type="button">Buscar grupos</button><input id="wdGrupoBusca" type="text" placeholder="filtrar grupo pelo nome" style="width:200px" hidden><select id="wdGrupoSel" hidden></select>
     <label class="mut"><input id="wdSem" type="checkbox" checked> Rádio sem sinal</label>
     <label class="mut"><input id="wdFalhas" type="checkbox" checked> Falhas no /ingest</label>
+    <label class="mut"><input id="wdEvasao" type="checkbox" checked> Evasão (com vídeo)</label>
+    <label class="mut"><input id="wdMonitor" type="checkbox" checked> Monitoramento (uptime, Evolution)</label>
     <label class="mut"><input id="wdAtivo" type="checkbox" checked> Ativo</label>
     <button class="acc" id="wdSalvar">Cadastrar</button><button id="wdCancelar" type="button" hidden>Cancelar edição</button>
   </div>
   <div id="wdMsg" class="msg"></div>
-  <div class="scroll"><table class="rt"><thead><tr><th>Nome</th><th>WhatsApp</th><th>Sem sinal</th><th>Falhas</th><th>Ativo</th><th></th></tr></thead><tbody id="wdLista"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Nome</th><th>WhatsApp</th><th>Sem sinal</th><th>Falhas</th><th>Evasão</th><th>Monit.</th><th>Ativo</th><th></th></tr></thead><tbody id="wdLista"></tbody></table></div>
   <h2 style="margin-top:12px"><span>Últimos envios</span></h2>
   <div class="scroll"><table class="rt"><thead><tr><th>Quando</th><th>Destinatário</th><th>Tipo</th><th>Status</th><th>Detalhe</th></tr></thead><tbody id="wdEnvios"></tbody></table></div>
 </section>
@@ -687,13 +691,14 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <label class="mut">Tipo <select id="cmTipo"><option value="dvr">DVR/NVR Intelbras (playback)</option><option value="hikvision">Hikvision: DVR/NVR/câmera com SD (playback)</option><option value="rtsp">Câmera só ao vivo: Mibo, Hikvision... (buffer)</option></select></label>
     <label class="mut">IP <input id="cmIp" type="text" placeholder="192.168.30.60" style="width:140px"></label>
     <label class="mut" id="cmPortaBox">Porta HTTP <input id="cmPorta" type="number" min="1" max="65535" value="80" style="width:80px"></label>
+    <label class="mut" id="cmAgenteBox" title="PC do hotel (agente) que alcança esta câmera na rede local. Em branco, qualquer agente serve." hidden>Agente <select id="cmAgente"><option value="">qualquer</option></select></label>
     <label class="mut" id="cmCanalLbl" title="Câmera Wi-Fi: normalmente 1">Canal <input id="cmCanal" type="number" min="1" max="256" value="1" style="width:70px"></label>
     <label class="mut" id="cmGravBox" title="Com gravação só por movimento, o trecho de antes/depois pode não existir no DVR">Gravação <select id="cmGravacao"><option value="continua">contínua (24 h)</option><option value="movimento">só por movimento</option></select></label>
     <label class="mut" id="cmPathBox" title="Deixe em branco para o padrão das Mibo iM. {canal} vira o número do canal." hidden>Caminho RTSP (avançado) <input id="cmPath" type="text" placeholder="Mibo: /cam/realmonitor?channel={canal}&amp;subtype=0 · Hikvision: /Streaming/Channels/{canal}01" style="width:420px"></label>
     <button class="acc" id="cmSalvar">Salvar</button><button id="cmCancelar" type="button" hidden>Cancelar edição</button>
   </div>
   <div id="cameraMsg" class="msg"></div>
-  <div class="scroll"><table><thead><tr><th>Nome</th><th>Tipo</th><th>IP</th><th>Canal</th><th>Gravação</th><th>Antenas</th><th></th></tr></thead><tbody id="cameras"></tbody></table></div>
+  <div class="scroll"><table><thead><tr><th>Nome</th><th>Tipo</th><th>IP</th><th>Canal</th><th>Gravação</th><th>Agente</th><th>Antenas</th><th></th></tr></thead><tbody id="cameras"></tbody></table></div>
 </section>
 <section id="secAgentes" hidden>
   <h2><span>Agente do hotel (Windows)</span></h2>
@@ -766,7 +771,7 @@ const LOADERS={
   eventos:async()=>{const evs=await j('/api/events?limit=100'+(epc?'&epc='+encodeURIComponent(epc):''));
     $('evs').innerHTML=evs.map(e=>`<tr><td>${dt(e.received_at)}</td><td class="epc" data-e="${esc(e.epc)}">${esc(e.epc)}</td><td>${itemTipo(e.tipo,e.nome)}</td><td>${esc(e.antenna)}</td><td>${e.rssi??'–'}</td></tr>`).join('')||'<tr><td colspan=5>sem eventos</td></tr>'},
 };
-const ROTULO_ALERTA={antena_offline:'Antena offline',agente_offline:'Agente sem contato',webhook_falha:'Webhook do rádio',sem_sinal:'Rádio sem sinal',falhas:'Falhas no /ingest',divergencia:'Divergência',teste:'Teste'};
+const ROTULO_ALERTA={antena_offline:'Antena offline',agente_offline:'Agente sem contato',webhook_falha:'Webhook do rádio',sem_sinal:'Rádio sem sinal',falhas:'Falhas no /ingest',divergencia:'Divergência',evasao:'Evasão',monitor:'Monitoramento',teste:'Teste'};
 const ha=t=>{if(!t)return '–';const a=Date.now()/1000-t;return a<5?'agora':a<90?Math.round(a)+'s atrás':a<5400?Math.round(a/60)+' min atrás':a<172800?Math.round(a/3600)+' h atrás':Math.round(a/86400)+' d atrás'};
 const pillStatus=o=>o===true?'<span class="pill ok">online</span>':o===false?'<span class="pill alerta">OFFLINE</span>':'<span class="pill cinza">sem informação</span>';
 async function carregarDashboard(){
@@ -1136,7 +1141,7 @@ function montaFiltroEvasao(){
 }
 function videoCelula(s){
   if(!s.clipe_id)return '<span class="mut">–</span>';
-  if(s.clipe_status==='ok')return `<button data-clipe="${s.clipe_id}" data-when="${esc(dt(s.detectado_em))}">▶ assistir</button>`;
+  if(s.clipe_status==='ok')return `<label class="mut" title="marcar para baixar"><input type="checkbox" class="evSel" value="${s.clipe_id}"></label> <button data-clipe="${s.clipe_id}" data-when="${esc(dt(s.detectado_em))}">▶ assistir</button>`;
   if(s.clipe_status==='erro')return `<span class="pill alerta" title="${esc(s.clipe_erro||'')}">falhou</span> <span class="mut">${esc((s.clipe_erro||'').slice(0,60))}</span>`;
   return `<span class="mut">${s.clipe_status==='enviado'?'buscando no DVR…':'gravando (aguarda 60 s depois da leitura)…'}</span>`;
 }
@@ -1159,6 +1164,15 @@ async function carregarEvasoes(){
   </tr>`).join('')||'<tr><td colspan=5>nenhum evento de saída registrado</td></tr>';
 }
 $('evAplicar').onclick=carregarEvasoes;
+$('evZip').onclick=()=>{
+  const marcados=[...document.querySelectorAll('.evSel:checked')].map(x=>x.value);
+  const ids=marcados.length?marcados:[...new Set([...document.querySelectorAll('.evSel')].map(x=>x.value))];
+  const msg=$('evMsg');
+  if(!ids.length){msg.className='msg bad';msg.textContent='nenhum vídeo pronto na lista';return}
+  if(ids.length>40){msg.className='msg bad';msg.textContent='no máximo 40 vídeos por vez — marque menos ou filtre a lista';return}
+  msg.className='msg ok';msg.textContent=`baixando ${ids.length} vídeo(s)…`;
+  location.href='/api/clipes-zip?ids='+ids.join(',');
+};
 $('evLimpar').onclick=()=>{$('evDestino').value='';$('evDocumentado').value='';$('evDesde').value='';$('evAte').value='';carregarEvasoes()};
 
 const INV_FILTROS=[['invLocal','localizacoes','localizacao'],['invEstado','estados','estado'],['invTipo','tipos','tipo'],
@@ -1342,14 +1356,14 @@ $('waSalvar').onclick=async()=>{
 let wdCache=[],wdEdit=null;
 async function carregarDestinatariosWa(){
   wdCache=await j('/api/alertas/destinatarios');
-  $('wdLista').innerHTML=wdCache.map(d=>`<tr><td>${esc(d.nome)}</td><td>${esc(d.whatsapp)}</td><td>${d.recebe_sem_sinal?'sim':'não'}</td><td>${d.recebe_falhas?'sim':'não'}</td>
+  $('wdLista').innerHTML=wdCache.map(d=>`<tr><td>${esc(d.nome)}</td><td>${esc(d.whatsapp)}</td><td>${d.recebe_sem_sinal?'sim':'não'}</td><td>${d.recebe_falhas?'sim':'não'}</td><td>${d.recebe_evasao?'sim':'não'}</td><td>${d.recebe_monitor?'sim':'não'}</td>
     <td>${d.ativo?'<span class="pill ok">ativo</span>':'inativo'}</td>
-    <td><button data-wt="${d.id}">Testar</button> <button data-we="${d.id}">Editar</button> <button data-wx="${d.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=6>ninguém cadastrado — ninguém será avisado</td></tr>';
+    <td><button data-wt="${d.id}">Testar</button> <button data-we="${d.id}">Editar</button> <button data-wx="${d.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=8>ninguém cadastrado — ninguém será avisado</td></tr>';
   const env=await j('/api/alertas/envios?limit=30');
   $('wdEnvios').innerHTML=env.map(e=>`<tr><td>${dt(e.quando)}</td><td>${esc(e.nome||'–')}</td><td>${esc(e.tipo)}</td>
     <td>${e.status==='enviado'?'<span class="pill ok">enviado</span>':'<span class="pill alerta">erro</span>'}</td><td>${esc(e.detalhe||'')}</td></tr>`).join('')||'<tr><td colspan=5>nenhum envio ainda</td></tr>';
 }
-function limparDest(){wdEdit=null;$('wdNome').value='';$('wdNumero').value='';$('wdSem').checked=$('wdFalhas').checked=$('wdAtivo').checked=true;$('wdSalvar').textContent='Cadastrar';$('wdCancelar').hidden=true}
+function limparDest(){wdEdit=null;$('wdNome').value='';$('wdNumero').value='';$('wdSem').checked=$('wdFalhas').checked=$('wdEvasao').checked=$('wdMonitor').checked=$('wdAtivo').checked=true;$('wdSalvar').textContent='Cadastrar';$('wdCancelar').hidden=true}
 $('wdCancelar').onclick=limparDest;
 let wdGrupos=[],wdPoll=null;
 function filtraGrupos(){
@@ -1379,14 +1393,14 @@ $('wdLista').addEventListener('click',async e=>{
   const m=$('wdMsg'),t=e.target.closest('[data-wt]'),ed=e.target.closest('[data-we]'),x=e.target.closest('[data-wx]');
   try{
     if(t){m.className='msg';m.textContent='enviando…';await j('/api/alertas/destinatarios/'+t.dataset.wt+'/teste',{method:'POST'});m.className='msg ok';m.textContent='mensagem de teste enviada — confira o WhatsApp';await carregarDestinatariosWa()}
-    if(ed){const d=wdCache.find(v=>v.id===Number(ed.dataset.we));wdEdit=d.id;$('wdNome').value=d.nome;$('wdNumero').value=d.whatsapp;$('wdSem').checked=d.recebe_sem_sinal;$('wdFalhas').checked=d.recebe_falhas;$('wdAtivo').checked=d.ativo;$('wdSalvar').textContent='Atualizar';$('wdCancelar').hidden=false;$('wdNome').focus()}
+    if(ed){const d=wdCache.find(v=>v.id===Number(ed.dataset.we));wdEdit=d.id;$('wdNome').value=d.nome;$('wdNumero').value=d.whatsapp;$('wdSem').checked=d.recebe_sem_sinal;$('wdFalhas').checked=d.recebe_falhas;$('wdEvasao').checked=d.recebe_evasao;$('wdMonitor').checked=d.recebe_monitor;$('wdAtivo').checked=d.ativo;$('wdSalvar').textContent='Atualizar';$('wdCancelar').hidden=false;$('wdNome').focus()}
     if(x&&confirm('Excluir este destinatário?')){await j('/api/alertas/destinatarios/'+x.dataset.wx,{method:'DELETE'});await carregarDestinatariosWa()}
   }catch(err){m.className='msg bad';m.textContent=err.message;await carregarDestinatariosWa()}
 });
 $('wdSalvar').onclick=async()=>{
   const m=$('wdMsg');
   try{await j(wdEdit?'/api/alertas/destinatarios/'+wdEdit:'/api/alertas/destinatarios',{method:wdEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({nome:$('wdNome').value,whatsapp:$('wdNumero').value,ativo:$('wdAtivo').checked,recebe_sem_sinal:$('wdSem').checked,recebe_falhas:$('wdFalhas').checked})});
+    body:JSON.stringify({nome:$('wdNome').value,whatsapp:$('wdNumero').value,ativo:$('wdAtivo').checked,recebe_sem_sinal:$('wdSem').checked,recebe_falhas:$('wdFalhas').checked,recebe_evasao:$('wdEvasao').checked,recebe_monitor:$('wdMonitor').checked})});
     m.className='msg ok';m.textContent=wdEdit?'destinatário atualizado':'destinatário cadastrado';limparDest();await carregarDestinatariosWa()}
   catch(e){m.className='msg bad';m.textContent=e.message}
 };
@@ -1403,19 +1417,22 @@ async function carregarSessoes(){
 let camerasCache=[],cameraEdit=null;
 async function carregarCameras(){
   camerasCache=await j('/api/cameras');
+  try{const ags=await j('/api/agentes');const cur=$('cmAgente').value;
+    $('cmAgente').innerHTML='<option value="">qualquer</option>'+ags.map(a=>`<option value="${a.id}">${esc(a.nome)}</option>`).join('');
+    $('cmAgente').value=cur;$('cmAgenteBox').hidden=false}catch(e){$('cmAgenteBox').hidden=true} // só quem administra o sistema escolhe o agente
   const sel=$('anCamera'),cur=sel.value;
   sel.innerHTML='<option value="">sem câmera</option>'+camerasCache.map(c=>`<option value="${c.id}">${esc(c.nome)}</option>`).join('');
   if(cur)sel.value=cur;
   $('cameras').innerHTML=camerasCache.map(c=>`<tr><td>${esc(c.nome)}</td><td>${c.tipo==='rtsp'?'Ao vivo (buffer)':c.tipo==='hikvision'?'Hikvision':'DVR/NVR Intelbras'}</td><td>${esc(c.ip)}${c.tipo==='rtsp'?'':':'+c.porta}</td><td>${c.canal}</td>
-    <td>${c.tipo==='rtsp'?'<span class="mut" title="o agente grava o ao vivo">ao vivo</span>':c.gravacao==='continua'?'contínua':'<span class="pill alerta" title="o trecho pode não existir">só movimento</span>'}</td><td>${esc(c.antenas||'–')}</td>
-    <td><button data-cedit="${c.id}">Editar</button> <button data-cteste="${c.id}">Testar</button> <button data-cdel="${c.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=7>nenhuma câmera cadastrada</td></tr>';
+    <td>${c.tipo==='rtsp'?'<span class="mut" title="o agente grava o ao vivo">ao vivo</span>':c.gravacao==='continua'?'contínua':'<span class="pill alerta" title="o trecho pode não existir">só movimento</span>'}</td><td>${c.agente?esc(c.agente):'<span class="mut">qualquer</span>'}</td><td>${esc(c.antenas||'–')}</td>
+    <td><button data-cedit="${c.id}">Editar</button> <button data-cteste="${c.id}">Testar</button> <button data-cdel="${c.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=8>nenhuma câmera cadastrada</td></tr>';
 }
 function tipoCamera(){ // campos do formulário conforme o tipo (DVR: porta HTTP e gravação; Wi-Fi: caminho RTSP)
   const w=$('cmTipo').value==='rtsp';$('cmPortaBox').hidden=w;$('cmGravBox').hidden=w;$('cmPathBox').hidden=!w;
 }
 $('cmTipo').onchange=tipoCamera;
 function limparCamera(){
-  cameraEdit=null;$('cmNome').value='';$('cmIp').value='';$('cmPorta').value=80;$('cmCanal').value=1;$('cmGravacao').value='continua';$('cmTipo').value='dvr';$('cmPath').value='';tipoCamera();
+  cameraEdit=null;$('cmNome').value='';$('cmIp').value='';$('cmPorta').value=80;$('cmCanal').value=1;$('cmGravacao').value='continua';$('cmTipo').value='dvr';$('cmPath').value='';$('cmAgente').value='';tipoCamera();
   $('cmTitulo').textContent='Câmeras (Intelbras)';$('cmSalvar').textContent='Salvar';$('cmCancelar').hidden=true;
 }
 $('cmCancelar').onclick=limparCamera;
@@ -1423,7 +1440,8 @@ $('cmSalvar').onclick=async()=>{
   const msg=$('cameraMsg'),nome=$('cmNome').value.trim(),ip=$('cmIp').value.trim();
   if(!nome||!ip){msg.className='msg bad';msg.textContent='informe nome e IP do DVR';return}
   const wifi=$('cmTipo').value==='rtsp';
-  const corpo={nome,ip,porta:Number($('cmPorta').value)||80,canal:Number($('cmCanal').value)||1,gravacao:wifi?'continua':$('cmGravacao').value,tipo:$('cmTipo').value,rtsp_path:wifi?($('cmPath').value.trim()||null):null};
+  const corpo={nome,ip,porta:Number($('cmPorta').value)||80,canal:Number($('cmCanal').value)||1,gravacao:wifi?'continua':$('cmGravacao').value,tipo:$('cmTipo').value,rtsp_path:wifi?($('cmPath').value.trim()||null):null,
+    agente_id:$('cmAgenteBox').hidden?((camerasCache.find(c=>c.id===cameraEdit)||{}).agente_id||null):($('cmAgente').value?Number($('cmAgente').value):null)};
   try{await j(cameraEdit?'/api/cameras/'+cameraEdit:'/api/cameras',{method:cameraEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)});
     msg.className='msg ok';msg.textContent=cameraEdit?'câmera atualizada':'câmera cadastrada';limparCamera();await carregarAntenas()}
   catch(e){msg.className='msg bad';msg.textContent=e.message}
@@ -1445,7 +1463,7 @@ async function testarCamera(id){
 $('cameras').addEventListener('click',async e=>{
   const ed=e.target.closest('[data-cedit]'),te=e.target.closest('[data-cteste]'),de=e.target.closest('[data-cdel]');
   if(ed){const c=camerasCache.find(x=>x.id===Number(ed.dataset.cedit));if(!c)return;cameraEdit=c.id;
-    $('cmNome').value=c.nome;$('cmIp').value=c.ip;$('cmPorta').value=c.porta;$('cmCanal').value=c.canal;$('cmGravacao').value=c.gravacao;$('cmTipo').value=c.tipo||'dvr';$('cmPath').value=c.rtsp_path||'';tipoCamera();
+    $('cmNome').value=c.nome;$('cmIp').value=c.ip;$('cmPorta').value=c.porta;$('cmCanal').value=c.canal;$('cmGravacao').value=c.gravacao;$('cmTipo').value=c.tipo||'dvr';$('cmPath').value=c.rtsp_path||'';$('cmAgente').value=c.agente_id||'';tipoCamera();
     $('cmTitulo').textContent='Editar câmera: '+c.nome;$('cmSalvar').textContent='Atualizar';$('cmCancelar').hidden=false;$('cmNome').scrollIntoView({block:'center'})}
   else if(te)testarCamera(Number(te.dataset.cteste));
   else if(de){const c=camerasCache.find(x=>x.id===Number(de.dataset.cdel));
