@@ -291,6 +291,18 @@ def init_db():
         con.execute("ALTER TABLE eventos_saida ADD COLUMN IF NOT EXISTS clipe_id INTEGER REFERENCES clipes(id) ON DELETE SET NULL")
 
         con.execute("""
+        CREATE TABLE IF NOT EXISTS divergencias(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          lote_id INTEGER, detectado INTEGER NOT NULL, esperado INTEGER,
+          usuario TEXT, observacao TEXT, avisados INTEGER NOT NULL DEFAULT 0,
+          tipos JSONB, criado_em DOUBLE PRECISION NOT NULL)""")  # divergência de quantidade informada na cabine (+ composição do lote por tipo)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_divergencias_quando ON divergencias(criado_em)")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS estacoes_controle(
+          nome TEXT PRIMARY KEY, usuario TEXT, visto_em DOUBLE PRECISION NOT NULL,
+          som BOOLEAN NOT NULL DEFAULT TRUE, pausada BOOLEAN NOT NULL DEFAULT FALSE,
+          intervalo_seg INTEGER, criado_em DOUBLE PRECISION NOT NULL)""")  # telas do Monitor ao vivo (heartbeat)
+        con.execute("""
         CREATE TABLE IF NOT EXISTS agentes(
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           nome TEXT NOT NULL UNIQUE,
@@ -576,7 +588,7 @@ def gravando() -> bool:
 
 CFG_PADRAO = {"wa_url": WA_URL, "wa_instance": WA_INSTANCE, "wa_apikey": WA_KEY,
               "ativo": "1", "sem_sinal_seg": str(ALERTA_SEM_SINAL_SEG), "falhas": str(ALERTA_FALHAS),
-              "repetir_min": str(ALERTA_REPETIR_MIN)}
+              "repetir_min": str(ALERTA_REPETIR_MIN), "uptime_min": "95"}
 
 
 def cfg() -> dict:
@@ -708,7 +720,90 @@ def avaliar_agentes(agora: float, antenas: list[dict], agentes: list[dict], c: d
     return msgs
 
 
-PERSISTE_ALERTA = ("antena:", "webhook:", "agente:", "cobertura:")  # derivados do banco; sem_sinal/falhas dependem de memória e ficam fora
+UPTIME_MIN_MINUTOS = 60  # só avalia a disponibilidade com pelo menos 1 h de checagens nas últimas 24 h
+
+
+def uptime_antenas(con, agora: float) -> dict:
+    """Disponibilidade (%) das últimas 24 h por antena: minuto online se algum agente a viu online."""
+    return {r["ref_id"]: r for r in con.execute("""
+        SELECT ref_id, COUNT(*) total, COUNT(*) FILTER (WHERE ok) ok FROM (
+          SELECT ref_id, BOOL_OR(online) ok FROM monitor_checagens WHERE tipo='antena' AND quando>=%s
+          GROUP BY ref_id, FLOOR(quando/60)) m GROUP BY ref_id""", (agora - 86400,)).fetchall()}
+
+
+def avaliar_uptime(agora: float, antenas: list[dict], ups: dict, c: dict) -> list[tuple[str, str]]:
+    """Alerta quando a disponibilidade 24 h de uma antena monitorada fica abaixo do mínimo; avisa quando volta ao normal."""
+    minimo = int(c.get("uptime_min") or 0)
+    msgs, repetir = [], int(c["repetir_min"])
+    for a in antenas:
+        if not (a["alerta"] or a.get("evasao")):
+            continue
+        chave, u = f"uptime:{a['id']}", ups.get(a["id"])
+        if not minimo or not u or u["total"] < UPTIME_MIN_MINUTOS:
+            if chave in state["alertas"] and not minimo:
+                del state["alertas"][chave]
+            continue
+        pct = 100 * u["ok"] / u["total"]
+        est = state["alertas"].get(chave)
+        pri = "🚨 EVASÃO — " if a.get("evasao") else ""
+        if pct < minimo and (est is None or agora - est >= repetir * 60):
+            state["alertas"][chave] = agora
+            msgs.append(("monitor", f"⚠️ Cabine RFID: {pri}a antena {a['nome']} ficou online só {pct:.1f}% do tempo nas últimas 24 h (mínimo {minimo}%)."))
+        elif pct >= minimo and est is not None:
+            del state["alertas"][chave]
+            msgs.append(("monitor", f"✅ Cabine RFID: {pri}a antena {a['nome']} voltou a {pct:.1f}% de disponibilidade nas últimas 24 h."))
+    return msgs
+
+
+def consultar_evolution(c: dict) -> dict | None:
+    """Estado da conexão da instância na Evolution ('open' = WhatsApp conectado). None = não configurada."""
+    if not (c["wa_apikey"] and c["wa_instance"]):
+        return None
+    req = urllib.request.Request(f"{c['wa_url'].rstrip('/')}/instance/connectionState/{urllib.parse.quote(c['wa_instance'])}",
+                                 headers={"apikey": c["wa_apikey"]})
+    try:
+        d = json.loads(urllib.request.urlopen(req, timeout=8).read() or b"{}")
+        estado = str((d.get("instance") or d).get("state") or "desconhecido")
+        return {"estado": estado, "ok": estado == "open", "erro": None}
+    except urllib.error.HTTPError as e:
+        return {"estado": "erro", "ok": False, "erro": f"Evolution respondeu HTTP {e.code} (instância não existe ou chave errada)"}
+    except Exception as e:  # noqa: BLE001
+        return {"estado": "inacessível", "ok": False, "erro": f"sem resposta da Evolution: {e}"}
+
+
+def avaliar_evolution(agora: float, c: dict) -> list[tuple[str, str]]:
+    """Checa a Evolution a cada 60 s. Cair avisa (se houver outro canal funcionando); voltar sempre avisa, com o tempo fora."""
+    ev = state.setdefault("evolution", {"verificado_em": 0, "estado": None, "ok": None, "erro": None, "desde": None})
+    if agora - ev["verificado_em"] < 60:
+        return []
+    r = consultar_evolution(c)
+    ev["verificado_em"] = agora
+    if r is None:
+        ev.update(estado=None, ok=None, erro=None)
+        state["alertas"].pop("evolution", None)
+        return []
+    if r["ok"] != ev["ok"]:
+        if not r["ok"] and ev.get("fora_desde") is None:
+            ev["fora_desde"] = agora
+        ev["desde"] = agora
+    fora_desde = ev.get("fora_desde") or state["alertas"].get("evolution")  # após restart, vale o início do alerta persistido
+    ev.update(r)
+    est = state["alertas"].get("evolution")
+    repetir = int(c["repetir_min"])
+    if not r["ok"] and (est is None or agora - est >= repetir * 60):
+        state["alertas"]["evolution"] = agora
+        return [("monitor", f"⚠️ Cabine RFID: o WhatsApp (Evolution) está desconectado — estado '{r['estado']}'. Os alertas não chegam até reconectar. {r['erro'] or ''}".strip())]
+    if r["ok"] and est is not None:
+        fora = int((agora - (fora_desde or est)) / 60)
+        del state["alertas"]["evolution"]
+        ev["fora_desde"] = None
+        return [("monitor", f"✅ Cabine RFID: o WhatsApp (Evolution) voltou a conectar (ficou fora por cerca de {fora} min; alertas desse período podem não ter chegado).")]
+    if r["ok"]:
+        ev["fora_desde"] = None
+    return []
+
+
+PERSISTE_ALERTA = ("antena:", "webhook:", "agente:", "cobertura:", "uptime:", "evolution")  # derivados do banco; sem_sinal/falhas dependem de memória e ficam fora
 
 
 def carregar_estado_alertas():
@@ -722,7 +817,8 @@ def carregar_estado_alertas():
 
 def salvar_estado_alertas(antenas: list[dict], agentes: list[dict]):
     """Grava no banco o estado dos alertas de antena/agente (só se mudou) e descarta os de itens que não existem mais."""
-    validas = {f"{p}{a['id']}" for a in antenas for p in ("antena:", "webhook:", "cobertura:")} | {f"agente:{g['id']}" for g in agentes}
+    validas = ({f"{p}{a['id']}" for a in antenas for p in ("antena:", "webhook:", "cobertura:", "uptime:")}
+               | {f"agente:{g['id']}" for g in agentes} | {"evolution"})
     for chave in [k for k in state["alertas"] if k.startswith(PERSISTE_ALERTA) and k not in validas]:
         del state["alertas"][chave]
     atual = {k: v for k, v in state["alertas"].items() if k.startswith(PERSISTE_ALERTA)}
@@ -752,6 +848,14 @@ def checar_alertas():
                                  JOIN antena_status s ON s.antena_id=a.id LEFT JOIN agentes g ON g.id=s.agente_id""").fetchall()
         agentes = con.execute("SELECT id,nome,visto_em FROM agentes").fetchall()
     for tipo, texto in avaliar_agentes(agora, antenas, agentes, c):
+        notificar(tipo, texto, c)
+    if agora - state.get("_uptime_chk", 0) >= 60:  # a disponibilidade só muda de minuto em minuto
+        state["_uptime_chk"] = agora
+        with closing(db()) as con:
+            ups = uptime_antenas(con, agora)
+        for tipo, texto in avaliar_uptime(agora, antenas, ups, c):
+            notificar(tipo, texto, c)
+    for tipo, texto in avaliar_evolution(agora, c):
         notificar(tipo, texto, c)
     salvar_estado_alertas(antenas, agentes)
 
@@ -936,6 +1040,7 @@ class AlertaCfg(BaseModel):
     sem_sinal_seg: int = 60
     falhas: int = 5
     repetir_min: int = 120
+    uptime_min: int = 95  # alerta quando a disponibilidade de uma antena monitorada nas últimas 24 h cair abaixo disto (0 desliga)
 
 
 @app.get("/api/config/alertas", dependencies=[Depends(P_WHATSAPP)])
@@ -943,17 +1048,18 @@ def ler_config_alertas():
     c = cfg()
     return {"wa_url": c["wa_url"], "wa_instance": c["wa_instance"], "wa_apikey_definida": bool(c["wa_apikey"]),
             "ativo": c["ativo"] == "1", "sem_sinal_seg": int(c["sem_sinal_seg"]),
-            "falhas": int(c["falhas"]), "repetir_min": int(c["repetir_min"]),
+            "falhas": int(c["falhas"]), "repetir_min": int(c["repetir_min"]), "uptime_min": int(c["uptime_min"]),
             "alertas_abertos": sorted(state["alertas"])}
 
 
 @app.put("/api/config/alertas", dependencies=[Depends(P_WHATSAPP)])
 def salvar_config_alertas(b: AlertaCfg):
-    if not (10 <= b.sem_sinal_seg <= 86400 and 1 <= b.falhas <= 1000 and 5 <= b.repetir_min <= 10080):
-        raise HTTPException(400, "limites inválidos (sem sinal 10–86400 s, falhas 1–1000, repetir 5–10080 min)")
+    if not (10 <= b.sem_sinal_seg <= 86400 and 1 <= b.falhas <= 1000 and 5 <= b.repetir_min <= 10080 and 0 <= b.uptime_min <= 100):
+        raise HTTPException(400, "limites inválidos (sem sinal 10–86400 s, falhas 1–1000, repetir 5–10080 min, uptime 0–100 %)")
     valores = {"wa_url": b.wa_url.strip() or CFG_PADRAO["wa_url"], "wa_instance": b.wa_instance.strip(),
                "ativo": "1" if b.ativo else "0",
-               "sem_sinal_seg": str(b.sem_sinal_seg), "falhas": str(b.falhas), "repetir_min": str(b.repetir_min)}
+               "sem_sinal_seg": str(b.sem_sinal_seg), "falhas": str(b.falhas), "repetir_min": str(b.repetir_min),
+               "uptime_min": str(b.uptime_min)}
     if b.wa_apikey.strip():
         valores["wa_apikey"] = b.wa_apikey.strip()
     with closing(db()) as con:
@@ -1154,6 +1260,7 @@ def dashboard(user: dict = Depends(P_DASH)):
         conf = con.execute("""SELECT id, status, esperados, conferidos, iniciada_em, finalizada_em FROM conferencias
                               ORDER BY iniciada_em DESC LIMIT 1""").fetchone()
         total_itens = q1("SELECT COUNT(*) FROM itens")
+        diverg = _resumo_divergencias(con, now - 30 * 86400)
         # peças cuja última transferência foi para a lavanderia há mais de PARADO_DIAS e não voltaram (estado ativo)
         parados = con.execute("""
             SELECT u.tipo, COUNT(*) qtd, MIN(u.quando) desde FROM (
@@ -1195,7 +1302,8 @@ def dashboard(user: dict = Depends(P_DASH)):
                     "falhas_24h": sum(1 for e in env24 if e["status"] != "enviado"),
                     "ultimos": [{"quando": e["quando"], "tipo": e["tipo"], "status": e["status"]} for e in envios[:6]]},
         "cabine": {"lotes_aguardando": aguard["n"], "pecas_aguardando": aguard["pecas"],
-                   "transferencias_hoje": transf["n"], "pecas_hoje": transf["pecas"], "ultimas": ultimas},
+                   "transferencias_hoje": transf["n"], "pecas_hoje": transf["pecas"], "ultimas": ultimas,
+                   "divergencias_30d": diverg},
         "evasao": {"saidas_24h": saida["total"], "nao_documentadas_24h": saida["nao"]},
         "inventario": {"total": total_itens, "por_estado": estados, "parados": parados, "parado_dias": PARADO_DIAS,
                        "nao_encontrados_30d": perdas},
@@ -1216,6 +1324,53 @@ def _mescla(intervalos, folga):
 
 def _quedas_json(intervalos, now, limite=5):
     return [{"inicio": a, "fim": b if b < now - 90 else None, "duracao_s": round(b - a)} for a, b in reversed(intervalos[-limite:])]
+
+
+ESTACAO_ONLINE_SEG = 45  # heartbeat a cada ~15 s
+
+
+class EstacaoIn(BaseModel):
+    nome: str
+    som: bool = True
+    pausada: bool = False
+    intervalo_seg: int | None = None
+
+
+@app.post("/api/estacoes/heartbeat")
+def estacao_heartbeat(b: EstacaoIn, user: dict = Depends(P_DASH)):
+    """Estação de controle = tela do Monitor ao vivo aberta num computador: avisa que está de pé (e se está muda/pausada)."""
+    nome = " ".join(b.nome.split())[:40]
+    if not nome:
+        raise HTTPException(400, "dê um nome à estação")
+    now = time.time()
+    with closing(db()) as con:
+        con.execute("""INSERT INTO estacoes_controle(nome,usuario,visto_em,som,pausada,intervalo_seg,criado_em) VALUES(%s,%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT(nome) DO UPDATE SET usuario=EXCLUDED.usuario, visto_em=EXCLUDED.visto_em, som=EXCLUDED.som,
+                         pausada=EXCLUDED.pausada, intervalo_seg=EXCLUDED.intervalo_seg""",
+                    (nome, user["usuario"], now, b.som, b.pausada, b.intervalo_seg, now))
+        con.execute("DELETE FROM estacoes_controle WHERE visto_em<%s", (now - 30 * 86400,))
+        con.commit()
+    return {"ok": True, "nome": nome}
+
+
+def _estacoes(con, now: float) -> list:
+    return [{**r, "online": now - r["visto_em"] < ESTACAO_ONLINE_SEG}
+            for r in con.execute("SELECT nome, usuario, visto_em, som, pausada, intervalo_seg FROM estacoes_controle ORDER BY nome").fetchall()]
+
+
+@app.get("/api/estacoes", dependencies=[Depends(P_DASH)])
+def listar_estacoes():
+    with closing(db()) as con:
+        return _estacoes(con, time.time())
+
+
+@app.delete("/api/estacoes/{nome}", dependencies=[Depends(P_SISTEMA)])
+def excluir_estacao(nome: str):
+    with closing(db()) as con:
+        if not con.execute("DELETE FROM estacoes_controle WHERE nome=%s RETURNING nome", (nome,)).fetchone():
+            raise HTTPException(404, "estação não encontrada")
+        con.commit()
+    return {"ok": True}
 
 
 @app.get("/api/monitoramento")
@@ -1262,6 +1417,7 @@ def monitoramento(user: dict = Depends(P_MONITOR)):
         cmd_erros = con.execute("""SELECT c.criado_em, a.nome antena, c.metodo, c.caminho, c.status, c.http_status FROM comandos c
                                    JOIN antenas a ON a.id=c.antena_id WHERE c.status IN ('erro','expirado') AND c.criado_em>=%s
                                    ORDER BY c.criado_em DESC LIMIT 5""", (d1,)).fetchall()
+        estacoes = _estacoes(con, now)
         ultimo_ev = list(con.execute("SELECT MAX(received_at) m FROM events").fetchone().values())[0]
         ev_1h = list(con.execute("SELECT COUNT(*) n FROM events WHERE received_at>%s", (now - 3600,)).fetchone().values())[0]
         envios = con.execute("""SELECT FLOOR((quando+%s)/86400) dia, tipo, status, COUNT(*) n FROM alerta_envios WHERE quando>=%s
@@ -1320,7 +1476,9 @@ def monitoramento(user: dict = Depends(P_MONITOR)):
                   "gravando": gravando(), "armado_ate": state["armado_ate"] if state["armado_ate"] > now else None,
                   "eventos_1h": ev_1h, "falhas_ingest_10min": len([t for t in state["falhas_ingest"] if now - t < 600]),
                   "alertas_ativos": len(state["alertas"])},
-        "antenas": lista, "agentes": ags,
+        "antenas": lista, "agentes": ags, "estacoes": estacoes,
+        "whatsapp": {k: (state.get("evolution") or {}).get(k) for k in ("estado", "ok", "erro", "desde", "verificado_em")},
+        "uptime_min": int(cfg()["uptime_min"]),
         "comandos": {"por_status_24h": {k: v["n"] for k, v in cmd.items()},
                      "mais_antigo_aberto_s": round(now - min(v["mais_antigo"] for k, v in cmd.items() if k in ("pendente", "enviado")))
                      if any(k in cmd for k in ("pendente", "enviado")) else None, "erros_recentes": cmd_erros},
@@ -1487,10 +1645,47 @@ def avisar_divergencia(lote_id: int, payload: DivergenciaIn, user: dict = Depend
             raise HTTPException(404, "lote não encontrado")
     esp = f", esperado {payload.esperado}" if payload.esperado is not None else ""
     obs = f" Obs.: {payload.observacao.strip()}" if (payload.observacao or "").strip() else ""
+    with closing(db()) as con:  # grava antes de avisar: o registro vale mesmo sem destinatário ou com o WhatsApp fora
+        tipos = {r["tipo"]: r["n"] for r in con.execute(
+            """SELECT COALESCE(i.tipo, '(sem cadastro)') tipo, COUNT(*) n FROM lote_itens li LEFT JOIN itens i ON i.epc=li.epc
+               WHERE li.lote_id=%s GROUP BY 1""", (lote_id,)).fetchall()}
+        div_id = con.execute("""INSERT INTO divergencias(lote_id,detectado,esperado,usuario,observacao,tipos,criado_em)
+                                VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                             (lote_id, lote["quantidade"], payload.esperado, user["usuario"], (payload.observacao or "").strip()[:300] or None,
+                              json.dumps(tipos), time.time())).fetchone()["id"]
+        con.commit()
     r = notificar("divergencia", f"⚠️ Cabine RFID: divergência na leitura do lote #{lote_id} — detectado {lote['quantidade']}{esp}. Informado por {user['usuario']}.{obs}")
     if not r:
-        raise HTTPException(400, "nenhum destinatário ativo cadastrado em Alertas WhatsApp")
-    return {"ok": True, "enviados": sum(1 for x in r if not x["erro"]), "falhas": sum(1 for x in r if x["erro"])}
+        raise HTTPException(400, "divergência registrada, mas não há destinatário ativo cadastrado em Alertas WhatsApp")
+    enviados = sum(1 for x in r if not x["erro"])
+    with closing(db()) as con:
+        con.execute("UPDATE divergencias SET avisados=%s WHERE id=%s", (enviados, div_id))
+        con.commit()
+    return {"ok": True, "enviados": enviados, "falhas": sum(1 for x in r if x["erro"]), "divergencia_id": div_id}
+
+
+def _resumo_divergencias(con, desde: float, limit: int = 5) -> dict:
+    rows = con.execute("""SELECT id, lote_id, detectado, esperado, usuario, observacao, avisados, tipos, criado_em
+                          FROM divergencias WHERE criado_em>=%s ORDER BY criado_em DESC""", (desde,)).fetchall()
+    por_tipo, por_usuario, falta = {}, {}, 0
+    for r in rows:
+        if r["esperado"] is not None:
+            falta += max(0, r["esperado"] - r["detectado"])
+        por_usuario[r["usuario"] or "–"] = por_usuario.get(r["usuario"] or "–", 0) + 1
+        for t, n in (r["tipos"] or {}).items():
+            por_tipo[t] = por_tipo.get(t, 0) + n
+    return {"total": len(rows), "pecas_faltando": falta,
+            "por_tipo": [{"tipo": t, "qtd": n} for t, n in sorted(por_tipo.items(), key=lambda x: -x[1])[:5]],
+            "por_usuario": [{"usuario": u, "qtd": n} for u, n in sorted(por_usuario.items(), key=lambda x: -x[1])[:5]],
+            "ultimas": [{k: r[k] for k in ("id", "lote_id", "detectado", "esperado", "usuario", "observacao", "criado_em")} for r in rows[:limit]]}
+
+
+@app.get("/api/divergencias", dependencies=[Depends(P_CONSULTAR)])
+def divergencias(dias: int = 30):
+    """Divergências de quantidade informadas na cabine: total, peças faltando (esperado − detectado) e ranking por tipo e usuário."""
+    dias = max(1, min(dias, 365))
+    with closing(db()) as con:
+        return {"dias": dias, **_resumo_divergencias(con, time.time() - dias * 86400, 200)}
 
 
 @app.get("/api/transferencias/{transf_id}/comprovante", dependencies=[Depends(P_CONSULTAR)])
@@ -2793,7 +2988,7 @@ def login(payload: LoginIn, request: Request):
 ROTULOS_ACAO = [  # (método, regex do caminho, descrição) — o que não casar aparece como "MÉTODO caminho"
     ("DELETE", r"/api/lotes/\d+", "Excluiu lote"), ("POST", r"/api/lotes/registrar", "Registrou lote"),
     ("POST", r"/api/lotes/\d+/transferir", "Transferiu lote"), ("POST", r"/api/lotes/\d+/estado", "Mudou estado do lote"),
-    ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/leitura/armar", "Armou a leitura"),
+    ("POST", r"/api/lotes/\d+/divergencia", "Avisou divergência"), ("POST", r"/api/estacoes/heartbeat", "Estação de controle"), ("POST", r"/api/leitura/armar", "Armou a leitura"),
     ("POST", r"/api/itens", "Cadastrou/atualizou item"), ("PATCH", r"/api/itens/[^/]+/nome", "Nomeou tag"), ("POST", r"/api/itens/editar-lote", "Editou itens em lote"),
     ("POST", r"/api/itens/cadastrar-lote", "Cadastrou itens em lote"), ("POST", r"/api/itens/importar-nomes", "Importou nomes de tags"), ("PATCH", r"/api/itens/[^/]+/estado", "Mudou estado do item"),
     ("POST", r"/api/conferencias", "Iniciou conferência"), ("POST", r"/api/conferencias/\d+/finalizar", "Finalizou conferência"),

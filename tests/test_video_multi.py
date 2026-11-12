@@ -3,7 +3,7 @@ import io
 import time
 import zipfile
 from app import main
-from test_clipes import MP4, _setup, _saida, _status, _envelhece
+from tests.test_clipes import MP4, _setup, _saida, _status, _envelhece
 
 
 def _destinatario(client, **kw):
