@@ -432,12 +432,14 @@ table.rt-sel td:nth-child(2)::before{content:none}
   <div class="row">
     <select id="fTipo"><option value="">todos os tipos</option><option value="setor">setor</option><option value="lavanderia">lavanderia</option></select>
     <select id="fDestino"><option value="">todos os destinos</option></select>
+    <select id="fUsuario"><option value="">todos os usuários</option></select>
     <label class="mut">de <input id="fDesde" type="date"></label>
     <label class="mut">até <input id="fAte" type="date"></label>
     <button id="fAplicar">filtrar</button>
     <button id="fLimpar">limpar</button>
+    <button id="fImprimir">Imprimir</button>
   </div>
-  <div class="scroll"><table class="rt"><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Usuário</th><th>Obs.</th><th>EPCs</th><th></th></tr></thead><tbody id="transf"></tbody></table></div>
+  <div class="scroll"><table class="rt" id="transfTabela"><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Usuário</th><th>Obs.</th><th>EPCs</th><th></th></tr></thead><tbody id="transf"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="evasao" hidden>
@@ -1246,6 +1248,7 @@ function montaFiltroTransf(){
   const p=new URLSearchParams();
   if($('fTipo').value)p.set('tipo',$('fTipo').value);
   if($('fDestino').value)p.set('destino_id',$('fDestino').value);
+  if($('fUsuario').value)p.set('usuario',$('fUsuario').value);
   if($('fDesde').value)p.set('desde',Math.floor(new Date($('fDesde').value+'T00:00:00').getTime()/1000));
   if($('fAte').value)p.set('ate',Math.floor(new Date($('fAte').value+'T23:59:59').getTime()/1000));
   return p.toString();
@@ -1253,6 +1256,8 @@ function montaFiltroTransf(){
 async function carregarTransferencias(){
   const qs=montaFiltroTransf();
   const rows=await j('/api/transferencias'+(qs?'?'+qs:''));
+  const usu=[...new Set([...rows.map(t=>t.usuario).filter(Boolean),$('fUsuario').value].filter(Boolean))].sort(),cur=$('fUsuario').value;
+  $('fUsuario').innerHTML='<option value="">todos os usuários</option>'+usu.map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join('');$('fUsuario').value=cur;
   $('transf').innerHTML=rows.map(t=>`<tr>
     <td>#${t.lote_id}</td><td>${dt(t.criado_em)}</td><td>${t.quantidade}</td>
     <td>${esc(t.destino_nome)} ${pill(t.destino_tipo)}</td><td>${esc(t.usuario||'–')}</td><td>${esc(t.observacao||'–')}</td>
@@ -1268,7 +1273,14 @@ document.addEventListener('click',async e=>{
 });
 document.addEventListener('click',e=>{const b=e.target.closest('[data-comp]');if(b)detalheMovimentacao(Number(b.dataset.comp)).catch(err=>alert(err.message))});
 $('fAplicar').onclick=carregarTransferencias;
-$('fLimpar').onclick=()=>{$('fTipo').value='';$('fDestino').value='';$('fDesde').value='';$('fAte').value='';carregarTransferencias()};
+$('fImprimir').onclick=()=>{
+  const w=window.open('','_blank');if(!w)return;
+  const linhas=[...document.querySelectorAll('#transf tr')].map(tr=>`<tr>${[...tr.cells].slice(0,6).map(c=>`<td>${c.innerHTML}</td>`).join('')}</tr>`).join('');
+  w.document.write(`<title>Movimentações</title><style>body{font:13px sans-serif}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:4px 6px;text-align:left}</style>
+    <h3>Movimentações — ${new Date().toLocaleString('pt-BR')}</h3><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Usuário</th><th>Obs.</th></tr></thead><tbody>${linhas}</tbody></table>`);
+  w.document.close();w.focus();w.print();
+};
+$('fLimpar').onclick=()=>{$('fTipo').value='';$('fDestino').value='';$('fUsuario').value='';$('fDesde').value='';$('fAte').value='';carregarTransferencias()};
 
 function montaFiltroEvasao(){
   const p=new URLSearchParams();

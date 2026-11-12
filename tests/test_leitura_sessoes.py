@@ -67,3 +67,16 @@ def test_reportar_e_resolver_problema(client):
     assert [s["id"] for s in _lista(client, reportadas=True)["sessoes"]] == [sid]
     assert client.post(f"/api/leitura-sessoes/{sid}/resolver").status_code == 200
     assert client.get("/api/leitura-sessoes/reportes").json()["abertos"] == 0
+
+
+def test_transferencias_filtra_por_usuario(client):
+    from tests.test_clipes import _setup  # noqa: F401  (garante destinos padrão)
+    dest = client.get("/api/destinos").json()[0]
+    for epc in ("DD11", "DD22"):
+        client.post("/api/leitura/armar?segundos=60")
+        client.post("/ingest", json=[{"epc": epc, "event_type": "tagInventory", "antennaPort": 1}], auth=("w", "w"))
+        lote = client.post("/api/lotes/registrar?janela_segundos=15").json()["id"]
+        assert client.post(f"/api/lotes/{lote}/transferir", json={"destino_id": dest["id"]}).status_code == 200
+    assert len(client.get("/api/transferencias").json()) == 2
+    assert len(client.get("/api/transferencias", params={"usuario": "admin"}).json()) == 2
+    assert client.get("/api/transferencias", params={"usuario": "outro"}).json() == []

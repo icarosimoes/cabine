@@ -1940,7 +1940,7 @@ def atualizar_destino(destino_id: int, payload: DestinoPatch):
 
 @app.get("/api/transferencias", dependencies=[Depends(P_CONSULTAR)])
 def listar_transferencias(destino_id: int | None = None, tipo: str | None = None,
-                           desde: float | None = None, ate: float | None = None, limit: int = 200):
+                           desde: float | None = None, ate: float | None = None, usuario: str | None = None, limit: int = 200):
     sql = """SELECT t.id, t.lote_id, t.destino_id, d.nome destino_nome, d.tipo destino_tipo,
                     t.observacao, t.criado_em, t.usuario, l.quantidade
              FROM transferencias t
@@ -1955,6 +1955,8 @@ def listar_transferencias(destino_id: int | None = None, tipo: str | None = None
         cond.append("t.criado_em>=%s"); args.append(desde)
     if ate:
         cond.append("t.criado_em<=%s"); args.append(ate)
+    if usuario:
+        cond.append("t.usuario=%s"); args.append(usuario)
     if cond:
         sql += " WHERE " + " AND ".join(cond)
     sql += " ORDER BY t.id DESC LIMIT %s"; args.append(min(limit, 1000))

@@ -87,12 +87,12 @@ Referência: eTrace v1.18.1 do Fera Palace (46 fotos de tela). O que o Cabine j�
 
 - [x] **Sessões de leitura** (tela `#sessoesleit`, `GET /api/leitura-sessoes`): cada clique em Registrar leitura vira uma sessão com início, usuário, duração, peças e resultado (*Em andamento*, *Reiniciada antes de concluir*, *Concluída com peças*, *Concluída com 0 peças (leitor comunicando / sem comunicação)*), causa provável (rádio sem sinal na janela = "Leitor/gateway/broker"), marca **sinalizada** (0 peças em até 5 min depois de uma leitura com peças), filtros (período, só 0 peças, só sinalizadas, só com problema), atualização a cada 30 s. Registros guardados por 30 dias. Serve para validar a janela de 15 s no leitor real.
 - [x] **Reportar problema** na leitura (botão na Cabine e na lista de sessões), com contador no menu e "Marcar resolvido".
-- [ ] **Diagnóstico de Leitores** (tela de suporte): reaproveitar o que o Monitoramento já mede (uptime, latência, último sinal) por leitor, com o histórico das sessões de 0 peças.
+- [x] **Diagnóstico de Leitores**: já coberto pela tela Monitoramento (uptime, latência, quedas, último sinal do rádio) somada às Sessões de leitura (0 peças com causa); não precisa de tela separada.
 - [ ] **Estações de Controle**: código de pareamento (ex. `NTFY-xxxx-xxxx-xxxx`) com botão copiar, tipo/versão do aparelho, "visto há X", quais antenas cada estação atende, desativar/atualizar.
-- [ ] **Inventário**: filtros de Localização, Estado, Tipo, Fabricante, Tamanho, Composição e Cor com resumo por tipo; "Iniciar conferência" a partir dos filtros; mostrar "Filtros aplicados" no histórico de conferências.
-- [ ] **Movimentações**: filtro por destino e usuário, seleção de linhas, imprimir, detalhe de cada movimentação.
-- [ ] **Antenas**: campo "Modo de operação" (Manual = cabine, Automático = o agente lê) no formulário.
-- [ ] **Categorias com pai** e **Acomodações com a contagem de UHs** (27 solteiro, 81 king, 1 piscina no Fera Palace).
+- [x] **Inventário**: já tinha os 7 filtros, resumo por tipo, conferência a partir dos filtros e "Filtros aplicados" no histórico (conferido em 2026-11-12).
+- [x] **Movimentações** (2026-11-12): filtro por usuário e botão Imprimir (destino, datas e detalhe/comprovante já existiam). Falta só selecionar linhas para imprimir.
+- [x] **Antenas**: o "Modo de operação" (Manual/Automático) já existia.
+- [x] Acomodações já têm UHs por acomodação. [ ] **Categorias com pai** (hoje o tipo é texto livre no item; exige tabela de categorias).
 - [ ] Reconciliar o catálogo: o eTrace mostra **3.232 itens "Em uso"** e o Cabine tem 4.570 (conferir estados e duplicados).
 - [ ] Antenas de evasão: localizações do eTrace = `.32` Recepção, `.104` **Saída Serviço**; preencher no Cabine para a coleta de evasão funcionar (sem localização o servidor responde 409).
 - Não copiar: tela de BI (no eTrace está com erro de autenticação) e "Credenciais BI".
