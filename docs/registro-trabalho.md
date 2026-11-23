@@ -188,4 +188,12 @@
   tabela, commit `9448c8c` no repo `solid` — o vault real fica la, `erpsolid/docs/projetos` e so um symlink). Cadastro
   manual; o job `sync-docs-vault` roda em outro host (Hermes), fora do alcance desta sessao.
 - Testes: 4 novos (SSRF do `wa_url`, arvore de categorias, horario do agente x2) — 99 no total; suite completa
-  rodada contra Postgres 16 descartavel. Pendente: deploy.
+  rodada contra Postgres 16 descartavel.
+
+### Deploy em producao (commit `dbab5a6`)
+
+- Push pra `main` (`8b381a0..dbab5a6`), backup do Postgres antes (`pg_dump` -> `/root/backup/impinj-20261123-1636.sql`,
+  18 MB) ja que o commit cria tabela nova (`categorias`) e colunas novas em `agentes`. Deploy manual (sem secrets de
+  CI configurados ainda): `rsync` -> `docker build` -> `docker stack deploy` -> `service update --force impinj_impinj`.
+  `impinj_impinj` e `impinj_postgres` convergiram; `GET /health` -> `{"ok":true}`; `GET /api/summary` e
+  `GET /api/categorias` (tabela nova) responderam com auth.
