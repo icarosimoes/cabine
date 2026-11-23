@@ -101,9 +101,17 @@ def test_divergencia_gravada_mesmo_sem_destinatario_e_no_dashboard(client, monke
 
 def test_estacoes_de_controle_heartbeat(client):
     assert client.post("/api/estacoes/heartbeat", json={"nome": "  "}).status_code == 400
-    assert client.post("/api/estacoes/heartbeat", json={"nome": "Portaria", "som": False, "intervalo_seg": 10}).status_code == 200
+    r = client.post("/api/estacoes/heartbeat", json={"nome": "Portaria", "som": False, "intervalo_seg": 10},
+                     headers={"user-agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/131.0.0.0"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["codigo"].startswith("CTRL-") and body["ativa"] is True
     e = client.get("/api/estacoes").json()
     assert len(e) == 1 and e[0]["nome"] == "Portaria" and e[0]["online"] and e[0]["som"] is False and e[0]["usuario"] == "admin"
+    assert e[0]["codigo"] == body["codigo"] and e[0]["tipo"] == "Windows · Chrome 131" and e[0]["antenas"] == []
+    # o código de pareamento não muda entre heartbeats
+    r2 = client.post("/api/estacoes/heartbeat", json={"nome": "Portaria"})
+    assert r2.json()["codigo"] == body["codigo"]
     with closing(main.db()) as con:
         con.execute("UPDATE estacoes_controle SET visto_em=visto_em-600"); con.commit()
     assert client.get("/api/estacoes").json()[0]["online"] is False
@@ -111,3 +119,27 @@ def test_estacoes_de_controle_heartbeat(client):
     assert m["estacoes"][0]["nome"] == "Portaria" and "whatsapp" in m and m["uptime_min"] == 95
     assert client.delete("/api/estacoes/Portaria").status_code == 200
     assert client.delete("/api/estacoes/Portaria").status_code == 404
+
+
+def test_estacao_patch_antenas_ativa_e_alerta_sem_estacao(client, monkeypatch):
+    main.state["alertas"].clear()
+    aid = _antena(client)
+    client.post("/api/estacoes/heartbeat", json={"nome": "Portaria"})
+    assert client.patch("/api/estacoes/Fantasma", json={"ativa": False}).status_code == 404
+    assert client.patch("/api/estacoes/Portaria", json={}).status_code == 400  # nada pra atualizar
+    assert client.patch("/api/estacoes/Portaria", json={"antenas": [aid]}).status_code == 200
+    e = client.get("/api/estacoes").json()[0]
+    assert e["antenas"] == [{"id": aid, "nome": "r700"}]
+
+    agora = time.time()
+    estacoes = [{"ativa": True, "online": False}]
+    msgs = main.avaliar_estacoes(agora, estacoes, CFG)
+    assert len(msgs) == 1 and msgs[0][0] == "monitor" and "nenhuma estação de controle" in msgs[0][1]
+    assert main.avaliar_estacoes(agora + 10, estacoes, CFG) == []  # não repete antes do intervalo
+    assert main.avaliar_estacoes(agora + 10, [{"ativa": True, "online": True}], CFG)[0][1].startswith("✅")
+    assert main.avaliar_estacoes(agora, [], CFG) == []  # nenhuma estação cadastrada: sem alerta
+    assert main.avaliar_estacoes(agora, [{"ativa": False, "online": False}], CFG) == []  # desativada não conta
+
+    assert client.patch("/api/estacoes/Portaria", json={"ativa": False}).status_code == 200
+    assert client.get("/api/estacoes").json()[0]["ativa"] is False
+    main.state["alertas"].clear()

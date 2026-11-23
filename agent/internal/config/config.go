@@ -130,8 +130,20 @@ func WriteState(s *State) error {
 	}
 	b, _ := json.Marshal(s)
 	tmp := StatePath() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	// O_EXCL: se ja existir qualquer coisa em tmp (arquivo comum ou um link deixado por outro usuario local da
+	// maquina, antes do icacls restringir a pasta a leitura), a abertura falha em vez de escrever atraves dele.
+	_ = os.Remove(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
 		return err
+	}
+	_, werr := f.Write(b)
+	cerr := f.Close()
+	if werr != nil {
+		return werr
+	}
+	if cerr != nil {
+		return cerr
 	}
 	return os.Rename(tmp, StatePath())
 }

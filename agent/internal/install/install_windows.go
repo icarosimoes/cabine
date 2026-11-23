@@ -70,7 +70,10 @@ func Install(server, token string) error {
 	}
 	_ = exec.Command("icacls", config.DataDir(), "/inheritance:r", "/grant:r", "SYSTEM:(OI)(CI)F", "Administrators:(OI)(CI)F", "Users:(OI)(CI)RX").Run()
 	_ = exec.Command("icacls", config.ConfigPath(), "/inheritance:r", "/grant:r", "SYSTEM:F", "Administrators:F").Run()
-	_ = exec.Command("icacls", config.PublicDir(), "/grant:r", "Users:(OI)(CI)M").Run() // o tray lê; o log é escrito por usuário
+	// PublicDir so precisa de leitura para usuarios locais (o tray le state.json/agent.log; quem escreve e so o
+	// servico, como SYSTEM). Antes dava Modify: um usuario local podia trocar state.json.tmp por um link antes do
+	// servico escrever (gravacao com privilegio redirecionada). Fica explicito aqui, nao so herdado do DataDir.
+	_ = exec.Command("icacls", config.PublicDir(), "/inheritance:r", "/grant:r", "SYSTEM:(OI)(CI)F", "Administrators:(OI)(CI)F", "Users:(OI)(CI)RX").Run()
 
 	if self != dest {
 		var cerr error

@@ -147,3 +147,22 @@
 
 ## Validacao do /ingest com o leitor real (2026-11-23)
 - R700 (192.168.30.90): Event Reporting > Webhook ligado (URL `/ingest`, 443, Verify TLS, Retry); painel com antena online, "webhook active (HTTP 200)" e "radio: enviando sinal". Testes de captura e registro de leitura ja gravavam eventos. Backlog atualizado.
+
+## Estacoes de Controle, alerta de estacao e preferencia de push, agente 0.1.10 (2026-11-23, ainda sem deploy)
+- **Estacoes de Controle**: `estacoes_controle` ganhou `codigo` (pareamento `CTRL-XXXX-XXXX`, gerado uma vez no primeiro heartbeat),
+  `tipo` (SO/navegador lido do User-Agent a cada heartbeat), `antenas` (ids separados por virgula) e `ativa`. Novo
+  `PATCH /api/estacoes/{nome}` (permissao `sistema`) edita `ativa`/`antenas`; heartbeat nunca mexe nesses dois campos. Tela
+  Monitoramento: colunas Codigo (com botao copiar), Tipo, Antenas atendidas (multi-select + Salvar) e Desativar/Reativar, visiveis
+  pra quem tem `sistema`; demais perfis so veem os dados sem controles de edicao.
+- **Alerta "nenhuma estacao ativa"**: `avaliar_estacoes()` dispara tipo `monitor` quando existe ao menos uma estacao `ativa`
+  cadastrada e nenhuma esta com sinal; chamado em `checar_alertas()`.
+- **Preferencia de alerta por aparelho no push**: `push_assinaturas` ganhou `recebe_sem_sinal/falhas/evasao/monitor` (igual ja
+  existia por destinatario do WhatsApp); `GET/PUT /api/push/preferencias?endpoint=`. `enviar_push()` filtra por essas colunas
+  quando o tipo tem uma (reaproveita o mapa `TIPO_ALERTA_COL`, tambem usado agora por `notificar()`); tipos de hardware sem coluna
+  (antena/agente offline, webhook, divergencia) continuam indo pra todos os aparelhos. Painel de preferencias na tela
+  Monitoramento, visivel so quando o aparelho tem as notificacoes ligadas.
+- **Agente 0.1.10**: corrigido o risco do backlog (link no tmp do state.json) — `PublicDir` deixou de dar `Users:(OI)(CI)M`
+  (Modify) na instalacao, virou `Users:(OI)(CI)RX` (so leitura, igual o resto do `DataDir`; so o servico, como SYSTEM, escreve
+  ali). `WriteState` tambem abre o `.tmp` com `O_EXCL` (falha em vez de escrever atraves de um link pre-existente).
+- Testes: 3 novos em `tests/test_monitor_alertas.py` e `tests/test_push.py` (95 no total); `go test ./...` e `GOOS=windows go build`
+  do agente passando. Pendente: deploy e, no hotel, atualizar o agente do pcsom pra 0.1.10.

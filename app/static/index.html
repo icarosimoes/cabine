@@ -324,7 +324,18 @@ table.rt-sel td:nth-child(2)::before{content:none}
 </section>
 <section>
   <h2><span>WhatsApp (Evolution) e estações de controle</span><span class="mut" id="mWaInfo"></span></h2>
-  <div class="scroll"><table class="rt"><thead><tr><th>Estação (Monitor ao vivo)</th><th>Status</th><th>Usuário</th><th>Som</th><th>Último sinal</th></tr></thead><tbody id="mEstTb"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Estação (Monitor ao vivo)</th><th>Status</th><th>Código</th><th>Tipo</th><th>Usuário</th><th>Som</th><th>Antenas atendidas</th><th>Último sinal</th><th></th></tr></thead><tbody id="mEstTb"></tbody></table></div>
+  <p class="mut" id="mEstAjuda" hidden>Código de pareamento: identifica esta estação. "Desativar" tira a estação do alerta de "nenhuma estação ativa" sem apagar o histórico.</p>
+  <div id="mPushPrefs" hidden style="margin-top:10px">
+    <b>Notificações deste aparelho</b>
+    <div class="row" style="flex-wrap:wrap;gap:14px;margin-top:6px">
+      <label><input type="checkbox" id="ppSemSinal"> Rádio sem sinal</label>
+      <label><input type="checkbox" id="ppFalhas"> Falhas no /ingest</label>
+      <label><input type="checkbox" id="ppEvasao"> Evasão</label>
+      <label><input type="checkbox" id="ppMonitor"> Monitoramento (uptime, Evolution, estações)</label>
+    </div>
+    <p class="mut">Antena/agente offline chegam sempre, em todos os aparelhos — são avisos de hardware.</p>
+  </div>
 </section>
 <section>
   <h2><span>Agentes do hotel</span></h2>
@@ -921,7 +932,17 @@ async function carregarMonitoramento(){
   const on=m.antenas.filter(a=>a.online).length,ag=m.agentes.filter(a=>a.online).length;
   const wa=m.whatsapp||{};
   $('mWaInfo').innerHTML=wa.estado==null?'WhatsApp: não configurado':'WhatsApp: '+(wa.ok?'<span class="pill ok">conectado</span>':`<span class="pill alerta">${esc(wa.estado)}</span> ${esc(wa.erro||'')}`)+` · alerta de uptime abaixo de ${m.uptime_min||'—'}%`;
-  $('mEstTb').innerHTML=(m.estacoes||[]).map(e=>`<tr><td><b>${esc(e.nome)}</b></td><td data-l="Status">${e.online?'<span class="pill ok">ativa</span>'+(e.pausada?' <span class="pill cinza">pausada</span>':''):'<span class="pill alerta">sem sinal</span>'}</td><td data-l="Usuário">${esc(e.usuario||'–')}</td><td data-l="Som">${e.som?'ligado':'<span class="mut">desligado</span>'}</td><td data-l="Último sinal">${ha(e.visto_em)}</td></tr>`).join('')||'<tr><td colspan=5>nenhuma estação — abra "Monitor ao vivo" num computador de controle</td></tr>';
+  const podeEditarEst=tem('sistema');
+  $('mEstAjuda').hidden=!(m.estacoes||[]).length;
+  $('mEstTb').innerHTML=(m.estacoes||[]).map(e=>{
+    const antSel=podeEditarEst?`<select multiple size="2" data-nome="${esc(e.nome)}" class="estAntSel" style="min-width:140px">${m.antenas.map(a=>`<option value="${a.id}" ${e.antenas.some(x=>x.id===a.id)?'selected':''}>${esc(a.nome)}</option>`).join('')}</select> <button type="button" class="estAntSalvar" data-nome="${esc(e.nome)}">Salvar</button>`
+      :(e.antenas.map(a=>esc(a.nome)).join(', ')||'<span class="mut">nenhuma</span>');
+    const acoes=podeEditarEst?`<button type="button" class="estToggle" data-nome="${esc(e.nome)}" data-ativa="${e.ativa}">${e.ativa?'Desativar':'Reativar'}</button>`:'';
+    return `<tr${e.ativa?'':' style="opacity:.55"'}><td><b>${esc(e.nome)}</b>${e.ativa?'':' <span class="pill cinza">desativada</span>'}</td><td data-l="Status">${e.online?'<span class="pill ok">ativa</span>'+(e.pausada?' <span class="pill cinza">pausada</span>':''):'<span class="pill alerta">sem sinal</span>'}</td>`
+      +`<td data-l="Código"><code>${esc(e.codigo||'–')}</code>${e.codigo?` <button type="button" class="estCopiar" data-codigo="${esc(e.codigo)}">copiar</button>`:''}</td>`
+      +`<td data-l="Tipo">${esc(e.tipo||'–')}</td><td data-l="Usuário">${esc(e.usuario||'–')}</td><td data-l="Som">${e.som?'ligado':'<span class="mut">desligado</span>'}</td>`
+      +`<td data-l="Antenas atendidas">${antSel}</td><td data-l="Último sinal">${ha(e.visto_em)}</td><td>${acoes}</td></tr>`;
+  }).join('')||'<tr><td colspan=9>nenhuma estação — abra "Monitor ao vivo" num computador de controle</td></tr>';
   const b=$('mBanner');b.className='banner '+(m.problemas.length?'bad':'ok');
   b.textContent=m.problemas.length?`⚠ ${m.problemas.length} problema(s): ${m.problemas.join(', ')}`:`✓ Tudo certo: ${on} de ${m.antenas.length} antenas e ${ag} de ${m.agentes.length} agente(s) online`;
   const set=(id,v,cls)=>{const e=$(id);e.textContent=v;e.className=cls||''};
@@ -957,7 +978,22 @@ async function carregarMonitoramento(){
     $('mAtivTb').innerHTML=m.atividade.map(x=>`<tr><td>${esc(x.usuario)}</td><td data-l="Ações">${x.acoes}</td><td data-l="Última">${ha(x.ultima)}</td></tr>`).join('')||'<tr><td colspan=3>nenhuma ação hoje</td></tr>';
     $('mMudTb').innerHTML=m.mudancas.map(x=>`<tr><td>${dt(x.criado_em)}</td><td data-l="Usuário">${esc(x.usuario||'–')}</td><td data-l="Ação">${esc(x.acao)}</td></tr>`).join('')||'<tr><td colspan=3>nenhuma mudança registrada</td></tr>';
   }
+  if(tem('consultar'))carregarPushPrefs();
 }
+document.addEventListener('click',async e=>{
+  const bc=e.target.closest('.estCopiar');
+  if(bc){try{await navigator.clipboard.writeText(bc.dataset.codigo);const t=bc.textContent;bc.textContent='copiado!';setTimeout(()=>bc.textContent=t,1500)}catch(err){alert(bc.dataset.codigo)}return}
+  const bt=e.target.closest('.estToggle');
+  if(bt){bt.disabled=true;try{await j(`/api/estacoes/${encodeURIComponent(bt.dataset.nome)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({ativa:bt.dataset.ativa!=='true'})});_mon=0;carregarMonitoramento()}catch(err){alert(err.message);bt.disabled=false}return}
+  const bs=e.target.closest('.estAntSalvar');
+  if(bs){
+    const sel=document.querySelector(`.estAntSel[data-nome="${CSS.escape(bs.dataset.nome)}"]`);
+    const ids=[...sel.selectedOptions].map(o=>Number(o.value));
+    bs.disabled=true;
+    try{await j(`/api/estacoes/${encodeURIComponent(bs.dataset.nome)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({antenas:ids})});bs.textContent='salvo!';setTimeout(()=>{_mon=0;carregarMonitoramento()},800)}
+    catch(err){alert(err.message);bs.disabled=false}
+  }
+});
 async function tick(){
   try{
     const s=await j('/api/summary');
@@ -2053,8 +2089,25 @@ $('pushBtn').onclick=async()=>{
       try{await j('/api/push/teste',{method:'POST'})}catch(e){}
     }
   }catch(e){alert('Notificações: '+e.message)}
-  b.disabled=false;pushEstado();
+  b.disabled=false;pushEstado();carregarPushPrefs();
 };
+async function carregarPushPrefs(){
+  const box=$('mPushPrefs');
+  if(!('serviceWorker' in navigator&&'PushManager' in window)){box.hidden=true;return}
+  try{
+    const reg=await navigator.serviceWorker.ready,sub=await reg.pushManager.getSubscription();
+    if(!sub){box.hidden=true;box.dataset.endpoint='';return}
+    const p=await j('/api/push/preferencias?endpoint='+encodeURIComponent(sub.endpoint));
+    $('ppSemSinal').checked=p.recebe_sem_sinal;$('ppFalhas').checked=p.recebe_falhas;$('ppEvasao').checked=p.recebe_evasao;$('ppMonitor').checked=p.recebe_monitor;
+    box.dataset.endpoint=sub.endpoint;box.hidden=false;
+  }catch(e){box.hidden=true}
+}
+['ppSemSinal','ppFalhas','ppEvasao','ppMonitor'].forEach(id=>$(id).onchange=async()=>{
+  const ep=$('mPushPrefs').dataset.endpoint;if(!ep)return;
+  try{await j('/api/push/preferencias',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    endpoint:ep,recebe_sem_sinal:$('ppSemSinal').checked,recebe_falhas:$('ppFalhas').checked,recebe_evasao:$('ppEvasao').checked,recebe_monitor:$('ppMonitor').checked})})}
+  catch(e){alert('Preferência: '+e.message)}
+});
 carregarMe().finally(()=>{rota();setInterval(tick,3000);if(tem('consultar'))pushEstado()});
 </script>
 </body>

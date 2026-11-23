@@ -318,11 +318,17 @@ def init_db():
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
           endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
           usuario TEXT, agente_navegador TEXT, criado_em DOUBLE PRECISION NOT NULL, ultimo_envio DOUBLE PRECISION)""")  # Web Push (PWA)
+        for col in ("recebe_sem_sinal", "recebe_falhas", "recebe_evasao", "recebe_monitor"):
+            con.execute(f"ALTER TABLE push_assinaturas ADD COLUMN IF NOT EXISTS {col} BOOLEAN NOT NULL DEFAULT TRUE")  # tipo de alerta por aparelho
         con.execute("""
         CREATE TABLE IF NOT EXISTS estacoes_controle(
           nome TEXT PRIMARY KEY, usuario TEXT, visto_em DOUBLE PRECISION NOT NULL,
           som BOOLEAN NOT NULL DEFAULT TRUE, pausada BOOLEAN NOT NULL DEFAULT FALSE,
           intervalo_seg INTEGER, criado_em DOUBLE PRECISION NOT NULL)""")  # telas do Monitor ao vivo (heartbeat)
+        con.execute("ALTER TABLE estacoes_controle ADD COLUMN IF NOT EXISTS codigo TEXT")  # código de pareamento, gerado uma vez
+        con.execute("ALTER TABLE estacoes_controle ADD COLUMN IF NOT EXISTS tipo TEXT")  # navegador/SO, do User-Agent do heartbeat
+        con.execute("ALTER TABLE estacoes_controle ADD COLUMN IF NOT EXISTS antenas TEXT")  # ids separados por vírgula; NULL = nenhuma
+        con.execute("ALTER TABLE estacoes_controle ADD COLUMN IF NOT EXISTS ativa BOOLEAN NOT NULL DEFAULT TRUE")  # desativada: fora do alerta "nenhuma estação ativa"
         con.execute("""
         CREATE TABLE IF NOT EXISTS agentes(
           id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -641,6 +647,11 @@ def enviar_um(c: dict, numero: str, texto: str) -> str | None:
         return f"falha ao falar com a Evolution: {e}"
 
 
+# Tipos de alerta que podem ser escolhidos por destinatário/aparelho (coluna recebe_<tipo>). Tipos fora daqui
+# (ex. antena_offline, agente_offline, webhook_falha, divergencia) são avisos de hardware/operação: vão para todos.
+TIPO_ALERTA_COL = {"sem_sinal": "recebe_sem_sinal", "falhas": "recebe_falhas", "evasao": "recebe_evasao", "monitor": "recebe_monitor"}
+
+
 def notificar(tipo: str, texto: str, c: dict | None = None, destinatario_id: int | None = None) -> list[dict]:
     """Envia a cada destinatário ativo que recebe esse tipo ('sem_sinal'|'falhas'|'teste') e registra em alerta_envios."""
     c = c or cfg()
@@ -649,8 +660,8 @@ def notificar(tipo: str, texto: str, c: dict | None = None, destinatario_id: int
         if destinatario_id:
             dests = con.execute("SELECT * FROM alerta_destinatarios WHERE id=%s", (destinatario_id,)).fetchall()
         else:
-            filtro = {"sem_sinal": " AND recebe_sem_sinal", "falhas": " AND recebe_falhas", "evasao": " AND recebe_evasao",
-                      "monitor": " AND recebe_monitor"}.get(tipo, "")
+            col = TIPO_ALERTA_COL.get(tipo)
+            filtro = f" AND {col}" if col else ""
             dests = con.execute("SELECT * FROM alerta_destinatarios WHERE ativo" + filtro + " ORDER BY id").fetchall()
         for d in dests:
             erro = enviar_um(c, d["whatsapp"], texto)
@@ -697,9 +708,10 @@ PUSH_DESTINO = {"evasao": "/#evasao", "divergencia": "/#painel", "monitor": "/#m
 
 
 def enviar_push(tipo: str, texto: str) -> int:
-    """Manda o alerta a todos os aparelhos que ativaram as notificações. Remove assinaturas que o navegador já descartou."""
+    """Manda o alerta aos aparelhos que ativaram as notificações e escolheram receber esse tipo. Remove assinaturas que o navegador já descartou."""
+    col = TIPO_ALERTA_COL.get(tipo)
     with closing(db()) as con:
-        subs = con.execute("SELECT id, endpoint, p256dh, auth FROM push_assinaturas").fetchall()
+        subs = con.execute(f"SELECT id, endpoint, p256dh, auth FROM push_assinaturas{f' WHERE {col}' if col else ''}").fetchall()
     if not subs:
         return 0
     from pywebpush import WebPushException, webpush
@@ -944,6 +956,10 @@ def checar_alertas():
         for tipo, texto in avaliar_uptime(agora, antenas, ups, c):
             notificar(tipo, texto, c)
     for tipo, texto in avaliar_evolution(agora, c):
+        notificar(tipo, texto, c)
+    with closing(db()) as con:
+        estacoes = _estacoes(con, agora)
+    for tipo, texto in avaliar_estacoes(agora, estacoes, c):
         notificar(tipo, texto, c)
     salvar_estado_alertas(antenas, agentes)
 
@@ -1486,12 +1502,73 @@ def push_cancelar(b: PushAssinatura):
     return {"ok": True}
 
 
+class PushPreferencias(BaseModel):
+    endpoint: str
+    recebe_sem_sinal: bool = True
+    recebe_falhas: bool = True
+    recebe_evasao: bool = True
+    recebe_monitor: bool = True
+
+
+@app.get("/api/push/preferencias", dependencies=[Depends(P_CONSULTAR)])
+def push_preferencias_ver(endpoint: str):
+    """Quais tipos de alerta este aparelho (endpoint da assinatura) recebe."""
+    with closing(db()) as con:
+        r = con.execute("""SELECT endpoint, recebe_sem_sinal, recebe_falhas, recebe_evasao, recebe_monitor
+                           FROM push_assinaturas WHERE endpoint=%s""", (endpoint,)).fetchone()
+    if not r:
+        raise HTTPException(404, "aparelho não está inscrito")
+    return r
+
+
+@app.put("/api/push/preferencias", dependencies=[Depends(P_CONSULTAR)])
+def push_preferencias_salvar(b: PushPreferencias):
+    """Escolhe, por aparelho, quais tipos de alerta ele recebe (os demais — evasão, falha de antena/agente — chegam a todos)."""
+    with closing(db()) as con:
+        r = con.execute("""UPDATE push_assinaturas SET recebe_sem_sinal=%s, recebe_falhas=%s, recebe_evasao=%s, recebe_monitor=%s
+                           WHERE endpoint=%s RETURNING endpoint""",
+                        (b.recebe_sem_sinal, b.recebe_falhas, b.recebe_evasao, b.recebe_monitor, b.endpoint)).fetchone()
+        con.commit()
+    if not r:
+        raise HTTPException(404, "aparelho não está inscrito")
+    return {"ok": True}
+
+
 @app.post("/api/push/teste", dependencies=[Depends(P_CONSULTAR)])
 def push_teste():
     return {"enviados": enviar_push("monitor", "Notificação de teste: este aparelho vai receber os alertas do Cabine RFID.")}
 
 
 ESTACAO_ONLINE_SEG = 45  # heartbeat a cada ~15 s
+
+
+def _tipo_dispositivo(ua: str) -> str:
+    """Resumo curto do aparelho a partir do User-Agent: 'Windows · Chrome 131', 'iPhone · Safari', etc."""
+    ua = ua or ""
+    if "Windows" in ua:
+        so = "Windows"
+    elif "Android" in ua:
+        so = "Android"
+    elif "iPhone" in ua or "iPad" in ua:
+        so = "iPhone/iPad"
+    elif "Macintosh" in ua or "Mac OS" in ua:
+        so = "Mac"
+    elif "Linux" in ua:
+        so = "Linux"
+    else:
+        so = "desconhecido"
+    nav = "desconhecido"
+    for nome, chave in (("Edge", "Edg/"), ("Chrome", "Chrome/"), ("Firefox", "Firefox/"), ("Safari", "Version/")):
+        if chave in ua:
+            versao = ua.split(chave, 1)[1].split(" ", 1)[0].split(".")[0]
+            nav = f"{nome} {versao}"
+            break
+    return f"{so} · {nav}"
+
+
+def _codigo_pareamento() -> str:
+    h = secrets.token_hex(4).upper()
+    return f"CTRL-{h[:4]}-{h[4:]}"
 
 
 class EstacaoIn(BaseModel):
@@ -1502,31 +1579,67 @@ class EstacaoIn(BaseModel):
 
 
 @app.post("/api/estacoes/heartbeat")
-def estacao_heartbeat(b: EstacaoIn, user: dict = Depends(P_DASH)):
-    """Estação de controle = tela do Monitor ao vivo aberta num computador: avisa que está de pé (e se está muda/pausada)."""
+def estacao_heartbeat(b: EstacaoIn, request: Request, user: dict = Depends(P_DASH)):
+    """Estação de controle = tela do Monitor ao vivo aberta num computador: avisa que está de pé (e se está muda/pausada).
+    Código de pareamento, antenas atendidas e ativa/desativada são definidos pelo admin (PATCH) e não mudam aqui."""
     nome = " ".join(b.nome.split())[:40]
     if not nome:
         raise HTTPException(400, "dê um nome à estação")
     now = time.time()
+    tipo = _tipo_dispositivo(request.headers.get("user-agent") or "")
     with closing(db()) as con:
-        con.execute("""INSERT INTO estacoes_controle(nome,usuario,visto_em,som,pausada,intervalo_seg,criado_em) VALUES(%s,%s,%s,%s,%s,%s,%s)
+        con.execute("""INSERT INTO estacoes_controle(nome,usuario,visto_em,som,pausada,intervalo_seg,criado_em,codigo,tipo)
+                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
                        ON CONFLICT(nome) DO UPDATE SET usuario=EXCLUDED.usuario, visto_em=EXCLUDED.visto_em, som=EXCLUDED.som,
-                         pausada=EXCLUDED.pausada, intervalo_seg=EXCLUDED.intervalo_seg""",
-                    (nome, user["usuario"], now, b.som, b.pausada, b.intervalo_seg, now))
+                         pausada=EXCLUDED.pausada, intervalo_seg=EXCLUDED.intervalo_seg, tipo=EXCLUDED.tipo""",
+                    (nome, user["usuario"], now, b.som, b.pausada, b.intervalo_seg, now, _codigo_pareamento(), tipo))
         con.execute("DELETE FROM estacoes_controle WHERE visto_em<%s", (now - 30 * 86400,))
         con.commit()
-    return {"ok": True, "nome": nome}
+        r = con.execute("SELECT codigo, ativa FROM estacoes_controle WHERE nome=%s", (nome,)).fetchone()
+    return {"ok": True, "nome": nome, "codigo": r["codigo"], "ativa": r["ativa"]}
 
 
 def _estacoes(con, now: float) -> list:
-    return [{**r, "online": now - r["visto_em"] < ESTACAO_ONLINE_SEG}
-            for r in con.execute("SELECT nome, usuario, visto_em, som, pausada, intervalo_seg FROM estacoes_controle ORDER BY nome").fetchall()]
+    rows = con.execute("""SELECT nome, usuario, visto_em, som, pausada, intervalo_seg, codigo, tipo, antenas, ativa
+                          FROM estacoes_controle ORDER BY nome""").fetchall()
+    ids = {int(i) for r in rows if r["antenas"] for i in r["antenas"].split(",") if i}
+    nomes_antena = {}
+    if ids:
+        nomes_antena = {r["id"]: r["nome"] for r in con.execute("SELECT id,nome FROM antenas WHERE id = ANY(%s)", (list(ids),)).fetchall()}
+    out = []
+    for r in rows:
+        ant_ids = [int(i) for i in r["antenas"].split(",") if i] if r["antenas"] else []
+        out.append({**r, "online": now - r["visto_em"] < ESTACAO_ONLINE_SEG,
+                    "antenas": [{"id": i, "nome": nomes_antena.get(i, "?")} for i in ant_ids]})
+    return out
 
 
 @app.get("/api/estacoes", dependencies=[Depends(P_DASH)])
 def listar_estacoes():
     with closing(db()) as con:
         return _estacoes(con, time.time())
+
+
+class EstacaoPatch(BaseModel):
+    ativa: bool | None = None
+    antenas: list[int] | None = None
+
+
+@app.patch("/api/estacoes/{nome}", dependencies=[Depends(P_SISTEMA)])
+def atualizar_estacao(nome: str, b: EstacaoPatch):
+    """Desativar/reativar uma estação (some do alerta 'nenhuma estação ativa') e escolher quais antenas ela atende."""
+    sets, vals = [], []
+    if b.ativa is not None:
+        sets.append("ativa=%s"); vals.append(b.ativa)
+    if b.antenas is not None:
+        sets.append("antenas=%s"); vals.append(",".join(str(i) for i in b.antenas) or None)
+    if not sets:
+        raise HTTPException(400, "nada para atualizar")
+    with closing(db()) as con:
+        if not con.execute(f"UPDATE estacoes_controle SET {','.join(sets)} WHERE nome=%s RETURNING nome", (*vals, nome)).fetchone():
+            raise HTTPException(404, "estação não encontrada")
+        con.commit()
+    return {"ok": True}
 
 
 @app.delete("/api/estacoes/{nome}", dependencies=[Depends(P_SISTEMA)])
@@ -1536,6 +1649,21 @@ def excluir_estacao(nome: str):
             raise HTTPException(404, "estação não encontrada")
         con.commit()
     return {"ok": True}
+
+
+def avaliar_estacoes(agora: float, estacoes: list[dict], c: dict) -> list[tuple[str, str]]:
+    """Alerta quando existe ao menos uma estação de controle ativa cadastrada, mas nenhuma está com sinal (ninguém de olho no monitor)."""
+    ativas = [e for e in estacoes if e["ativa"]]
+    chave, repetir = "estacoes_sem_sinal", int(c["repetir_min"])
+    ativo = bool(ativas) and not any(e["online"] for e in ativas)
+    est = state["alertas"].get(chave)
+    if ativo and (est is None or agora - est >= repetir * 60):
+        state["alertas"][chave] = agora
+        return [("monitor", "⚠️ Cabine RFID: nenhuma estação de controle está ativa (nenhuma tela do Monitor ao vivo com sinal) — ninguém está vendo os alertas na tela.")]
+    if not ativo and est is not None:
+        del state["alertas"][chave]
+        return [("monitor", "✅ Cabine RFID: ao menos uma estação de controle voltou a dar sinal.")]
+    return []
 
 
 @app.get("/api/monitoramento")

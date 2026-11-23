@@ -7,7 +7,10 @@
 - **Leitor de saida sem parser**: protocolo do Acura EdgeR30 desconhecido; `bridge-saida/` so captura
   bytes. `/api/saida` esta pronta mas ninguem a chama de verdade.
 - **Sem heartbeat do leitor**: o Kuma avisa "sem eventos ha X min", que pode ser so ausencia de movimento.
-- **Sem backup automatico do Postgres** (so o volume `impinj_pgdata`). Definir `pg_dump` agendado.
+- [x] **Backup automatico do Postgres** (2026-11-23, revisado): ja existe, feito no repo `solid`, nao neste — `backup_all_projects.sh`
+  faz `pg_dumpall` diario (cron 03:00, retencao 14 dias) do `impinj_postgres` desde 15/11/2026, e `espelhar-dumps.sh` (cron 03:30) copia
+  pra fora da principal desde a mesma data. **Falta**: testar o restore — bloqueado aqui por nao ter a chave SSH da VPS destravada
+  nesta sessao (`~/.ssh/simoes` pede passphrase); pedir pro Icaro rodar `ssh-add ~/.ssh/simoes` ou testar manualmente.
 
 - **Inventario importado: revisar** (2026-11-07): 8 EPCs fora do padrao hex e 85 tags lidas que nao estao no CSV.
   Agora ha a tela **Revisao do inventario** (EPC fora do padrao, tags lidas sem cadastro) para corrigir; `Data_Compra`
@@ -19,8 +22,11 @@
 - [x] **Alta**: Starlette 0.49.3 + FastAPI 0.120.4 (CVE-2025-62727). Corrigido no codigo (2026-11-07); **falta deploy**.
 - [x] `SESSION_SECRET` obrigatorio (>=32 chars, app nao sobe sem). **Antes do deploy: gerar no `.env` da VPS (`openssl rand -hex 32`)**; sessoes atuais caem.
 - [x] Rate limit: IP do ultimo hop do X-Forwarded-For, tambem no Basic/webhook/saida, expurgo de `_falhas` (corrigido, falta deploy).
-- [ ] Incluir `pg_dump` do Cabine no `espelhar-dumps.sh` (nao coberto hoje) e testar restore.
-- [x] Agente 0.1.4: tray so abre http(s) vindo do `state.json`. [ ] Ainda: tirar escrita de Users em `state.json`/pasta publica (risco de link no tmp do servico).
+- [x] `pg_dump` do Cabine no `espelhar-dumps.sh`: ja incluido (repo `solid`, desde 15/11/2026; ver risco acima). Falta so testar restore.
+- [x] Agente 0.1.4: tray so abre http(s) vindo do `state.json`. [x] Agente 0.1.10 (2026-11-23): tirada a escrita de Users em
+  `state.json`/pasta publica — `PublicDir` ganhava `Users:(OI)(CI)M` (Modify) na instalacao; so o servico (SYSTEM) escreve ali,
+  entao virou `Users:(OI)(CI)RX` (so leitura, como o resto do `DataDir`). `WriteState` tambem abre o `.tmp` com `O_EXCL` (falha
+  em vez de escrever atraves de um link deixado por outro usuario local, em vez de seguir o link).
 - [x] Container sem root (uid 10001). [ ] `govulncheck` no agente; assinatura do instalador; restringir `wa_url` a https/publico.
 
 ## Dashboard (2026-11-07)
@@ -88,7 +94,10 @@ Referência: eTrace v1.18.1 do Fera Palace (46 fotos de tela). O que o Cabine j�
 - [x] **Sessões de leitura** (tela `#sessoesleit`, `GET /api/leitura-sessoes`): cada clique em Registrar leitura vira uma sessão com início, usuário, duração, peças e resultado (*Em andamento*, *Reiniciada antes de concluir*, *Concluída com peças*, *Concluída com 0 peças (leitor comunicando / sem comunicação)*), causa provável (rádio sem sinal na janela = "Leitor/gateway/broker"), marca **sinalizada** (0 peças em até 5 min depois de uma leitura com peças), filtros (período, só 0 peças, só sinalizadas, só com problema), atualização a cada 30 s. Registros guardados por 30 dias. Serve para validar a janela de 15 s no leitor real.
 - [x] **Reportar problema** na leitura (botão na Cabine e na lista de sessões), com contador no menu e "Marcar resolvido".
 - [x] **Diagnóstico de Leitores**: já coberto pela tela Monitoramento (uptime, latência, quedas, último sinal do rádio) somada às Sessões de leitura (0 peças com causa); não precisa de tela separada.
-- [ ] **Estações de Controle**: código de pareamento (ex. `NTFY-xxxx-xxxx-xxxx`) com botão copiar, tipo/versão do aparelho, "visto há X", quais antenas cada estação atende, desativar/atualizar.
+- [x] **Estações de Controle** (2026-11-23): código de pareamento `CTRL-XXXX-XXXX` (gerado uma vez, estável entre heartbeats) com botão
+  copiar; tipo/versão do aparelho (SO/navegador, lido do User-Agent do heartbeat); "visto há X" (já existia); antenas atendidas
+  (`PATCH /api/estacoes/{nome}` com `antenas: [id,...]`, quem tem `sistema` escolhe num multi-select na tela Monitoramento);
+  desativar/reativar (`ativa`, mesmo PATCH — fora do alerta "nenhuma estação ativa" sem apagar o histórico).
 - [x] **Inventário**: já tinha os 7 filtros, resumo por tipo, conferência a partir dos filtros e "Filtros aplicados" no histórico (conferido em 2026-11-12).
 - [x] **Movimentações** (2026-11-12): filtro por usuário e botão Imprimir (destino, datas e detalhe/comprovante já existiam). Falta só selecionar linhas para imprimir.
 - [x] **Antenas**: o "Modo de operação" (Manual/Automático) já existia.
@@ -116,4 +125,7 @@ Referência: eTrace v1.18.1 do Fera Palace (46 fotos de tela). O que o Cabine j�
 - [x] Grafico de **leituras por hora** (48 h) no Dashboard.
 - [x] **Web push no PWA** (VAPID; chave gerada e guardada em `config`; botao "Ativar notificacoes" para quem tem `consultar`). Dependencia nova `pywebpush` no Dockerfile. iPhone so recebe com o app instalado na tela inicial.
 - [x] **Validar `/ingest` com leitor real** (2026-11-23): R700 em 192.168.30.90 com webhook ativo (HTTP 200), painel mostra "radio: enviando sinal" e os testes de captura/registro de leitura gravaram eventos (confirmado pelo usuario).
-- [ ] Estacao de controle: alerta quando nenhuma estacao estiver ativa; escolher tipos de alerta por aparelho no push.
+- [x] Estação de controle: alerta quando nenhuma estiver ativa (2026-11-23) — `avaliar_estacoes()`, tipo `monitor`, dispara quando
+  há ao menos uma estação `ativa` cadastrada e nenhuma com sinal; `[x]` escolher tipos de alerta por aparelho no push — colunas
+  `recebe_sem_sinal/falhas/evasao/monitor` em `push_assinaturas` (como já existia por destinatário WhatsApp), painel em
+  "Monitoramento" quando o aparelho tem notificações ligadas (avisos de hardware — antena/agente offline — continuam indo a todos).
