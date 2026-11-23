@@ -144,3 +144,6 @@
 ## Movimentações com filtro por usuário e impressão (2026-11-12)
 - `GET /api/transferencias?usuario=`; seletor de usuário e botão Imprimir na tela Transferências. 92 testes.
 - Deploy de 2026-11-12 (Sessões de leitura + Movimentações): backup `impinj-AAAAMMDD-HHMM-sessoes.sql.gz` na VPS (`/root/backup`).
+
+## Validacao do /ingest com o leitor real (2026-11-23)
+- R700 (192.168.30.90): Event Reporting > Webhook ligado (URL `/ingest`, 443, Verify TLS, Retry); painel com antena online, "webhook active (HTTP 200)" e "radio: enviando sinal". Testes de captura e registro de leitura ja gravavam eventos. Backlog atualizado.

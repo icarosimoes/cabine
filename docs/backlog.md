@@ -53,7 +53,7 @@
 - (2026-11-07) `/ingest` so grava eventos durante leitura solicitada (`POST /api/leitura/armar` ou conferencia em
   andamento); fora disso descarta e guarda so o "ultimo sinal" em memoria (indicador "radio: enviando sinal").
   Consequencia: Tags lidas, Eventos ao vivo e Leituras por hora refletem apenas leituras solicitadas.
-  Feito (2026-11-09): botao "Capturar" (30 s a 10 min) na tela Eventos ao vivo. Pendente: validar `/ingest` com leitor real.
+  Feito (2026-11-09): botao "Capturar" (30 s a 10 min) na tela Eventos ao vivo. `/ingest` validado com o leitor real (2026-11-23).
 
 ## Agente do hotel (2026-11-07)
 
@@ -103,7 +103,9 @@ Referência: eTrace v1.18.1 do Fera Palace (46 fotos de tela). O que o Cabine j�
 - CI/CD: workflow criado (testes + compila agente + deploy por secrets); **falta rodar `./scripts/rotacionar-chave-ci.sh`** (cria chave + secrets `VPS_HOST`/`VPS_SSH_KEY`; bloqueado para o assistente) e validar com `gh workflow run ci`. GHCR nao adotado.
 - Cadastrar o projeto em `erpsolid/docs/projetos/` (indice central de repos).
 
-- Evasao: antenas .32 e .104 so monitoramento de rede (online = pagina de status responde; agente 0.1.5 nao sonda a 8080). O Acura aceita 2 clientes na 8080 (hoje ocupadas por 192.168.30.18). Pendente: mapear protocolo da 8080, senha de administracao dos Acura.
+- Evasao: antenas .32 e .104 so monitoramento de rede (online = pagina de status responde; agente 0.1.5 nao sonda a 8080). O Acura aceita 2 clientes na 8080 (hoje ocupadas por 192.168.30.18).
+  **Investigado (2026-11-23)**: login no painel dos Acura com a senha padrao `acura@autoid`. Tela **Rede** confirma "Modo Ethernet: Servidor" nos dois (por isso o limite de 2 clientes na 8080); existe modo "Cliente" mas trocar pra ele desligaria o modo Servidor por completo e derrubaria a conexao do .18 (outro sistema) — **decisao: nao mexer, manter como esta**. Nenhuma configuracao foi alterada.
+  Caminho sem disputar as 2 vagas seria espelhamento de porta (mirror) no switch, lendo o trafego de forma passiva — **descartado por ora** (nao vamos mexer em porta de switch). Pendente: mapear o protocolo da 8080 (formato `0x<EPC>` ja mapeado no agente 0.1.9) para quando houver um caminho de captura liberado.
 - Video da evasao: pendencias na secao "Nome de tags e video da evasao (2026-11-12)".
 
 ## Monitoramento e alertas (2026-11-12)
@@ -113,5 +115,5 @@ Referência: eTrace v1.18.1 do Fera Palace (46 fotos de tela). O que o Cabine j�
 - [x] **Divergencias da cabine gravadas** (`divergencias`, com a composicao do lote por tipo) no Dashboard + `GET /api/divergencias`.
 - [x] Grafico de **leituras por hora** (48 h) no Dashboard.
 - [x] **Web push no PWA** (VAPID; chave gerada e guardada em `config`; botao "Ativar notificacoes" para quem tem `consultar`). Dependencia nova `pywebpush` no Dockerfile. iPhone so recebe com o app instalado na tela inicial.
-- [ ] **Validar `/ingest` com leitor real**: impossivel sem o hardware; continua pendente.
+- [x] **Validar `/ingest` com leitor real** (2026-11-23): R700 em 192.168.30.90 com webhook ativo (HTTP 200), painel mostra "radio: enviando sinal" e os testes de captura/registro de leitura gravaram eventos (confirmado pelo usuario).
 - [ ] Estacao de controle: alerta quando nenhuma estacao estiver ativa; escolher tipos de alerta por aparelho no push.
