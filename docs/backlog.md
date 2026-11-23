@@ -103,7 +103,7 @@ Referência: eTrace v1.18.1 do Fera Palace (46 fotos de tela). O que o Cabine j�
 - [x] **Antenas**: o "Modo de operação" (Manual/Automático) já existia.
 - [x] Acomodações já têm UHs por acomodação. [ ] **Categorias com pai** (hoje o tipo é texto livre no item; exige tabela de categorias).
 - [ ] Reconciliar o catálogo: o eTrace mostra **3.232 itens "Em uso"** e o Cabine tem 4.570 (conferir estados e duplicados).
-- [ ] Antenas de evasão: localizações do eTrace = `.32` Recepção, `.104` **Saída Serviço**; preencher no Cabine para a coleta de evasão funcionar (sem localização o servidor responde 409).
+- [ ] Antenas de evasão: localizações do eTrace = `.32` Recepção, `.104` **Saída Serviço**; preencher no Cabine para a coleta de evasão funcionar (sem localização o servidor responde 409). **Cadastro manual na tela Antenas do painel de produção — fica com o Icaro** (2026-11-23): não é alteração de código, e o assistente não tem as credenciais de login do painel em produção.
 - Não copiar: tela de BI (no eTrace está com erro de autenticação) e "Credenciais BI".
 
 ## Ideias
