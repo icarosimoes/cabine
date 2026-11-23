@@ -450,7 +450,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <button id="fLimpar">limpar</button>
     <button id="fImprimir">Imprimir</button>
   </div>
-  <div class="scroll"><table class="rt" id="transfTabela"><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Usuário</th><th>Obs.</th><th>EPCs</th><th></th></tr></thead><tbody id="transf"></tbody></table></div>
+  <div class="scroll"><table class="rt" id="transfTabela"><thead><tr><th><input type="checkbox" id="transfTodos" title="selecionar todas as exibidas"></th><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Usuário</th><th>Obs.</th><th>EPCs</th><th></th></tr></thead><tbody id="transf"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="evasao" hidden>
@@ -495,7 +495,9 @@ table.rt-sel td:nth-child(2)::before{content:none}
   <div class="row">
     <input id="itEpc" type="text" placeholder="EPC" style="width:160px;font-family:ui-monospace,monospace">
     <input id="itNome" type="text" maxlength="80" placeholder="nome da tag (opcional)" title="Apelido livre, ex.: Lençol 12 - suíte 301. Aparece nas leituras, na evasão e no inventário." style="width:190px">
-    <input id="itTipo" type="text" placeholder="tipo (ex. Capa edredom king)" style="width:200px">
+    <input id="itTipo" type="text" list="dlCategorias" placeholder="tipo (ex. Capa edredom king)" style="width:200px">
+    <datalist id="dlCategorias"></datalist>
+    <button type="button" id="itCategorias" hidden title="organizar os tipos em categorias (com pai)">categorias</button>
     <input id="itFabricante" type="text" placeholder="fabricante">
     <input id="itTamanho" type="text" placeholder="tamanho">
     <input id="itComposicao" type="text" placeholder="composição">
@@ -510,7 +512,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
   </div>
   <div class="row" id="catLoteBar" hidden style="padding-top:0;gap:8px;flex-wrap:wrap">
     <b id="catSelN">0</b><span class="mut">selecionados — editar em lote (campo vazio = não altera):</span>
-    <input id="lcTipo" type="text" placeholder="tipo" style="width:140px">
+    <input id="lcTipo" type="text" list="dlCategorias" placeholder="tipo" style="width:140px">
     <input id="lcFabricante" type="text" placeholder="fabricante" style="width:120px">
     <input id="lcTamanho" type="text" placeholder="tamanho" style="width:90px">
     <input id="lcComposicao" type="text" placeholder="composição" style="width:110px">
@@ -799,7 +801,7 @@ table.rt-sel td:nth-child(2)::before{content:none}
     <span class="mut">— baixe os dois primeiros na mesma pasta do PC do hotel</span></div>
   <div class="row"><input id="agNome" type="text" placeholder="nome (ex.: PC Recepção Fera)" style="width:240px"><button class="acc" id="agCriar">Gerar token</button></div>
   <div id="agMsg" class="msg"></div>
-  <div class="scroll"><table class="rt"><thead><tr><th>Agente</th><th>Último contato</th><th>Versão</th><th>Computador</th><th></th></tr></thead><tbody id="agentes"></tbody></table></div>
+  <div class="scroll"><table class="rt"><thead><tr><th>Agente</th><th>Último contato</th><th>Versão</th><th>Computador</th><th>Horário de funcionamento</th><th></th></tr></thead><tbody id="agentes"></tbody></table></div>
 </section>
 </div>
 <div class="view" data-view="acomodacoes" hidden>
@@ -1289,17 +1291,21 @@ function montaFiltroTransf(){
   if($('fAte').value)p.set('ate',Math.floor(new Date($('fAte').value+'T23:59:59').getTime()/1000));
   return p.toString();
 }
+let selTransf=new Set();
 async function carregarTransferencias(){
   const qs=montaFiltroTransf();
   const rows=await j('/api/transferencias'+(qs?'?'+qs:''));
   const usu=[...new Set([...rows.map(t=>t.usuario).filter(Boolean),$('fUsuario').value].filter(Boolean))].sort(),cur=$('fUsuario').value;
   $('fUsuario').innerHTML='<option value="">todos os usuários</option>'+usu.map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join('');$('fUsuario').value=cur;
+  const visiveis=new Set(rows.map(t=>t.id));selTransf=new Set([...selTransf].filter(id=>visiveis.has(id)));
   $('transf').innerHTML=rows.map(t=>`<tr>
+    <td><input type="checkbox" class="transfSel" data-id="${t.id}"${selTransf.has(t.id)?' checked':''}></td>
     <td>#${t.lote_id}</td><td>${dt(t.criado_em)}</td><td>${t.quantidade}</td>
     <td>${esc(t.destino_nome)} ${pill(t.destino_tipo)}</td><td>${esc(t.usuario||'–')}</td><td>${esc(t.observacao||'–')}</td>
     <td class="epcs toggle" data-lote="${t.lote_id}">ver EPCs</td>
     <td><button data-comp="${t.id}">Comprovante</button></td>
-  </tr>`).join('')||'<tr><td colspan=8>nenhuma transferência encontrada</td></tr>';
+  </tr>`).join('')||'<tr><td colspan=9>nenhuma transferência encontrada</td></tr>';
+  $('transfTodos').checked=rows.length>0&&rows.every(t=>selTransf.has(t.id));
 }
 document.addEventListener('click',async e=>{
   const c=e.target.closest('td.epcs');if(!c)return;
@@ -1308,10 +1314,20 @@ document.addEventListener('click',async e=>{
   c.classList.add('open');c.textContent=lote.epcs.join(', ');
 });
 document.addEventListener('click',e=>{const b=e.target.closest('[data-comp]');if(b)detalheMovimentacao(Number(b.dataset.comp)).catch(err=>alert(err.message))});
+document.addEventListener('change',e=>{
+  const c=e.target.closest('.transfSel');if(!c)return;
+  const id=Number(c.dataset.id);c.checked?selTransf.add(id):selTransf.delete(id);
+  $('transfTodos').checked=[...document.querySelectorAll('.transfSel')].every(x=>x.checked);
+});
+$('transfTodos').onchange=()=>{
+  document.querySelectorAll('.transfSel').forEach(c=>{c.checked=$('transfTodos').checked;const id=Number(c.dataset.id);c.checked?selTransf.add(id):selTransf.delete(id)});
+};
 $('fAplicar').onclick=carregarTransferencias;
 $('fImprimir').onclick=()=>{
   const w=window.open('','_blank');if(!w)return;
-  const linhas=[...document.querySelectorAll('#transf tr')].map(tr=>`<tr>${[...tr.cells].slice(0,6).map(c=>`<td>${c.innerHTML}</td>`).join('')}</tr>`).join('');
+  const todas=[...document.querySelectorAll('#transf tr')];
+  const linhasEl=selTransf.size?todas.filter(tr=>selTransf.has(Number(tr.querySelector('.transfSel')?.dataset.id))):todas;
+  const linhas=linhasEl.map(tr=>`<tr>${[...tr.cells].slice(1,7).map(c=>`<td>${c.innerHTML}</td>`).join('')}</tr>`).join('');
   w.document.write(`<title>Movimentações</title><style>body{font:13px sans-serif}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:4px 6px;text-align:left}</style>
     <h3>Movimentações — ${new Date().toLocaleString('pt-BR')}</h3><table><thead><tr><th>Lote</th><th>Data</th><th>Qtd.</th><th>Destino</th><th>Usuário</th><th>Obs.</th></tr></thead><tbody>${linhas}</tbody></table>`);
   w.document.close();w.focus();w.print();
@@ -1471,6 +1487,7 @@ const podeVer=h=>tem(NAV_PERM[h]||'consultar');
 function aplicaPermissoes(){
   document.querySelectorAll('[data-nav]').forEach(a=>a.hidden=!podeVer(a.dataset.nav));
   document.querySelectorAll('.nav-group').forEach(g=>g.hidden=![...g.querySelectorAll('.nav-item')].some(a=>!a.hidden));
+  $('itCategorias').hidden=!tem('cadastros');
 }
 async function carregarMe(){
   try{eu=await j('/api/me')}catch(e){return}
@@ -1691,8 +1708,23 @@ async function carregarAgentes(){
   const adm=!$('navUsuarios').hidden;$('secAgentes').hidden=!adm;if(!adm)return;
   const r=await j('/api/agentes');
   $('agentes').innerHTML=r.map(a=>`<tr><td>${esc(a.nome)}</td><td>${a.visto_em?(Date.now()/1000-a.visto_em<90?'<span class="pill ok">online</span> ':'<span class="pill alerta">sem contato</span> ')+'há '+idade(a.visto_em):'nunca'}</td>
-    <td>${esc(a.versao||'–')}</td><td>${esc(a.host||'–')}</td><td><button data-agdel="${a.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=5>nenhum agente cadastrado</td></tr>';
+    <td>${esc(a.versao||'–')}</td><td>${esc(a.host||'–')}</td>
+    <td><input type="time" class="agHorIni" data-id="${a.id}" value="${a.horario_inicio||''}" style="width:90px">
+        – <input type="time" class="agHorFim" data-id="${a.id}" value="${a.horario_fim||''}" style="width:90px">
+        <button type="button" class="agHorSalvar" data-id="${a.id}">salvar</button>
+        ${a.horario_inicio?`<button type="button" class="agHorLimpar" data-id="${a.id}" title="voltar a sempre ativo">×</button>`:''}</td>
+    <td><button data-agdel="${a.id}">Excluir</button></td></tr>`).join('')||'<tr><td colspan=6>nenhum agente cadastrado</td></tr>';
 }
+document.addEventListener('click',async e=>{
+  const s=e.target.closest('.agHorSalvar'),l=e.target.closest('.agHorLimpar');
+  if(!s&&!l)return;
+  const id=(s||l).dataset.id;
+  const ini=l?null:document.querySelector(`.agHorIni[data-id="${id}"]`).value||null;
+  const fim=l?null:document.querySelector(`.agHorFim[data-id="${id}"]`).value||null;
+  if(s&&(!ini||!fim)){alert('informe início e fim, ou use × para limpar');return}
+  try{await j('/api/agentes/'+id+'/horario',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({horario_inicio:ini,horario_fim:fim})});await carregarAgentes()}
+  catch(err){alert(err.message)}
+});
 $('agCriar').onclick=async()=>{
   const m=$('agMsg'),nome=$('agNome').value.trim();if(!nome){m.className='msg bad';m.textContent='informe o nome';return}
   try{const r=await j('/api/agentes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome})});
@@ -1839,12 +1871,53 @@ $('tags').addEventListener('click',e=>{
 });
 $('catalogo').addEventListener('click',e=>{const b=e.target.closest('[data-itedit]');if(!b)return;const i=catRows.find(x=>x.epc===b.dataset.itedit);if(i)itemNoForm(i)});
 $('itLimpar').onclick=()=>{['itEpc','itNome','itTipo','itFabricante','itTamanho','itComposicao','itCor','itCompra'].forEach(id=>$(id).value='');$('itemMsg').textContent=''};
+let categoriasCache=[];
+function categoriaCaminho(cats,c){return c.pai_id?categoriaCaminho(cats,cats.find(x=>x.id===c.pai_id))+' > '+c.nome:c.nome}
+async function carregarCategoriasDatalist(){
+  categoriasCache=await j('/api/categorias');
+  $('dlCategorias').innerHTML=categoriasCache.map(c=>`<option value="${esc(c.nome)}">`).join('');
+}
+function renderCategorias(){
+  const linhas=categoriasCache.length?categoriasCache.map(c=>`<tr>
+    <td>${esc(categoriaCaminho(categoriasCache,c))}</td>
+    <td><button type="button" class="catExcluir" data-id="${c.id}">excluir</button></td>
+  </tr>`).join(''):'<tr><td colspan=2 class="mut">nenhuma categoria cadastrada</td></tr>';
+  const opcoesPai=categoriasCache.map(c=>`<option value="${c.id}">${esc(categoriaCaminho(categoriasCache,c))}</option>`).join('');
+  $('dlgBody').innerHTML=`<h3>Categorias</h3>
+    <table class="rt"><thead><tr><th>Categoria</th><th></th></tr></thead><tbody>${linhas}</tbody></table>
+    <div class="row" style="padding-top:8px">
+      <input id="catNovaNome" type="text" placeholder="nome da nova categoria" style="flex:1;min-width:140px">
+      <select id="catNovaPai"><option value="">(categoria raiz)</option>${opcoesPai}</select>
+      <button class="acc" type="button" id="catNovaAdd">Adicionar</button>
+    </div>
+    <div id="catMsg" class="msg"></div>`;
+  $('catNovaAdd').onclick=async()=>{
+    const nome=$('catNovaNome').value.trim(),msg=$('catMsg');
+    if(!nome){msg.className='msg bad';msg.textContent='nome é obrigatório';return}
+    try{
+      await j('/api/categorias',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({nome,pai_id:$('catNovaPai').value?Number($('catNovaPai').value):null})});
+      await carregarCategoriasDatalist();renderCategorias();
+    }catch(e){msg.className='msg bad';msg.textContent=e.message}
+  };
+  $('dlgBody').querySelectorAll('.catExcluir').forEach(b=>b.onclick=async()=>{
+    try{await j('/api/categorias/'+b.dataset.id,{method:'DELETE'});await carregarCategoriasDatalist();renderCategorias()}
+    catch(e){$('catMsg').className='msg bad';$('catMsg').textContent=e.message}
+  });
+}
+async function abrirCategorias(){
+  await carregarCategoriasDatalist();
+  dialogo('',[['Fechar','',()=>{}]]);
+  renderCategorias();
+}
+$('itCategorias').onclick=abrirCategorias;
+
 async function carregarCatalogo(){
   const q=$('itBusca').value.trim();
   const escolhasPendentes={};
   document.querySelectorAll('select.estadoSel').forEach(s=>escolhasPendentes[s.dataset.epc]=s.value);
   const rows=await j('/api/itens'+(q?'?q='+encodeURIComponent(q):''));
-  await carregarEstados();
+  await Promise.all([carregarEstados(),carregarCategoriasDatalist()]);
   const opts=estadosCache.map(e=>`<option value="${e.id}">${esc(e.nome)}</option>`).join('');
   catVisiveis=rows.map(i=>i.epc);
   $('catalogo').innerHTML=rows.map(i=>`<tr>

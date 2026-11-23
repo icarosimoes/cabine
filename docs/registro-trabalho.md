@@ -166,3 +166,26 @@
   ali). `WriteState` tambem abre o `.tmp` com `O_EXCL` (falha em vez de escrever atraves de um link pre-existente).
 - Testes: 3 novos em `tests/test_monitor_alertas.py` e `tests/test_push.py` (95 no total); `go test ./...` e `GOOS=windows go build`
   do agente passando. Pendente: deploy e, no hotel, atualizar o agente do pcsom pra 0.1.10.
+
+## Seguranca (govulncheck + SSRF), categorias com pai, imprimir selecionadas, horario do agente (2026-11-23)
+- **govulncheck no agente**: as 15 vulnerabilidades reportadas eram todas da stdlib do Go (`go1.26.5`), nenhuma em
+  dependencia direta; `agent/build.sh` passou a usar `golang:1.26` (`go1.26.11`) e `agent/go.mod` ganhou
+  `toolchain go1.26.11`. Rebuild confirmado limpo (`govulncheck ./...` -> "No vulnerabilities found").
+- **`wa_url` restrito a https/publico**: `_wa_url_valido()` em `PUT /api/config/alertas` bloqueia localhost, IP
+  privado/loopback/link-local e exige https quando o campo vem preenchido (SSRF por quem tem a permissao `whatsapp`);
+  campo vazio continua caindo no padrao interno (`http://evolution-api:8080`), sem passar pela validacao.
+- **Categorias com pai**: tabela `categorias` (nome + `pai_id`, hierarquica) com CRUD em `/api/categorias` (bloqueia
+  ciclo e exclusao com filhos). Nao substitui o campo `tipo` do item (que seguiria texto livre, usado em 70+ lugares) —
+  alimenta um `<datalist>` de autocomplete no Catalogo, com um botao "categorias" (permissao `cadastros`) pra gerenciar
+  a arvore num dialogo.
+- **Movimentacoes: selecionar linhas pra imprimir**: checkbox por linha + "selecionar todas"; sem selecao, imprime as
+  linhas exibidas (comportamento anterior preservado).
+- **Horario de funcionamento por agente** (resolve o falso alarme noturno da governanca): `agentes` ganhou
+  `horario_inicio`/`horario_fim` (`PATCH /api/agentes/{id}/horario`, tela Agente do hotel); fora da janela,
+  `avaliar_agentes()` nao avalia "sem contato" pra esse agente (sem alerta nem "voltou" falso). Sem horario cadastrado =
+  sempre ativo (igual antes). Aceita janela que cruza a meia-noite; usa `TZ_OFFSET` pra hora local.
+- **Indice central de projetos**: cadastrado o Cabine RFID no vault (`solid/docs/projetos/cabine/README.md` + linha na
+  tabela, commit `9448c8c` no repo `solid` — o vault real fica la, `erpsolid/docs/projetos` e so um symlink). Cadastro
+  manual; o job `sync-docs-vault` roda em outro host (Hermes), fora do alcance desta sessao.
+- Testes: 4 novos (SSRF do `wa_url`, arvore de categorias, horario do agente x2) — 99 no total; suite completa
+  rodada contra Postgres 16 descartavel. Pendente: deploy.

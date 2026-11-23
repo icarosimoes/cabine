@@ -47,6 +47,15 @@ def test_config_uptime_validacao(client):
     assert client.put("/api/config/alertas", json={**corpo, "uptime_min": 90}).json()["uptime_min"] == 90
 
 
+def test_wa_url_restrito_a_https_publico(client):
+    corpo = {"wa_instance": "", "wa_apikey": "", "ativo": True, "sem_sinal_seg": 60, "falhas": 5, "repetir_min": 120, "uptime_min": 95}
+    for url in ("http://evolution.exemplo.com", "https://localhost:8080", "https://127.0.0.1", "https://10.0.0.5", "https://192.168.1.5"):
+        r = client.put("/api/config/alertas", json={**corpo, "wa_url": url})
+        assert r.status_code == 400, url
+    assert client.put("/api/config/alertas", json={**corpo, "wa_url": "https://evolution.exemplo.com"}).status_code == 200
+    assert client.put("/api/config/alertas", json={**corpo, "wa_url": ""}).status_code == 200  # vazio: mantém o padrão, sem validar
+
+
 def test_evolution_cai_e_volta(client, monkeypatch):
     main.state["alertas"].clear(); main.state.pop("evolution", None)
     estados = iter([{"estado": "open", "ok": True, "erro": None}, {"estado": "close", "ok": False, "erro": None},

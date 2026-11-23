@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 VERSION="${1:-$(tr -d '[:space:]' < VERSION)}"  # versão única em agent/VERSION (o CI usa a mesma)
 mkdir -p dist
-docker run --rm -v "$PWD":/src -w /src -v cabine-gomod:/go/pkg/mod golang:1.25 sh -c "
+docker run --rm -v "$PWD":/src -w /src -v cabine-gomod:/go/pkg/mod golang:1.26 sh -c "
   gofmt -w . && go vet ./... && go test ./... &&
   GOOS=windows go vet ./... &&
   GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -H windowsgui -X main.version=${VERSION}' -o dist/cabine-agent.exe ./cmd/cabine-agent"

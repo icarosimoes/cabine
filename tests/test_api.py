@@ -1,3 +1,4 @@
+import datetime
 import json
 import time
 from contextlib import closing
@@ -300,6 +301,32 @@ def test_agente_status_comandos_e_alertas(client):
     msgs = main.avaliar_agentes(now + 1000, [], [{"id": 1, "nome": "hotel", "visto_em": now}], c)
     assert msgs[0][0] == "agente_offline" and "sem contato" in msgs[0][1]
     main.state["alertas"].clear()
+
+
+def test_agente_horario_de_funcionamento_evita_falso_alarme(client):
+    main.state["alertas"].clear()
+    c = main.cfg()
+    agora = time.time()
+    madrugada = datetime.datetime.fromtimestamp(agora + main.TZ_OFFSET, tz=datetime.timezone.utc).replace(hour=2, minute=0)
+    t_madrugada = madrugada.timestamp() - main.TZ_OFFSET
+    ag = [{"id": 1, "nome": "governanca", "visto_em": t_madrugada - 7200, "horario_inicio": "07:00", "horario_fim": "19:00"}]
+    assert main.avaliar_agentes(t_madrugada, [], ag, c) == []  # fora do horário: sem alerta, mesmo sem contato há 2h
+    meio_dia = madrugada.replace(hour=12).timestamp() - main.TZ_OFFSET
+    msgs = main.avaliar_agentes(meio_dia, [], [{**ag[0], "visto_em": t_madrugada - 7200}], c)
+    assert len(msgs) == 1 and msgs[0][0] == "agente_offline"  # dentro do horário: volta a avaliar
+    main.state["alertas"].clear()
+
+
+def test_agente_patch_horario_validacao(client):
+    r = client.post("/api/agentes", json={"nome": "pc-governanca"}).json()
+    assert client.patch(f"/api/agentes/{r['id']}/horario", json={"horario_inicio": "07:00"}).status_code == 400  # só um dos dois
+    assert client.patch(f"/api/agentes/{r['id']}/horario", json={"horario_inicio": "25:00", "horario_fim": "19:00"}).status_code == 400
+    assert client.patch(f"/api/agentes/{r['id']}/horario", json={"horario_inicio": "07:00", "horario_fim": "19:00"}).status_code == 200
+    ag = client.get("/api/agentes").json()[0]
+    assert (ag["horario_inicio"], ag["horario_fim"]) == ("07:00", "19:00")
+    assert client.patch(f"/api/agentes/{r['id']}/horario", json={}).status_code == 200  # limpa: volta a sempre ativo
+    assert client.get("/api/agentes").json()[0]["horario_inicio"] is None
+    assert client.patch("/api/agentes/99999/horario", json={}).status_code == 404
 
 
 def test_alerta_webhook_do_radio(client):
@@ -799,3 +826,23 @@ def test_nome_aparece_nas_leituras_na_evasao_e_no_csv(client):
     assert consulta["identificados"][0]["nome"] == "Toalha piscina 7"
     linhas = client.get("/api/export/inventario.csv").text.splitlines()
     assert linhas[0].endswith(";nome") and linhas[1].endswith(";Toalha piscina 7")
+
+
+def test_categorias_arvore_com_pai(client):
+    roupas = client.post("/api/categorias", json={"nome": "Roupas de cama"}).json()
+    assert roupas["pai_id"] is None
+    lencol = client.post("/api/categorias", json={"nome": "Lençol", "pai_id": roupas["id"]}).json()
+    assert lencol["pai_id"] == roupas["id"]
+    assert client.post("/api/categorias", json={"nome": "Lençol", "pai_id": roupas["id"]}).status_code == 409
+    assert client.post("/api/categorias", json={"nome": "x", "pai_id": 99999}).status_code == 400
+    cats = client.get("/api/categorias").json()
+    assert {c["nome"] for c in cats} == {"Roupas de cama", "Lençol"}
+    # não pode excluir categoria com filha
+    assert client.delete(f"/api/categorias/{roupas['id']}").status_code == 409
+    # não pode virar pai da própria descendência (ciclo)
+    assert client.put(f"/api/categorias/{roupas['id']}", json={"nome": "Roupas de cama", "pai_id": lencol["id"]}).status_code == 400
+    r = client.put(f"/api/categorias/{lencol['id']}", json={"nome": "Lençol de casal", "pai_id": roupas["id"]})
+    assert r.status_code == 200
+    assert client.delete(f"/api/categorias/{lencol['id']}").status_code == 200
+    assert client.delete(f"/api/categorias/{roupas['id']}").status_code == 200
+    assert client.delete(f"/api/categorias/{roupas['id']}").status_code == 404

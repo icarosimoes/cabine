@@ -27,7 +27,12 @@
   `state.json`/pasta publica — `PublicDir` ganhava `Users:(OI)(CI)M` (Modify) na instalacao; so o servico (SYSTEM) escreve ali,
   entao virou `Users:(OI)(CI)RX` (so leitura, como o resto do `DataDir`). `WriteState` tambem abre o `.tmp` com `O_EXCL` (falha
   em vez de escrever atraves de um link deixado por outro usuario local, em vez de seguir o link).
-- [x] Container sem root (uid 10001). [ ] `govulncheck` no agente; assinatura do instalador; restringir `wa_url` a https/publico.
+- [x] Container sem root (uid 10001). [x] `govulncheck` no agente (2026-11-23): as 15 vulnerabilidades eram só da stdlib do Go
+  (`go1.26.5`), nenhuma em dependência; build passou a usar `golang:1.26` (`go1.26.11`, zero vulnerabilidades) em
+  `agent/build.sh` e `go.mod` (`toolchain go1.26.11`). [x] `wa_url` restrito a https + host público (2026-11-23): bloqueia
+  localhost/IP privado/link-local via `_wa_url_valido()` em `PUT /api/config/alertas` (SSRF por quem tem a permissão
+  `whatsapp`); vazio continua caindo no padrão interno (`http://evolution-api:8080`, sem passar pela validação).
+  [ ] assinatura do instalador (precisa de certificado).
 
 ## Dashboard (2026-11-07)
 
@@ -65,7 +70,10 @@
 
 - **Proximo: `.msi`** (ver `docs/infra/agente-hotel.md` > Proximos passos): aparece em Aplicativos instalados, atualiza por cima, token por parametro.
 - Agente 0.1.5: online = host responde (nao sonda 8080 do Acura). 0.1.6: reinstalacao fecha servico/tray e mantem o token.
-- **Falso alarme noturno**: o agente do PC da governanca desliga no fim do expediente e dispara "agente sem contato" todo dia. Opcoes: horario de funcionamento por agente (ex.: 07h-19h) ou nao alertar quando outro agente cobre todas as antenas dele. Aguardando decisao.
+- [x] **Falso alarme noturno** (2026-11-23): horário de funcionamento por agente (`horario_inicio`/`horario_fim`, `PATCH
+  /api/agentes/{id}/horario`, tela Agentes do hotel). Fora da janela, `avaliar_agentes()` não avalia "sem contato" pra
+  esse agente (nem alerta, nem "voltou" falso); sem horário cadastrado = sempre ativo (comportamento de antes). Aceita
+  janela que cruza a meia-noite. Usa `TZ_OFFSET` (America/Sao_Paulo) pra converter o horário local.
 - Idea: alertas extras vindos do agente — R700 fora de `running`, preset diferente do esperado, temperatura alta, comando de config com falha, Acura sem cliente na 8080 (lendo a pagina de status).
 - Validado em producao (2026-11-07): agente 0.1.6 no Windows, 3 antenas reportando, alertas de offline/voltou entregues no grupo de WhatsApp. Proxima: `.msi`.
 - Ideia: cadastrar numero individual como destinatario alem do grupo (o grupo pode ficar silenciado/enterrado).
@@ -99,9 +107,13 @@ Referência: eTrace v1.18.1 do Fera Palace (46 fotos de tela). O que o Cabine j�
   (`PATCH /api/estacoes/{nome}` com `antenas: [id,...]`, quem tem `sistema` escolhe num multi-select na tela Monitoramento);
   desativar/reativar (`ativa`, mesmo PATCH — fora do alerta "nenhuma estação ativa" sem apagar o histórico).
 - [x] **Inventário**: já tinha os 7 filtros, resumo por tipo, conferência a partir dos filtros e "Filtros aplicados" no histórico (conferido em 2026-11-12).
-- [x] **Movimentações** (2026-11-12): filtro por usuário e botão Imprimir (destino, datas e detalhe/comprovante já existiam). Falta só selecionar linhas para imprimir.
+- [x] **Movimentações** (2026-11-12): filtro por usuário e botão Imprimir (destino, datas e detalhe/comprovante já existiam).
+  [x] Selecionar linhas pra imprimir (2026-11-23): checkbox por linha + "selecionar todas"; sem seleção, imprime as exibidas (comportamento anterior).
 - [x] **Antenas**: o "Modo de operação" (Manual/Automático) já existia.
-- [x] Acomodações já têm UHs por acomodação. [ ] **Categorias com pai** (hoje o tipo é texto livre no item; exige tabela de categorias).
+- [x] Acomodações já têm UHs por acomodação. [x] **Categorias com pai** (2026-11-23): tabela `categorias` (nome + pai_id,
+  hierárquica), CRUD em `/api/categorias` (tela "categorias" no Catálogo, botão ao lado do campo Tipo). O campo `tipo` do
+  item continua texto livre (compatível com tudo que já agrupa por ele); as categorias só alimentam o autocomplete
+  (`<datalist>`) — não é uma migração do campo, é uma taxonomia opcional por cima.
 - [ ] Reconciliar o catálogo: o eTrace mostra **3.232 itens "Em uso"** e o Cabine tem 4.570 (conferir estados e duplicados).
 - [ ] Antenas de evasão: localizações do eTrace = `.32` Recepção, `.104` **Saída Serviço**; preencher no Cabine para a coleta de evasão funcionar (sem localização o servidor responde 409). **Cadastro manual na tela Antenas do painel de produção — fica com o Icaro** (2026-11-23): não é alteração de código, e o assistente não tem as credenciais de login do painel em produção.
 - Não copiar: tela de BI (no eTrace está com erro de autenticação) e "Credenciais BI".
@@ -110,7 +122,9 @@ Referência: eTrace v1.18.1 do Fera Palace (46 fotos de tela). O que o Cabine j�
 
 - Sessao de leitura continua: pronta, opt-in (`SESSAO_AUTO=1`), desligada em producao.
 - CI/CD: workflow criado (testes + compila agente + deploy por secrets); **falta rodar `./scripts/rotacionar-chave-ci.sh`** (cria chave + secrets `VPS_HOST`/`VPS_SSH_KEY`; bloqueado para o assistente) e validar com `gh workflow run ci`. GHCR nao adotado.
-- Cadastrar o projeto em `erpsolid/docs/projetos/` (indice central de repos).
+- [x] Cadastrar o projeto no indice central de repos (2026-11-23): o vault real é `solid/docs/projetos` (erpsolid so tem um
+  symlink pra lá); README resumido em `solid/docs/projetos/cabine/README.md` + linha na tabela — cadastro manual, ainda
+  fora do job `sync-docs-vault` (roda em outro host, Hermes; nao acessivel desta sessao).
 
 - Evasao: antenas .32 e .104 so monitoramento de rede (online = pagina de status responde; agente 0.1.5 nao sonda a 8080). O Acura aceita 2 clientes na 8080 (hoje ocupadas por 192.168.30.18).
   **Investigado (2026-11-23)**: login no painel dos Acura com a senha padrao `acura@autoid`. Tela **Rede** confirma "Modo Ethernet: Servidor" nos dois (por isso o limite de 2 clientes na 8080); existe modo "Cliente" mas trocar pra ele desligaria o modo Servidor por completo e derrubaria a conexao do .18 (outro sistema) — **decisao: nao mexer, manter como esta**. Nenhuma configuracao foi alterada.

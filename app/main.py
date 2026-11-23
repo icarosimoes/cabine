@@ -1,5 +1,5 @@
 """Receptor de webhook do leitor Impinj (R700 Event Reporting) + painel ao vivo."""
-import asyncio, datetime, re, threading, base64, csv, io, binascii, hashlib, hmac, json, os, secrets, time, urllib.parse, urllib.request
+import asyncio, datetime, re, threading, base64, csv, io, binascii, hashlib, hmac, ipaddress, json, os, secrets, time, urllib.parse, urllib.request
 from pathlib import Path
 
 from app import armazenamento
@@ -336,6 +336,8 @@ def init_db():
           token_hash TEXT NOT NULL UNIQUE,
           criado_em DOUBLE PRECISION NOT NULL,
           visto_em DOUBLE PRECISION, versao TEXT, host TEXT)""")
+        con.execute("ALTER TABLE agentes ADD COLUMN IF NOT EXISTS horario_inicio TEXT")  # HH:MM; NULL (com horario_fim) = sempre ativo
+        con.execute("ALTER TABLE agentes ADD COLUMN IF NOT EXISTS horario_fim TEXT")     # evita "sem contato" fora do expediente (ex.: PC que desliga à noite)
         con.execute("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS agente_id INTEGER REFERENCES agentes(id) ON DELETE SET NULL")  # NULL = qualquer agente
         con.execute("ALTER TABLE clipes ADD COLUMN IF NOT EXISTS agente_id INTEGER REFERENCES agentes(id) ON DELETE SET NULL")  # quem pegou o pedido
         con.execute("""
@@ -371,6 +373,13 @@ def init_db():
           qtd DOUBLE PRECISION NOT NULL,
           fluxo DOUBLE PRECISION NOT NULL DEFAULT 1,
           PRIMARY KEY(acomodacao_id, tipo))""")
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS categorias(
+          id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+          nome TEXT NOT NULL,
+          pai_id INTEGER REFERENCES categorias(id) ON DELETE CASCADE,
+          criado_em DOUBLE PRECISION NOT NULL,
+          UNIQUE(nome, pai_id))""")  # taxonomia opcional pro "tipo" do item (texto livre; aqui só sugere/organiza)
         con.commit()
 
         if not con.execute("SELECT 1 FROM estados_inventario").fetchone():
@@ -774,6 +783,18 @@ def _webhook_status(extra) -> dict | None:
         return None
 
 
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _dentro_horario(agora: float, inicio: str | None, fim: str | None) -> bool:
+    """Sem horário cadastrado = sempre ativo (comportamento de hoje). Com horário, aceita janela que cruza a meia-noite."""
+    if not inicio or not fim:
+        return True
+    h = datetime.datetime.fromtimestamp(agora + TZ_OFFSET, tz=datetime.timezone.utc).time()
+    hi, hf = datetime.datetime.strptime(inicio, "%H:%M").time(), datetime.datetime.strptime(fim, "%H:%M").time()
+    return hi <= h <= hf if hi <= hf else h >= hi or h <= hf
+
+
 def avaliar_agentes(agora: float, antenas: list[dict], agentes: list[dict], c: dict) -> list[tuple[str, str]]:
     """Alertas do agente do hotel: antena offline (com alerta ligado) e agente sem contato. Um aviso por transição."""
     msgs = []
@@ -805,7 +826,7 @@ def avaliar_agentes(agora: float, antenas: list[dict], agentes: list[dict], c: d
             condicoes[f"webhook:{a['id']}"] = (ruim, f"⚠️ Cabine RFID: o rádio {a['nome']} está com FALHA ao enviar eventos pelo webhook (status {w.get('status')}, HTTP {w.get('httpStatusCode')}).",
                                                f"✅ Cabine RFID: o webhook do rádio {a['nome']} voltou a entregar eventos.")
     for ag in agentes:
-        if ag["visto_em"] is not None:
+        if ag["visto_em"] is not None and _dentro_horario(agora, ag.get("horario_inicio"), ag.get("horario_fim")):
             sem = agora - ag["visto_em"] >= AGENTE_SEM_CONTATO_SEG
             condicoes[f"agente:{ag['id']}"] = (sem, f"⚠️ Cabine RFID: o agente '{ag['nome']}' do hotel está sem contato há {int(agora - ag['visto_em'])}s (PC desligado ou sem internet?).",
                                                f"✅ Cabine RFID: o agente '{ag['nome']}' voltou a se comunicar.")
@@ -946,7 +967,7 @@ def checar_alertas():
     with closing(db()) as con:
         antenas = con.execute("""SELECT a.id,a.nome,a.ip,a.alerta,a.evasao,s.online,s.detalhe,s.verificado_em,s.extra,g.nome agente FROM antenas a
                                  JOIN antena_status s ON s.antena_id=a.id LEFT JOIN agentes g ON g.id=s.agente_id""").fetchall()
-        agentes = con.execute("SELECT id,nome,visto_em FROM agentes").fetchall()
+        agentes = con.execute("SELECT id,nome,visto_em,horario_inicio,horario_fim FROM agentes").fetchall()
     for tipo, texto in avaliar_agentes(agora, antenas, agentes, c):
         notificar(tipo, texto, c)
     if agora - state.get("_uptime_chk", 0) >= 60:  # a disponibilidade só muda de minuto em minuto
@@ -1193,10 +1214,28 @@ def ler_config_alertas():
             "alertas_abertos": sorted(state["alertas"])}
 
 
+def _wa_url_valido(url: str) -> bool:
+    """https e host público — evita que a config de WhatsApp seja usada pra fazer o servidor
+    acessar endereços internos (SSRF) via quem tem a permissão whatsapp."""
+    p = urllib.parse.urlsplit(url)
+    if p.scheme != "https" or not p.hostname:
+        return False
+    host = p.hostname.lower()
+    if host in ("localhost",) or host.endswith(".local"):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast)
+    except ValueError:
+        return True  # nome de domínio: resolução/SSRF por DNS fica fora do escopo desta validação
+
+
 @app.put("/api/config/alertas", dependencies=[Depends(P_WHATSAPP)])
 def salvar_config_alertas(b: AlertaCfg):
     if not (10 <= b.sem_sinal_seg <= 86400 and 1 <= b.falhas <= 1000 and 5 <= b.repetir_min <= 10080 and 0 <= b.uptime_min <= 100):
         raise HTTPException(400, "limites inválidos (sem sinal 10–86400 s, falhas 1–1000, repetir 5–10080 min, uptime 0–100 %)")
+    if b.wa_url.strip() and not _wa_url_valido(b.wa_url.strip()):
+        raise HTTPException(400, "wa_url deve ser https e um host público (não localhost/IP privado)")
     valores = {"wa_url": b.wa_url.strip() or CFG_PADRAO["wa_url"], "wa_instance": b.wa_instance.strip(),
                "ativo": "1" if b.ativo else "0",
                "sem_sinal_seg": str(b.sem_sinal_seg), "falhas": str(b.falhas), "repetir_min": str(b.repetir_min),
@@ -2412,6 +2451,82 @@ def definir_estado_item(epc: str, payload: EstadoItemIn):
     return row
 
 
+class CategoriaIn(BaseModel):
+    nome: str
+    pai_id: int | None = None
+
+
+def _categoria_descendentes(con, id_: int) -> set[int]:
+    """ids da própria categoria + todos os seus filhos, recursivamente — usado pra bloquear ciclo e exclusão em cascata lógica."""
+    vistos, fila = {id_}, [id_]
+    while fila:
+        pai = fila.pop()
+        for r in con.execute("SELECT id FROM categorias WHERE pai_id=%s", (pai,)).fetchall():
+            if r["id"] not in vistos:
+                vistos.add(r["id"]); fila.append(r["id"])
+    return vistos
+
+
+@app.get("/api/categorias", dependencies=[Depends(P_CONSULTAR)])
+def listar_categorias():
+    with closing(db()) as con:
+        return con.execute("""SELECT c.id, c.nome, c.pai_id, p.nome pai_nome
+                               FROM categorias c LEFT JOIN categorias p ON p.id=c.pai_id
+                               ORDER BY p.nome NULLS FIRST, c.nome""").fetchall()
+
+
+@app.post("/api/categorias", dependencies=[Depends(P_CADASTROS)])
+def criar_categoria(payload: CategoriaIn):
+    nome = payload.nome.strip()
+    if not nome:
+        raise HTTPException(400, "nome é obrigatório")
+    with closing(db()) as con:
+        if payload.pai_id is not None and not con.execute("SELECT 1 FROM categorias WHERE id=%s", (payload.pai_id,)).fetchone():
+            raise HTTPException(400, "categoria pai inválida")
+        try:
+            con.execute("INSERT INTO categorias(nome,pai_id,criado_em) VALUES(%s,%s,%s)", (nome, payload.pai_id, time.time()))
+            con.commit()
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(409, "já existe essa categoria com o mesmo pai")
+        row = con.execute("SELECT id, nome, pai_id FROM categorias WHERE nome=%s AND pai_id IS NULL", (nome,)).fetchone() \
+              if payload.pai_id is None else \
+              con.execute("SELECT id, nome, pai_id FROM categorias WHERE nome=%s AND pai_id=%s", (nome, payload.pai_id)).fetchone()
+    return row
+
+
+@app.put("/api/categorias/{id}", dependencies=[Depends(P_CADASTROS)])
+def editar_categoria(id: int, payload: CategoriaIn):
+    nome = payload.nome.strip()
+    if not nome:
+        raise HTTPException(400, "nome é obrigatório")
+    with closing(db()) as con:
+        if not con.execute("SELECT 1 FROM categorias WHERE id=%s", (id,)).fetchone():
+            raise HTTPException(404, "categoria não encontrada")
+        if payload.pai_id is not None:
+            if not con.execute("SELECT 1 FROM categorias WHERE id=%s", (payload.pai_id,)).fetchone():
+                raise HTTPException(400, "categoria pai inválida")
+            if payload.pai_id in _categoria_descendentes(con, id):
+                raise HTTPException(400, "não pode virar filha da própria descendência")
+        try:
+            con.execute("UPDATE categorias SET nome=%s, pai_id=%s WHERE id=%s", (nome, payload.pai_id, id))
+            con.commit()
+        except psycopg.errors.UniqueViolation:
+            raise HTTPException(409, "já existe essa categoria com o mesmo pai")
+    return {"ok": True}
+
+
+@app.delete("/api/categorias/{id}", dependencies=[Depends(P_CADASTROS)])
+def excluir_categoria(id: int):
+    with closing(db()) as con:
+        if not con.execute("SELECT 1 FROM categorias WHERE id=%s", (id,)).fetchone():
+            raise HTTPException(404, "categoria não encontrada")
+        if con.execute("SELECT 1 FROM categorias WHERE pai_id=%s", (id,)).fetchone():
+            raise HTTPException(409, "exclua as categorias filhas antes")
+        con.execute("DELETE FROM categorias WHERE id=%s", (id,))
+        con.commit()
+    return {"ok": True}
+
+
 @app.get("/api/inventario", dependencies=[Depends(P_CONSULTAR)])
 def inventario(localizacao: str | None = None, estado: str | None = None, tipo: str | None = None,
                 fabricante: str | None = None, tamanho: str | None = None,
@@ -2677,13 +2792,35 @@ def criar_agente(b: AgenteIn, _: dict = Depends(P_SISTEMA)):
 @app.get("/api/agentes", dependencies=[Depends(P_SISTEMA)])
 def listar_agentes():
     with closing(db()) as con:
-        return con.execute("SELECT id,nome,criado_em,visto_em,versao,host FROM agentes ORDER BY nome").fetchall()
+        return con.execute("SELECT id,nome,criado_em,visto_em,versao,host,horario_inicio,horario_fim FROM agentes ORDER BY nome").fetchall()
 
 
 @app.delete("/api/agentes/{agente_id}", dependencies=[Depends(P_SISTEMA)])
 def excluir_agente(agente_id: int):
     with closing(db()) as con:
         con.execute("DELETE FROM agentes WHERE id=%s", (agente_id,))
+        con.commit()
+    return {"ok": True}
+
+
+class AgenteHorarioIn(BaseModel):
+    horario_inicio: str | None = None
+    horario_fim: str | None = None
+
+
+@app.patch("/api/agentes/{agente_id}/horario", dependencies=[Depends(P_SISTEMA)])
+def definir_horario_agente(agente_id: int, b: AgenteHorarioIn):
+    """Janela de funcionamento (HH:MM–HH:MM, cruza meia-noite se fim < início). Ambos vazios = sempre ativo (evita o falso
+    alarme de 'agente sem contato' em PCs que desligam fora do expediente, ex. governança)."""
+    if (b.horario_inicio is None) != (b.horario_fim is None):
+        raise HTTPException(400, "informe início e fim juntos, ou nenhum dos dois (sempre ativo)")
+    for v in (b.horario_inicio, b.horario_fim):
+        if v is not None and not _HHMM.match(v):
+            raise HTTPException(400, "horário deve ser HH:MM")
+    with closing(db()) as con:
+        if not con.execute("SELECT 1 FROM agentes WHERE id=%s", (agente_id,)).fetchone():
+            raise HTTPException(404, "agente não encontrado")
+        con.execute("UPDATE agentes SET horario_inicio=%s, horario_fim=%s WHERE id=%s", (b.horario_inicio, b.horario_fim, agente_id))
         con.commit()
     return {"ok": True}
 
